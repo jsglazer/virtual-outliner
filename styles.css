@@ -1,0 +1,187 @@
+/* Static structural CSS. Per-level typography (color, size, weight, italic,
+   indent, spacing) is driven by CSS custom properties set at runtime from
+   settings — see src/core/settings.ts (levelCssVars) — applied via
+   setCssProps rather than an injected <style> element, so the rules below
+   never change; only the --vo-lN-* values do. */
+
+.vo-label {
+	user-select: none;
+	white-space: pre;
+}
+
+.vo-label.vo-l1 {
+	font-size: var(--vo-l1-size, inherit);
+	font-weight: var(--vo-l1-weight, inherit);
+	color: var(--vo-l1-color, inherit);
+	font-style: var(--vo-l1-style, normal);
+}
+.vo-label.vo-l2 {
+	font-size: var(--vo-l2-size, inherit);
+	font-weight: var(--vo-l2-weight, inherit);
+	color: var(--vo-l2-color, inherit);
+	font-style: var(--vo-l2-style, normal);
+}
+.vo-label.vo-l3 {
+	font-size: var(--vo-l3-size, inherit);
+	font-weight: var(--vo-l3-weight, inherit);
+	color: var(--vo-l3-color, inherit);
+	font-style: var(--vo-l3-style, normal);
+}
+.vo-label.vo-l4 {
+	font-size: var(--vo-l4-size, inherit);
+	font-weight: var(--vo-l4-weight, inherit);
+	color: var(--vo-l4-color, inherit);
+	font-style: var(--vo-l4-style, normal);
+}
+.vo-label.vo-l5 {
+	font-size: var(--vo-l5-size, inherit);
+	font-weight: var(--vo-l5-weight, inherit);
+	color: var(--vo-l5-color, inherit);
+	font-style: var(--vo-l5-style, normal);
+}
+.vo-label.vo-l6 {
+	font-size: var(--vo-l6-size, inherit);
+	font-weight: var(--vo-l6-weight, inherit);
+	color: var(--vo-l6-color, inherit);
+	font-style: var(--vo-l6-style, normal);
+}
+
+.cm-line.vo-entry-l1 {
+	margin-top: var(--vo-l1-spacing, 0);
+}
+.cm-line.vo-entry-l2 {
+	margin-top: var(--vo-l2-spacing, 0);
+}
+.cm-line.vo-entry-l3 {
+	margin-top: var(--vo-l3-spacing, 0);
+}
+.cm-line.vo-entry-l4 {
+	margin-top: var(--vo-l4-spacing, 0);
+}
+.cm-line.vo-entry-l5 {
+	margin-top: var(--vo-l5-spacing, 0);
+}
+.cm-line.vo-entry-l6 {
+	margin-top: var(--vo-l6-spacing, 0);
+}
+
+.cm-line.vo-indent-l1 {
+	padding-left: var(--vo-l1-indent, 0);
+	box-sizing: border-box;
+}
+.cm-line.vo-indent-l2 {
+	padding-left: var(--vo-l2-indent, 0);
+	box-sizing: border-box;
+}
+.cm-line.vo-indent-l3 {
+	padding-left: var(--vo-l3-indent, 0);
+	box-sizing: border-box;
+}
+.cm-line.vo-indent-l4 {
+	padding-left: var(--vo-l4-indent, 0);
+	box-sizing: border-box;
+}
+.cm-line.vo-indent-l5 {
+	padding-left: var(--vo-l5-indent, 0);
+	box-sizing: border-box;
+}
+.cm-line.vo-indent-l6 {
+	padding-left: var(--vo-l6-indent, 0);
+	box-sizing: border-box;
+}
+
+/* Reading view: hides entries/body per the current view state, or a
+   collapsed node's subtree — applied via addClass, never inline style. */
+.vo-hidden {
+	display: none;
+}
+
+/* Sidebar */
+
+.vo-sidebar {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+
+.vo-sidebar-search {
+	flex: 0 0 auto;
+	padding: var(--size-4-2);
+}
+
+.vo-sidebar-search input {
+	width: 100%;
+}
+
+.vo-sidebar-tree {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	padding: var(--size-4-1) 0;
+}
+
+.vo-sidebar-empty {
+	padding: var(--size-4-4);
+	color: var(--text-muted);
+	text-align: center;
+}
+
+.vo-node {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	padding: 2px var(--size-4-2);
+	border-radius: var(--radius-s);
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vo-node:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.vo-node-match {
+	background-color: var(--text-highlight-bg);
+}
+
+.vo-node-toggle {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	color: var(--text-muted);
+}
+
+.vo-node-toggle.vo-node-toggle-empty {
+	visibility: hidden;
+}
+
+.vo-node-label {
+	flex: 0 0 auto;
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.vo-node-text {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vo-node-children {
+	margin-left: 1em;
+}
+
+.vo-node-children.vo-collapsed {
+	display: none;
+}
+
+/* Settings tab */
+
+.vo-fixture-note {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
