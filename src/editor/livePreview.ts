@@ -150,6 +150,37 @@ export function editorViewPath(view: EditorView): string | null {
 	return view.state.field(editorInfoField, false)?.file?.path ?? null;
 }
 
+// Hidden body/collapsed runs are replaced by a block decoration. Left without
+// a widget, CM6 falls back to `NullWidget.block` — a bare, class-less <div>
+// (see NullWidget in @codemirror/view) that the surrounding editor CSS still
+// gives a line's worth of height. That rendered as a blank line wherever
+// content was hidden, so Outline-only view showed a gap between entries that
+// have body beneath them and none between adjacent entries — reported as
+// "I should not see blank lines in outline-only mode".
+//
+// Supplying our own widget is the only way to get a styleable hook on that
+// element; `.vo-hidden-block` in styles.css collapses it to zero height.
+class HiddenBlockWidget extends WidgetType {
+	// Every instance is interchangeable, so CM6 reuses the DOM instead of
+	// tearing down and rebuilding a hidden block on each recompute.
+	eq(): boolean {
+		return true;
+	}
+
+	toDOM(view: EditorView): HTMLElement {
+		const div = view.dom.ownerDocument.createElement('div');
+		div.className = 'vo-hidden-block';
+		div.setAttribute('aria-hidden', 'true');
+		return div;
+	}
+
+	ignoreEvent(): boolean {
+		return true;
+	}
+}
+
+const hiddenBlockWidget = new HiddenBlockWidget();
+
 class LabelWidget extends WidgetType {
 	constructor(
 		private label: string,
@@ -244,7 +275,12 @@ export function buildOutlineDecorations(
 		items.push({
 			from,
 			to,
-			deco: Decoration.replace({ block: true, inclusiveStart: false, inclusiveEnd: false }),
+			deco: Decoration.replace({
+				block: true,
+				inclusiveStart: false,
+				inclusiveEnd: false,
+				widget: hiddenBlockWidget,
+			}),
 		});
 	}
 

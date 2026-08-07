@@ -236,6 +236,22 @@
 	margin-top: var(--vo-spacing, 0px);
 }
 
+/* The block that stands in for a hidden run of body/collapsed lines
+   (editor/livePreview.ts HiddenBlockWidget). It must occupy NO vertical space:
+   left to the editor's own block styling it renders a line's worth of height,
+   which showed up as a blank line between every entry that has body beneath it
+   — while adjacent entries, having nothing hidden between them, sat flush.
+   Hiding content should take up no room at all. */
+.markdown-source-view.mod-cm6 .cm-content .vo-hidden-block {
+	display: block;
+	height: 0;
+	min-height: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	overflow: hidden;
+}
+
 /* Reading view only: one source line inside a `<br>`-joined paragraph,
    promoted to its own block so it can carry that line's indent and spacing
    (see editor/readingView.ts blockWrapSegment). */

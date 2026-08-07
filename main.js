@@ -734,6 +734,23 @@ function editorViewPath(view) {
   var _a, _b, _c;
   return (_c = (_b = (_a = view.state.field(import_obsidian.editorInfoField, false)) == null ? void 0 : _a.file) == null ? void 0 : _b.path) != null ? _c : null;
 }
+var HiddenBlockWidget = class extends import_view.WidgetType {
+  // Every instance is interchangeable, so CM6 reuses the DOM instead of
+  // tearing down and rebuilding a hidden block on each recompute.
+  eq() {
+    return true;
+  }
+  toDOM(view) {
+    const div = view.dom.ownerDocument.createElement("div");
+    div.className = "vo-hidden-block";
+    div.setAttribute("aria-hidden", "true");
+    return div;
+  }
+  ignoreEvent() {
+    return true;
+  }
+};
+var hiddenBlockWidget = new HiddenBlockWidget();
 var LabelWidget = class extends import_view.WidgetType {
   constructor(label, levelClass) {
     super();
@@ -770,7 +787,12 @@ function buildOutlineDecorations(view, plan, sigilChar) {
     items.push({
       from,
       to,
-      deco: import_view.Decoration.replace({ block: true, inclusiveStart: false, inclusiveEnd: false })
+      deco: import_view.Decoration.replace({
+        block: true,
+        inclusiveStart: false,
+        inclusiveEnd: false,
+        widget: hiddenBlockWidget
+      })
     });
   }
   for (const [lineIndex, label] of plan.labels) {
