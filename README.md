@@ -9,10 +9,11 @@ Outline-first authoring for Obsidian: lay down a full multi-level outline, then 
 - **Outline as a layer, not a filter.** One Markdown file, two views. An outline entry is just a line starting with a repeated sigil (`@`, `@@`, `@@@`, …, configurable); everything else — your own prose, headings, lists, tables, code — is the body. A **node** is one entry plus every body line beneath it, up to the next entry.
 - **Computed labels, never written to disk.** `1`, `1.0`, `1.1`, `I`, `A`, bullets, or none — per level, composited into things like `I.B.3` — are rendered at edit/view time in both Live Preview and Reading View. The raw sigils are never visible. Nothing is ever renumbered on disk; there is no auto-renumber engine to fight your undo history or corrupt your file.
   - The `1.0` style is Word-style multilevel numbering: the trailing `.0` is a placeholder for the next level down, so a top-level entry reads `3.0` on its own and its first child reads `3.1` — not `3.0.1`.
-- **Three view states** — outline only, body only, or both — by command, and remembered per note.
+- **Three view states** — outline only, body only, or both — by command, and remembered per note. **Text a view hides can't be deleted from it.** Backspace at the gap where a hidden run sits is refused rather than silently destroying prose you can't see; switch to a view that shows it, and it edits normally. Hidden runs that are only blank lines stay deletable, since there's nothing to lose.
 - **A real outliner keymap**, scoped to outline lines only:
   - `Enter` at the end of an entry inserts a new sibling **after that node's entire subtree** — it never splits an existing node's body or children out from under it.
   - `Cmd-Enter` / `Ctrl-Enter` on an entry opens a plain **prose** line directly beneath it — that entry's own body, above its children — instead of another outline level. The cursor's column doesn't matter and the entry line is never split.
+  - `Shift-Enter` at the end of an entry does the same, so a soft break there opens a body line instead of splitting the entry's hidden id onto a line of its own. Mid-text it falls through to Obsidian's normal soft break.
   - `Tab` / `Shift-Tab` demote/promote a node, carrying its whole subtree (body and descendants) with it — nothing is ever orphaned.
   - `Alt-↑` / `Alt-↓` move a node past its previous/next sibling, subtree and all.
   - Every operation is also available as a hotkey-less command, so it works on iPad without a hardware keyboard.
@@ -79,11 +80,13 @@ dv.table(['Label', 'Text', 'Status'], nodes.map(n => [n.label, n.text, n.meta?.S
 npm install
 npm run dev     # esbuild watch mode
 npm run build   # typecheck + production bundle
-npm test        # vitest, headless — everything under src/core/
+npm test        # vitest, headless — src/core/ plus decoration geometry
 npm run lint    # eslint
 ```
 
 `src/core/` is a pure TypeScript engine (no `obsidian`, no CodeMirror, no DOM) covering parsing, structural operations, label computation, metadata serialization, and render planning — fully covered by headless tests. `src/editor/` and `src/ui/` are the CodeMirror 6 / Obsidian shell around it.
+
+The editor layer is partly testable too: CodeMirror's `EditorState` needs no DOM, so `tests/livePreview.test.ts` exercises decoration *geometry* — which character ranges get hidden, how they survive an edit, and the boundary invariants that keep typing near hidden content from corrupting it. It reaches `src/editor/` through a one-line `obsidian` stub and a vitest alias. Anything depending on rendered layout (heights, caret placement) still needs the real app.
 
 ## License
 
