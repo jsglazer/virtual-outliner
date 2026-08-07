@@ -1532,6 +1532,7 @@ function normalizeFileStateEntry(v, fallback) {
   return { viewState, collapsedIds };
 }
 var RESOLVE_DEBOUNCE_MS = 200;
+var CSS_VAR_STYLE_ID = "virtual-outliner-level-vars";
 var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
@@ -1542,20 +1543,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     this.editorTimers = /* @__PURE__ */ new Map();
     this.diskTimers = /* @__PURE__ */ new Map();
     this.changeListeners = /* @__PURE__ */ new Set();
-    this.cssVarStyleEl = null;
   }
   async onload() {
-    console.debug("[virtual-outliner] onload start");
-    try {
-      await this.onloadInner();
-      console.debug("[virtual-outliner] onload complete");
-    } catch (err) {
-      console.error("[virtual-outliner] onload THREW", err);
-      throw err;
-    }
-  }
-  async onloadInner() {
-    var _a;
     const raw = await this.loadData();
     this.settings = normalizeSettings(raw);
     this.loadFileState(raw);
@@ -1565,12 +1554,6 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       () => this.settings.levels
     );
     this.applyLevelCssVars();
-    console.debug(
-      "[virtual-outliner] after applyLevelCssVars: el connected =",
-      (_a = this.cssVarStyleEl) == null ? void 0 : _a.isConnected,
-      "in head =",
-      activeDocument.head.contains(this.cssVarStyleEl)
-    );
     this.registerEditorExtension([
       buildOutlineKeymap({ sigilChar: () => this.settings.sigil }),
       buildEditorExtension({
@@ -1643,8 +1626,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       id: "prune-orphaned-metadata",
       name: "Prune orphaned outline metadata",
       editorCallback: (_editor, ctx) => {
-        var _a2;
-        const path = (_a2 = ctx.file) == null ? void 0 : _a2.path;
+        var _a;
+        const path = (_a = ctx.file) == null ? void 0 : _a.path;
         const view = path !== void 0 ? this.editorFor(path) : null;
         if (!view || path === void 0) return;
         this.pruneOrphanedIn(view, path);
@@ -1681,27 +1664,20 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       })
     );
     this.app.workspace.onLayoutReady(() => {
-      console.debug("[virtual-outliner] onLayoutReady fired");
       const file = this.app.workspace.getActiveFile();
       if (file && file.extension === "md") void this.ensureFileState(file.path);
       this.applyLevelCssVars();
-      console.debug(
-        "[virtual-outliner] onLayoutReady: after applyLevelCssVars, in head =",
-        activeDocument.head.contains(this.cssVarStyleEl)
-      );
       for (const view of this.editors) this.decorate(view);
       this.rerenderPreviews(null);
     });
   }
   onunload() {
     var _a;
-    console.debug("[virtual-outliner] onunload, removing style el =", this.cssVarStyleEl);
     for (const timer of this.editorTimers.values()) window.clearTimeout(timer);
     this.editorTimers.clear();
     for (const timer of this.diskTimers.values()) window.clearTimeout(timer);
     this.diskTimers.clear();
-    (_a = this.cssVarStyleEl) == null ? void 0 : _a.remove();
-    this.cssVarStyleEl = null;
+    for (const doc of this.cssVarTargetDocuments()) (_a = doc.getElementById(CSS_VAR_STYLE_ID)) == null ? void 0 : _a.remove();
   }
   async saveSettings() {
     await this.persist();
@@ -1746,25 +1722,38 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
   // appearance settings (zoom, font overrides, indent-size), which silently
   // drops any custom property a plugin added via setCssProps on body. A
   // dedicated stylesheet is never touched by that rewrite.
+  //
+  // Every open markdown leaf's own document, rather than a single "the
+  // current" document — `activeDocument` (Obsidian's "whichever window last
+  // had focus" global) was the actual Update003 bug, caught by temporary
+  // diagnostic logging: right after a plugin off/on toggle it can resolve to
+  // an unrelated `about:blank` document instead of any real app window, so
+  // the element was created and connected successfully every time — just in
+  // a document nobody renders. Targeting every leaf's own document sidesteps
+  // that "which window is active right now" question entirely, and as a
+  // side effect correctly supports a note popped out into its own window
+  // too (each Electron window has its own separate DOM).
+  cssVarTargetDocuments() {
+    const docs = /* @__PURE__ */ new Set();
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) docs.add(leaf.view.containerEl.ownerDocument);
+    docs.add(activeDocument);
+    return docs;
+  }
   applyLevelCssVars() {
     const vars = levelCssVars(this.settings.levels);
     const body = Object.entries(vars).map(([key, value]) => `	${key}: ${value};`).join("\n");
-    const existing = activeDocument.getElementById("virtual-outliner-level-vars");
-    console.debug("[virtual-outliner] applyLevelCssVars: existing =", existing, "activeDocument =", activeDocument);
-    if (existing instanceof HTMLStyleElement && existing.isConnected) {
-      this.cssVarStyleEl = existing;
-      console.debug("[virtual-outliner] applyLevelCssVars: reusing existing element");
-    } else {
-      existing == null ? void 0 : existing.remove();
-      this.cssVarStyleEl = activeDocument.createElement("style");
-      this.cssVarStyleEl.id = "virtual-outliner-level-vars";
-      activeDocument.head.appendChild(this.cssVarStyleEl);
-      console.debug("[virtual-outliner] applyLevelCssVars: created new element, appended =", this.cssVarStyleEl.isConnected);
-    }
-    this.cssVarStyleEl.textContent = `:root {
+    const css = `:root {
 ${body}
 }`;
-    console.debug("[virtual-outliner] applyLevelCssVars: final isConnected =", this.cssVarStyleEl.isConnected);
+    for (const doc of this.cssVarTargetDocuments()) {
+      let el = doc.getElementById(CSS_VAR_STYLE_ID);
+      if (!(el instanceof HTMLStyleElement)) {
+        el = doc.createElement("style");
+        el.id = CSS_VAR_STYLE_ID;
+        doc.head.appendChild(el);
+      }
+      el.textContent = css;
+    }
   }
   // ── Per-file view/collapse state ─────────────────────────────────────────
   viewStateFor(path) {
