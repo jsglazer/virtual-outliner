@@ -16,7 +16,7 @@ import {
 	isOutlineLine,
 	outlineLineRegex,
 } from './sigil';
-import { splitEntryId } from './id';
+import { ID_SUFFIX_RE, splitEntryId } from './id';
 import { lineRangeToOffsets, lineStartOffsets } from './lines';
 import { nextSibling, nodeAtLine, parseOutline, previousSibling } from './parser';
 import type { EditSplice, OutlineNode } from './types';
@@ -128,6 +128,15 @@ export function moveDown(
 // (its CURRENT, pre-edit content). Returns null when the caller should fall
 // through to normal Enter behavior (cursor is mid-line, not at end of the
 // entry) — every other case is consumed.
+//
+// A trailing ` ^o-xxxxxxxx` id suffix is rendered as an atomic, hidden
+// decoration in Live Preview (livePreview.ts), so the cursor can sit right
+// before it — which LOOKS and FEELS like "end of line" to the user, since
+// there is nothing rendered after it to move past — without matching
+// `line.length`. Treating only the true document end as "end of line" left
+// that position's Enter falling through to Obsidian's default newline
+// insertion, which splits the line right between the visible text and the id
+// suffix, stranding `^o-xxxxxxxx` on its own line (Update003 bug report).
 export function addSibling(
 	body: string,
 	entryLine: number,
@@ -136,7 +145,9 @@ export function addSibling(
 ): EditSplice | null {
 	const lines = body.split('\n');
 	const line = lines[entryLine] ?? '';
-	if (cursorCol !== line.length) return null; // mid-line: fall through
+	const idMatch = ID_SUFFIX_RE.exec(line);
+	const visibleEnd = idMatch ? idMatch.index : line.length;
+	if (cursorCol !== line.length && cursorCol !== visibleEnd) return null; // mid-line: fall through
 
 	const match = outlineLineRegex(sigilChar).exec(line);
 	if (!match) return null;

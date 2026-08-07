@@ -133,6 +133,16 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		viewStateCommand('view-both', 'Show outline and body', 'both');
 
 		this.addCommand({
+			id: 'toggle-indent-body',
+			name: 'Indent body with outline',
+			callback: () => {
+				this.settings.indentBody = !this.settings.indentBody;
+				void this.saveSettings();
+				new Notice(this.settings.indentBody ? 'Indent body with outline: on' : 'Indent body with outline: off');
+			},
+		});
+
+		this.addCommand({
 			id: 'generate-filtered-copy',
 			name: 'Generate filtered copy',
 			checkCallback: (checking) => {
@@ -190,9 +200,24 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		// so the sidebar would sit empty until the user switched away and
 		// back. (Reading view no longer depends on this cache — it reads the
 		// document out of the section info it is handed.)
+		//
+		// Toggling the plugin off then on (Update003) keeps existing panes'
+		// CM6 EditorViews and rendered Reading View DOM alive across the
+		// reload — unlike a full close/reopen of the vault, which recreates
+		// them from scratch against the freshly (re)registered extension and
+		// post-processor. Without an explicit nudge here, an editor that
+		// attached itself before this call sits on decorations computed by
+		// the OLD (disabled) instance, and a Reading View pane never re-runs
+		// the post-processor at all, so entries render as raw, unstyled
+		// `1.0Thesis` text until something else forces a re-render (closing
+		// and reopening the vault). onLayoutReady runs immediately when the
+		// layout is already settled — the common case for a hot re-enable —
+		// so this reaches both the cold-start and the re-enable path.
 		this.app.workspace.onLayoutReady(() => {
 			const file = this.app.workspace.getActiveFile();
 			if (file && file.extension === 'md') void this.ensureFileState(file.path);
+			for (const view of this.editors) this.decorate(view);
+			this.rerenderPreviews(null);
 		});
 	}
 

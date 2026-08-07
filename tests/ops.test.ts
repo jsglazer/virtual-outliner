@@ -116,6 +116,19 @@ describe('addSibling (Enter)', () => {
 		const result = apply(doc, addSibling(doc, 0, doc.length));
 		expect(result).toBe('@@@ Deep entry\n@@@ ');
 	});
+
+	it('treats the cursor sitting just before a hidden id suffix as end-of-line', () => {
+		// The id suffix renders as an atomic, hidden decoration in Live Preview
+		// (livePreview.ts), so a cursor arriving via typing/navigation naturally
+		// lands right before it — visually indistinguishable from true
+		// end-of-line. Requiring an exact `line.length` match here used to fall
+		// through to Obsidian's default Enter, splitting the line between the
+		// text and the id and stranding `^o-xxxxxxxx` on its own line.
+		const doc = '@@@ asdf ^o-01gjm3uo';
+		const cursorBeforeId = '@@@ asdf'.length;
+		const result = apply(doc, addSibling(doc, 0, cursorBeforeId));
+		expect(result).toBe('@@@ asdf ^o-01gjm3uo\n@@@ ');
+	});
 });
 
 describe('addBodyLine (Mod-Enter)', () => {

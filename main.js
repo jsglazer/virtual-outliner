@@ -855,7 +855,9 @@ function addSibling(body, entryLine, cursorCol, sigilChar = DEFAULT_SIGIL_CHAR) 
   var _a, _b, _c, _d, _e;
   const lines = body.split("\n");
   const line = (_a = lines[entryLine]) != null ? _a : "";
-  if (cursorCol !== line.length) return null;
+  const idMatch = ID_SUFFIX_RE.exec(line);
+  const visibleEnd = idMatch ? idMatch.index : line.length;
+  if (cursorCol !== line.length && cursorCol !== visibleEnd) return null;
   const match = outlineLineRegex(sigilChar).exec(line);
   if (!match) return null;
   const level = ((_b = match[1]) != null ? _b : "").length;
@@ -1204,11 +1206,9 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
     new import_obsidian2.Setting(containerEl).setName("Level format").setHeading();
     containerEl.createEl("p", {
       cls: "vo-fixture-note",
-      text: `Composite labels join one segment per level (e.g. "I.B.3") \u2014 each level below controls its own segment's style, separator, and typography. Click a level to open it.`
+      text: 'One format applied to every outline level (e.g. "1.2.1" from repeated Number style + Separator). Indent step and Space above still accumulate with depth, so deeper levels sit further right and further apart even though the format itself is shared.'
     });
-    for (let level = 1; level <= MAX_LEVEL; level++) {
-      this.renderLevelSetting(containerEl, level);
-    }
+    this.renderLevelSetting(containerEl);
     new import_obsidian2.Setting(containerEl).setName("Metadata fields").setHeading();
     containerEl.createEl("p", {
       cls: "vo-fixture-note",
@@ -1216,98 +1216,137 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
     });
     this.renderMetaFields(containerEl);
   }
-  // One collapsible block per level, one NAMED row per property. The
-  // previous layout packed all nine controls into a single unlabelled row,
-  // where an unlabelled toggle sat between a colour swatch and a text box
-  // with nothing to say it meant "italic" — easy to flip by accident and
-  // impossible to identify afterwards.
-  renderLevelSetting(containerEl, level) {
-    const format = this.plugin.settings.levels[level - 1];
+  // One NAMED row per property, applied to every level at once (Update003:
+  // the previous layout repeated these ten controls inside a collapsible
+  // block per level, which was mostly redundant — nothing here needs to
+  // differ level to level, and levelCssVars already accumulates Indent
+  // step/Space above across levels regardless of whether the six stored
+  // LevelFormat entries are distinct or identical).
+  //
+  // The array's six LevelFormat entries stay in settings as separate
+  // objects (render.ts/label.ts/levelCssVars all still index into
+  // `levels[n]`), so this editor writes every change to ALL SIX slots
+  // rather than changing the stored shape. Displayed values are seeded from
+  // level 1's entry; an old vault whose levels still differ from a
+  // pre-Update003 install keeps that difference invisibly until the first
+  // edit here flattens it.
+  renderLevelSetting(containerEl) {
+    var _a, _b;
+    const format = this.plugin.settings.levels[0];
     if (!format) return;
-    const details = containerEl.createEl("details", { cls: "vo-level-details" });
-    details.createEl("summary", { cls: "vo-level-summary", text: `Level ${level}` });
-    new import_obsidian2.Setting(details).setName("Number style").setDesc("How this level's own segment of the composite label is numbered.").addDropdown((dropdown) => {
+    const applyToAllLevels = async (mutate) => {
+      for (const level of this.plugin.settings.levels) mutate(level);
+      await this.plugin.saveSettings();
+    };
+    new import_obsidian2.Setting(containerEl).setName("Number style").setDesc(`How each level's segment of the composite label is numbered (e.g. "1" + "." gives "1.2.1").`).addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(LABEL_STYLE_OPTIONS)) dropdown.addOption(value, label);
       dropdown.setValue(format.style).onChange(async (value) => {
-        format.style = value;
-        await this.plugin.saveSettings();
+        await applyToAllLevels((level) => {
+          level.style = value;
+        });
       });
     });
     this.addTextRow(
-      details,
+      containerEl,
       "Separator",
-      `Placed before this level's segment when a level above it already contributed one (e.g. "." gives 2.1).`,
+      `Placed before a level's segment when a shallower level already contributed one (e.g. "." gives 2.1).`,
       format.separator,
       async (value) => {
-        format.separator = value;
+        await applyToAllLevels((level) => {
+          level.separator = value;
+        });
       }
     );
-    new import_obsidian2.Setting(details).setName("Italic").setDesc("Renders this level's number and entry text in italics.").addToggle((toggle) => {
+    new import_obsidian2.Setting(containerEl).setName("Italic").setDesc("Renders every level's number and entry text in italics.").addToggle((toggle) => {
       toggle.setValue(format.italic);
       toggle.onChange(async (value) => {
-        format.italic = value;
-        await this.plugin.saveSettings();
+        await applyToAllLevels((level) => {
+          level.italic = value;
+        });
       });
     });
-    new import_obsidian2.Setting(details).setName("Colour").setDesc("Colour of this level's number and entry text.").addColorPicker((picker) => {
+    new import_obsidian2.Setting(containerEl).setName("Colour").setDesc("Colour of every level's number and entry text.").addColorPicker((picker) => {
       if (format.color !== "") picker.setValue(format.color);
       picker.onChange(async (value) => {
-        format.color = value;
-        await this.plugin.saveSettings();
+        await applyToAllLevels((level) => {
+          level.color = value;
+        });
       });
     }).addExtraButton((button) => {
       button.setIcon("rotate-ccw").setTooltip("Use the theme colour").onClick(async () => {
-        format.color = "";
-        await this.plugin.saveSettings();
+        await applyToAllLevels((level) => {
+          level.color = "";
+        });
         this.display();
       });
     });
     this.addTextRow(
-      details,
+      containerEl,
       "Font size",
       "Any CSS length (e.g. 1.2em). Blank inherits the note's font size.",
       format.fontSize,
       async (value) => {
-        format.fontSize = value;
+        await applyToAllLevels((level) => {
+          level.fontSize = value;
+        });
       }
     );
     this.addTextRow(
-      details,
+      containerEl,
       "Font weight",
       "A CSS weight (e.g. 600, bold). Blank inherits.",
       format.fontWeight,
       async (value) => {
-        format.fontWeight = value;
+        await applyToAllLevels((level) => {
+          level.fontWeight = value;
+        });
       }
     );
-    this.addTextRow(details, "Font family", "A CSS font family. Blank inherits.", format.fontFamily, async (value) => {
-      format.fontFamily = value;
-    });
     this.addTextRow(
-      details,
-      "Indent step",
-      level === 1 ? "A CSS length. Level 1 sets the whole outline's base offset from the left margin \u2014 0 keeps it flush." : "A CSS length: how much further right this level sits than the level above it.",
-      format.indentStep,
+      containerEl,
+      "Font family",
+      "A CSS font family. Blank inherits.",
+      format.fontFamily,
       async (value) => {
-        format.indentStep = value;
+        await applyToAllLevels((level) => {
+          level.fontFamily = value;
+        });
       }
     );
     this.addTextRow(
-      details,
+      containerEl,
+      "Indent step",
+      "A CSS length: how much further right each level sits than the level above it (level 1 stays flush left).",
+      (_b = (_a = this.plugin.settings.levels[1]) == null ? void 0 : _a.indentStep) != null ? _b : format.indentStep,
+      async (value) => {
+        const levels = this.plugin.settings.levels;
+        for (let i = 1; i < levels.length; i++) {
+          const level = levels[i];
+          if (level) level.indentStep = value;
+        }
+        await this.plugin.saveSettings();
+      }
+    );
+    this.addTextRow(
+      containerEl,
       "Space above",
-      "A CSS length added above each entry at this level.",
+      "A CSS length added above each entry, accumulating with depth.",
       format.spacing,
       async (value) => {
-        format.spacing = value;
+        await applyToAllLevels((level) => {
+          level.spacing = value;
+        });
       }
     );
     this.addTextRow(
-      details,
+      containerEl,
       "Label gap",
       "A CSS length between the number and the entry text.",
       format.labelGap,
       async (value) => {
-        format.labelGap = value;
+        await applyToAllLevels((level) => {
+          level.labelGap = value;
+        });
       }
     );
   }
@@ -1316,7 +1355,6 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
       text.setValue(value);
       text.onChange(async (next) => {
         await apply(next);
-        await this.plugin.saveSettings();
       });
     });
   }
@@ -1565,6 +1603,15 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     viewStateCommand("view-body-only", "Show body only", "body");
     viewStateCommand("view-both", "Show outline and body", "both");
     this.addCommand({
+      id: "toggle-indent-body",
+      name: "Indent body with outline",
+      callback: () => {
+        this.settings.indentBody = !this.settings.indentBody;
+        void this.saveSettings();
+        new import_obsidian4.Notice(this.settings.indentBody ? "Indent body with outline: on" : "Indent body with outline: off");
+      }
+    });
+    this.addCommand({
       id: "generate-filtered-copy",
       name: "Generate filtered copy",
       checkCallback: (checking) => {
@@ -1619,6 +1666,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     this.app.workspace.onLayoutReady(() => {
       const file = this.app.workspace.getActiveFile();
       if (file && file.extension === "md") void this.ensureFileState(file.path);
+      for (const view of this.editors) this.decorate(view);
+      this.rerenderPreviews(null);
     });
   }
   onunload() {
