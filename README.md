@@ -12,12 +12,13 @@ Outline-first authoring for Obsidian: lay down a full multi-level outline, then 
 - **Three view states** — outline only, body only, or both — by command, and remembered per note.
 - **A real outliner keymap**, scoped to outline lines only:
   - `Enter` at the end of an entry inserts a new sibling **after that node's entire subtree** — it never splits an existing node's body or children out from under it.
+  - `Cmd-Enter` / `Ctrl-Enter` on an entry opens a plain **prose** line directly beneath it — that entry's own body, above its children — instead of another outline level. The cursor's column doesn't matter and the entry line is never split.
   - `Tab` / `Shift-Tab` demote/promote a node, carrying its whole subtree (body and descendants) with it — nothing is ever orphaned.
   - `Alt-↑` / `Alt-↓` move a node past its previous/next sibling, subtree and all.
   - Every operation is also available as a hotkey-less command, so it works on iPad without a hardware keyboard.
 - **Collapse per node** — hide a node's body and descendants while keeping its entry visible, from the sidebar. Honored in Live Preview and Reading View alike, down to the individual source line.
 - **Searchable, collapsible outline sidebar** — click any entry to jump straight to its prose.
-- **Per-level formatting** — number style, separator, italic, colour, font size, font weight, font family, indent step, space above, and label gap, each independently configurable per level from its own collapsible block in Settings. Indentation is cumulative: level 1's step is the whole outline's base offset from the left margin (0 by default, so it sits flush), and each deeper level's step is how much further right it sits than its parent. Body prose indents with its entry unless you turn **Indent body under its outline level** off.
+- **Per-level formatting** — number style, separator, italic, colour, font size, font weight, font family, indent step, space above, and label gap, each independently configurable per level from its own collapsible block in Settings. A level's font size sizes the whole line, so setting a level below 1em tightens its leading to match rather than leaving full-size gaps around shrunken text. Indentation is cumulative: level 1's step is the whole outline's base offset from the left margin (0 by default, so it sits flush), and each deeper level's step is how much further right it sits than its parent. Body prose indents with its entry unless you turn **Indent body under its outline level** off.
 - **Per-node metadata** (Status, Note, or any fields you configure) stored out-of-band in a single `%%md-outline` block at the end of the file, exposed read-only to Dataview/Datacore.
 - **Generate filtered copy** — a command that produces a new file containing only what the current view state shows, with labels materialized into literal text.
 - Full desktop **and** mobile/iPad support.
