@@ -1970,7 +1970,7 @@ ${body}
       this.settings.indentBody
     );
     const decorations = buildOutlineDecorations(view, plan, this.settings.sigil);
-    view.dispatch({ effects: setOutlineDecorations.of(decorations) });
+    view.dispatch({ effects: setOutlineDecorations.of(decorations), selection: view.state.selection });
   }
   decorateAllFor(path) {
     const state = this.states.get(path);

@@ -512,7 +512,20 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			this.settings.indentBody,
 		);
 		const decorations = buildOutlineDecorations(view, plan, this.settings.sigil);
-		view.dispatch({ effects: setOutlineDecorations.of(decorations) });
+		// Explicitly reassert the current selection alongside the decoration
+		// effect, even though its VALUE is unchanged. An effects-only dispatch
+		// still touches the DOM around any hidden atomic block whose position
+		// shifted (e.g. an entry hidden in body/outline view sitting right next
+		// to the cursor after ordinary typing) — and contentEditable's native
+		// caret can silently drift to the far side of that redrawn region while
+		// CM6's own state.selection still reports the old, correct offset. The
+		// browser then reports the NEXT keystroke at wherever the native caret
+		// actually drifted to (reported live: typing "Here" split into "H" on
+		// one line and "ere" landing at the start of a different line, past a
+		// hidden entry). Including `selection` in the same dispatch makes CM6
+		// resync the native caret to the true state value after the DOM update,
+		// which a bare effects-only dispatch does not do on its own.
+		view.dispatch({ effects: setOutlineDecorations.of(decorations), selection: view.state.selection });
 	}
 
 	private decorateAllFor(path: string): void {
