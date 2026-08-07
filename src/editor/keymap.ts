@@ -15,7 +15,7 @@ import type { EditorView, KeyBinding } from '@codemirror/view';
 import { keymap } from '@codemirror/view';
 
 import { parseMetaDocument } from '../core/metadata';
-import { addSibling, demote, moveDown, moveUp, promote } from '../core/ops';
+import { addBodyLine, addSibling, demote, moveDown, moveUp, promote } from '../core/ops';
 import { isOutlineLine } from '../core/sigil';
 import type { EditSplice } from '../core/types';
 
@@ -91,9 +91,29 @@ function enterBinding(host: KeymapHost): (view: EditorView) => boolean {
 	};
 }
 
+// Mod-Enter (Cmd-Return on macOS, Ctrl-Return elsewhere): a plain prose line
+// under the current entry instead of another entry beside it. Same early-exit
+// contract as everything else here — off an outline line it returns false, so
+// Obsidian's own Mod-Enter handling is untouched outside the outline.
+function bodyLineBinding(host: KeymapHost): (view: EditorView) => boolean {
+	return (view: EditorView): boolean => {
+		const line = activeLine(view);
+		if (!line) return false;
+		const sigil = host.sigilChar(view);
+		if (!isOutlineLine(line.lineText, sigil)) return false;
+
+		const splice = addBodyLine(bodyOf(view), line.lineIndex, sigil);
+		if (!splice) return true; // consumed no-op
+		// The caret goes to the start of the line just opened, i.e. one past
+		// the inserted newline.
+		return dispatchSplice(view, splice, splice.from + splice.insert.length);
+	};
+}
+
 export function buildOutlineKeymap(host: KeymapHost): Extension {
 	const bindings: KeyBinding[] = [
 		{ key: 'Enter', run: enterBinding(host) },
+		{ key: 'Mod-Enter', run: bodyLineBinding(host) },
 		{ key: 'Tab', run: structuralBinding(host, demote) },
 		{ key: 'Shift-Tab', run: structuralBinding(host, promote) },
 		{ key: 'Alt-ArrowUp', run: structuralBinding(host, moveUp) },

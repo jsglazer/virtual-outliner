@@ -8,7 +8,14 @@
 // promoting, or moving a node always carries its hidden prose with it
 // (Decision #6); nothing is ever orphaned.
 
-import { DEFAULT_SIGIL_CHAR, MAX_LEVEL, entryLevel, isEntryLine, outlineLineRegex } from './sigil';
+import {
+	DEFAULT_SIGIL_CHAR,
+	MAX_LEVEL,
+	entryLevel,
+	isEntryLine,
+	isOutlineLine,
+	outlineLineRegex,
+} from './sigil';
 import { splitEntryId } from './id';
 import { lineRangeToOffsets, lineStartOffsets } from './lines';
 import { nextSibling, nodeAtLine, parseOutline, previousSibling } from './parser';
@@ -154,4 +161,32 @@ export function addSibling(
 	const newEntry = sigilChar.repeat(level) + ' ';
 	const insert = atEof ? '\n' + newEntry : newEntry + '\n';
 	return { from: insertAt, to: insertAt, insert };
+}
+
+// Mod-Enter on an entry line: open a PLAIN prose line — no sigils, no label,
+// no new outline level — as the first line of that entry's OWN body, directly
+// beneath the entry. Deliberately different from addSibling in three ways:
+//
+//  - it inserts right after the entry line rather than after the whole
+//    subtree, because body prose belongs to the entry it sits under, not
+//    after that entry's children (which is where a SIBLING goes);
+//  - the cursor column is irrelevant and the current line is never split, so
+//    there is no mid-line fall-through — "give me a body line here" means the
+//    same thing wherever the caret happens to be in the entry;
+//  - an empty entry is left alone rather than being stripped of its sigils
+//    (that exit belongs to Enter — see addSibling — and stripping here would
+//    make Mod-Enter silently destroy the entry the user was standing on).
+export function addBodyLine(
+	body: string,
+	entryLine: number,
+	sigilChar: string = DEFAULT_SIGIL_CHAR,
+): EditSplice | null {
+	const lines = body.split('\n');
+	const line = lines[entryLine];
+	if (line === undefined) return null;
+	if (!isOutlineLine(line, sigilChar)) return null;
+
+	const offsets = lineStartOffsets(lines);
+	const insertAt = (offsets[entryLine] ?? 0) + line.length;
+	return { from: insertAt, to: insertAt, insert: '\n' };
 }

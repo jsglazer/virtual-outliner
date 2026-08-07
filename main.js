@@ -876,6 +876,16 @@ function addSibling(body, entryLine, cursorCol, sigilChar = DEFAULT_SIGIL_CHAR) 
   const insert = atEof ? "\n" + newEntry : newEntry + "\n";
   return { from: insertAt, to: insertAt, insert };
 }
+function addBodyLine(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
+  var _a;
+  const lines = body.split("\n");
+  const line = lines[entryLine];
+  if (line === void 0) return null;
+  if (!isOutlineLine(line, sigilChar)) return null;
+  const offsets = lineStartOffsets(lines);
+  const insertAt = ((_a = offsets[entryLine]) != null ? _a : 0) + line.length;
+  return { from: insertAt, to: insertAt, insert: "\n" };
+}
 
 // src/editor/keymap.ts
 function bodyOf(view) {
@@ -919,9 +929,21 @@ function enterBinding(host) {
     return dispatchSplice(view, splice, cursor);
   };
 }
+function bodyLineBinding(host) {
+  return (view) => {
+    const line = activeLine(view);
+    if (!line) return false;
+    const sigil = host.sigilChar(view);
+    if (!isOutlineLine(line.lineText, sigil)) return false;
+    const splice = addBodyLine(bodyOf(view), line.lineIndex, sigil);
+    if (!splice) return true;
+    return dispatchSplice(view, splice, splice.from + splice.insert.length);
+  };
+}
 function buildOutlineKeymap(host) {
   const bindings = [
     { key: "Enter", run: enterBinding(host) },
+    { key: "Mod-Enter", run: bodyLineBinding(host) },
     { key: "Tab", run: structuralBinding(host, demote) },
     { key: "Shift-Tab", run: structuralBinding(host, promote) },
     { key: "Alt-ArrowUp", run: structuralBinding(host, moveUp) },

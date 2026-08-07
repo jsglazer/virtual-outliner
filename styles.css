@@ -9,96 +9,92 @@
 	white-space: pre;
 }
 
-.vo-label.vo-l1 {
+/* Per-level typography is applied to the LINE — the `.cm-line` in live
+   preview, the `.vo-line` block wrapper (or the section element) in reading
+   view — and NOT to the label/text spans inside it.
+
+   A span sized at, say, 0.8em inside a full-size line still sits in a
+   full-size line box: the box's height comes from the containing block's own
+   strut, not from the shrunken inline content. So sizing a level down only
+   shrank the glyphs and left all of the original leading behind, which reads
+   as extra blank space between outline lines — worst in reading view, where
+   `.vo-line` is a block wrapper inheriting the paragraph's full font size.
+   Sizing the line itself makes the line box scale with the level.
+
+   The label and text spans deliberately declare no font properties of their
+   own now — they inherit from the line. Declaring size in both places would
+   COMPOUND (0.8em of 0.8em = 0.64em). The label keeps only its own gap.
+
+   Indent and spacing are unaffected by the change: both are registered
+   <length> properties computed once at `:root` (see the @property block
+   below), so their `em` values never resolve against a line's font-size. */
+
+.markdown-source-view.mod-cm6 .cm-content .cm-line.vo-entry-l1,
+.markdown-rendered .vo-entry-l1 {
 	font-size: var(--vo-l1-size, inherit);
 	font-weight: var(--vo-l1-weight, inherit);
 	font-family: var(--vo-l1-family, inherit);
 	color: var(--vo-l1-color, inherit);
 	font-style: var(--vo-l1-style, normal);
+}
+.markdown-source-view.mod-cm6 .cm-content .cm-line.vo-entry-l2,
+.markdown-rendered .vo-entry-l2 {
+	font-size: var(--vo-l2-size, inherit);
+	font-weight: var(--vo-l2-weight, inherit);
+	font-family: var(--vo-l2-family, inherit);
+	color: var(--vo-l2-color, inherit);
+	font-style: var(--vo-l2-style, normal);
+}
+.markdown-source-view.mod-cm6 .cm-content .cm-line.vo-entry-l3,
+.markdown-rendered .vo-entry-l3 {
+	font-size: var(--vo-l3-size, inherit);
+	font-weight: var(--vo-l3-weight, inherit);
+	font-family: var(--vo-l3-family, inherit);
+	color: var(--vo-l3-color, inherit);
+	font-style: var(--vo-l3-style, normal);
+}
+.markdown-source-view.mod-cm6 .cm-content .cm-line.vo-entry-l4,
+.markdown-rendered .vo-entry-l4 {
+	font-size: var(--vo-l4-size, inherit);
+	font-weight: var(--vo-l4-weight, inherit);
+	font-family: var(--vo-l4-family, inherit);
+	color: var(--vo-l4-color, inherit);
+	font-style: var(--vo-l4-style, normal);
+}
+.markdown-source-view.mod-cm6 .cm-content .cm-line.vo-entry-l5,
+.markdown-rendered .vo-entry-l5 {
+	font-size: var(--vo-l5-size, inherit);
+	font-weight: var(--vo-l5-weight, inherit);
+	font-family: var(--vo-l5-family, inherit);
+	color: var(--vo-l5-color, inherit);
+	font-style: var(--vo-l5-style, normal);
+}
+.markdown-source-view.mod-cm6 .cm-content .cm-line.vo-entry-l6,
+.markdown-rendered .vo-entry-l6 {
+	font-size: var(--vo-l6-size, inherit);
+	font-weight: var(--vo-l6-weight, inherit);
+	font-family: var(--vo-l6-family, inherit);
+	color: var(--vo-l6-color, inherit);
+	font-style: var(--vo-l6-style, normal);
+}
+
+.vo-label.vo-l1 {
 	margin-right: var(--vo-l1-gap, 0);
 }
 .vo-label.vo-l2 {
-	font-size: var(--vo-l2-size, inherit);
-	font-weight: var(--vo-l2-weight, inherit);
-	font-family: var(--vo-l2-family, inherit);
-	color: var(--vo-l2-color, inherit);
-	font-style: var(--vo-l2-style, normal);
 	margin-right: var(--vo-l2-gap, 0);
 }
 .vo-label.vo-l3 {
-	font-size: var(--vo-l3-size, inherit);
-	font-weight: var(--vo-l3-weight, inherit);
-	font-family: var(--vo-l3-family, inherit);
-	color: var(--vo-l3-color, inherit);
-	font-style: var(--vo-l3-style, normal);
 	margin-right: var(--vo-l3-gap, 0);
 }
 .vo-label.vo-l4 {
-	font-size: var(--vo-l4-size, inherit);
-	font-weight: var(--vo-l4-weight, inherit);
-	font-family: var(--vo-l4-family, inherit);
-	color: var(--vo-l4-color, inherit);
-	font-style: var(--vo-l4-style, normal);
 	margin-right: var(--vo-l4-gap, 0);
 }
 .vo-label.vo-l5 {
-	font-size: var(--vo-l5-size, inherit);
-	font-weight: var(--vo-l5-weight, inherit);
-	font-family: var(--vo-l5-family, inherit);
-	color: var(--vo-l5-color, inherit);
-	font-style: var(--vo-l5-style, normal);
 	margin-right: var(--vo-l5-gap, 0);
 }
 .vo-label.vo-l6 {
-	font-size: var(--vo-l6-size, inherit);
-	font-weight: var(--vo-l6-weight, inherit);
-	font-family: var(--vo-l6-family, inherit);
-	color: var(--vo-l6-color, inherit);
-	font-style: var(--vo-l6-style, normal);
 	margin-right: var(--vo-l6-gap, 0);
-}
-
-.vo-text.vo-l1 {
-	font-size: var(--vo-l1-size, inherit);
-	font-weight: var(--vo-l1-weight, inherit);
-	font-family: var(--vo-l1-family, inherit);
-	color: var(--vo-l1-color, inherit);
-	font-style: var(--vo-l1-style, normal);
-}
-.vo-text.vo-l2 {
-	font-size: var(--vo-l2-size, inherit);
-	font-weight: var(--vo-l2-weight, inherit);
-	font-family: var(--vo-l2-family, inherit);
-	color: var(--vo-l2-color, inherit);
-	font-style: var(--vo-l2-style, normal);
-}
-.vo-text.vo-l3 {
-	font-size: var(--vo-l3-size, inherit);
-	font-weight: var(--vo-l3-weight, inherit);
-	font-family: var(--vo-l3-family, inherit);
-	color: var(--vo-l3-color, inherit);
-	font-style: var(--vo-l3-style, normal);
-}
-.vo-text.vo-l4 {
-	font-size: var(--vo-l4-size, inherit);
-	font-weight: var(--vo-l4-weight, inherit);
-	font-family: var(--vo-l4-family, inherit);
-	color: var(--vo-l4-color, inherit);
-	font-style: var(--vo-l4-style, normal);
-}
-.vo-text.vo-l5 {
-	font-size: var(--vo-l5-size, inherit);
-	font-weight: var(--vo-l5-weight, inherit);
-	font-family: var(--vo-l5-family, inherit);
-	color: var(--vo-l5-color, inherit);
-	font-style: var(--vo-l5-style, normal);
-}
-.vo-text.vo-l6 {
-	font-size: var(--vo-l6-size, inherit);
-	font-weight: var(--vo-l6-weight, inherit);
-	font-family: var(--vo-l6-family, inherit);
-	color: var(--vo-l6-color, inherit);
-	font-style: var(--vo-l6-style, normal);
 }
 
 /* Indent/spacing is delivered in two steps so the level-specific part stays

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { addSibling, demote, moveDown, moveUp, promote } from '../src/core/ops';
+import { addBodyLine, addSibling, demote, moveDown, moveUp, promote } from '../src/core/ops';
 import { parseOutline } from '../src/core/parser';
 import type { EditSplice } from '../src/core/types';
 
@@ -115,5 +115,48 @@ describe('addSibling (Enter)', () => {
 		const doc = '@@@ Deep entry';
 		const result = apply(doc, addSibling(doc, 0, doc.length));
 		expect(result).toBe('@@@ Deep entry\n@@@ ');
+	});
+});
+
+describe('addBodyLine (Mod-Enter)', () => {
+	it('opens a sigil-free line directly under the entry, above its children', () => {
+		const doc = ['@ A', '@@ A.1', '@ B'].join('\n');
+		const result = apply(doc, addBodyLine(doc, 0));
+		expect(result).toBe(['@ A', '', '@@ A.1', '@ B'].join('\n'));
+	});
+
+	it('lands the new line ahead of body the entry already has', () => {
+		const doc = ['@ A', 'existing body', '@ B'].join('\n');
+		const result = apply(doc, addBodyLine(doc, 0));
+		expect(result).toBe(['@ A', '', 'existing body', '@ B'].join('\n'));
+	});
+
+	it('inserts nothing but a newline regardless of the entry level', () => {
+		const doc = '@@@@ Deep entry';
+		expect(apply(doc, addBodyLine(doc, 0))).toBe('@@@@ Deep entry\n');
+	});
+
+	it('works at end of document', () => {
+		const doc = '@ A';
+		const splice = addBodyLine(doc, 0);
+		expect(splice).toEqual({ from: 3, to: 3, insert: '\n' });
+		expect(apply(doc, splice)).toBe('@ A\n');
+	});
+
+	it('leaves an empty entry intact rather than stripping its sigils like Enter does', () => {
+		const doc = '@@ ';
+		expect(apply(doc, addBodyLine(doc, 0))).toBe('@@ \n');
+	});
+
+	it('returns null off an outline line so Obsidian keeps its own Mod-Enter', () => {
+		const doc = ['@ A', 'just prose'].join('\n');
+		expect(addBodyLine(doc, 1)).toBeNull();
+		expect(addBodyLine(doc, 9)).toBeNull();
+	});
+
+	it('honors a non-default sigil', () => {
+		const doc = '~~ Entry';
+		expect(apply(doc, addBodyLine(doc, 0, '~'))).toBe('~~ Entry\n');
+		expect(addBodyLine(doc, 0, '@')).toBeNull();
 	});
 });
