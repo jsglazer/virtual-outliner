@@ -16,8 +16,8 @@ describe('computeRenderPlan', () => {
 	it('"both": nothing hidden, every entry gets a label', () => {
 		const plan = computeRenderPlan(DOC, '@', levels(), 'both', new Set());
 		expect(plan.hiddenLineRanges).toEqual([]);
-		expect(plan.labels.get(1)).toBe('1.0'); // "@ A"
-		expect(plan.labels.get(3)).toBe('1.0.1'); // "@@ A.1"
+		expect(plan.labels.get(1)).toBe('1.0'); // "@ A" — no child segment, keeps the placeholder
+		expect(plan.labels.get(3)).toBe('1.1'); // "@@ A.1" — the child takes the placeholder's slot
 	});
 
 	it('"outline": hides every body run, including the preamble, but not entries', () => {
@@ -52,5 +52,13 @@ describe('computeRenderPlan', () => {
 		expect(plan.indentLevel.get(2)).toBe(1); // "A body" under level-1 "A"
 		expect(plan.indentLevel.get(4)).toBe(2); // "A.1 body" under level-2 "A.1"
 		expect(plan.indentLevel.get(0)).toBeUndefined(); // preamble has no owning node
+	});
+
+	it('leaves body lines flush when "indent body" is off, but still indents entries', () => {
+		const plan = computeRenderPlan(DOC, '@', levels(), 'both', new Set(), false);
+		expect(plan.indentLevel.get(2)).toBeUndefined(); // "A body"
+		expect(plan.indentLevel.get(4)).toBeUndefined(); // "A.1 body"
+		expect(plan.indentLevel.get(1)).toBe(1); // "@ A" entry line still indents
+		expect(plan.indentLevel.get(3)).toBe(2); // "@@ A.1" entry line still indents
 	});
 });

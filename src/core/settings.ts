@@ -35,7 +35,11 @@ export function defaultLevelFormat(level: number): LevelFormat {
 		fontFamily: '',
 		color: '',
 		italic: false,
-		indentStep: '1.5em',
+		// Cumulative: a level's own step is added to every step above it, so
+		// level 1's step is the whole outline's base offset (0 = flush left)
+		// and each deeper level's step is how much further right it sits than
+		// its parent.
+		indentStep: level === 1 ? '0' : '1.5em',
 		spacing: level === 1 ? '0.75em' : '0.25em',
 		labelGap: '0.3em',
 	};
@@ -156,10 +160,8 @@ export function levelCssVars(levels: readonly LevelFormat[]): Record<string, str
 		vars[`--vo-l${n}-style`] = level.italic ? 'italic' : 'normal';
 		vars[`--vo-l${n}-spacing`] = level.spacing !== '' ? cssValue(level.spacing) : '0px';
 		vars[`--vo-l${n}-gap`] = level.labelGap !== '' ? cssValue(level.labelGap) : '0px';
-		cumulativeIndent =
-			cumulativeIndent === ''
-				? cssValue(level.indentStep)
-				: `calc(${cumulativeIndent} + ${cssValue(level.indentStep)})`;
+		const step = level.indentStep !== '' ? cssValue(level.indentStep) : '0px';
+		cumulativeIndent = cumulativeIndent === '' ? step : `calc(${cumulativeIndent} + ${step})`;
 		vars[`--vo-l${n}-indent`] = cumulativeIndent !== '' ? cumulativeIndent : '0px';
 	}
 	return vars;

@@ -40,11 +40,21 @@ describe('levelCssVars', () => {
 		expect(vars['--vo-l2-color']).toBe('inherit');
 	});
 
-	it('accumulates indent step across levels', () => {
+	it('accumulates indent step across levels, with level 1 flush by default', () => {
 		const levels = defaultSettings().levels;
 		const vars = levelCssVars(levels);
-		expect(vars['--vo-l1-indent']).toBe('1.5em');
-		expect(vars['--vo-l2-indent']).toBe('calc(1.5em + 1.5em)');
+		expect(vars['--vo-l1-indent']).toBe('0');
+		expect(vars['--vo-l2-indent']).toBe('calc(0 + 1.5em)');
+		expect(vars['--vo-l3-indent']).toBe('calc(calc(0 + 1.5em) + 1.5em)');
+	});
+
+	it('treats a blank indent step as zero rather than an empty length', () => {
+		const levels = defaultSettings().levels;
+		const second = levels[1];
+		if (!second) throw new Error('missing level');
+		second.indentStep = '';
+		const vars = levelCssVars(levels);
+		expect(vars['--vo-l2-indent']).toBe('calc(0 + 0px)');
 	});
 
 	it('strips characters that could break out of the custom-property value', () => {

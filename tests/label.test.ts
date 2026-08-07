@@ -36,12 +36,36 @@ describe('computeLabel', () => {
 		expect(computeLabel(levels({ 1: { style: '1' } }), target)).toBe('1.2.1');
 	});
 
-	it('renders the "1.0" style as a bare integer plus a fixed ".0"', () => {
+	it('renders the "1.0" style as a bare integer plus a trailing ".0"', () => {
 		const doc = '@ A\n@ B';
 		const parsed = parseOutline(doc);
 		const b = parsed.roots[1];
 		if (!b) throw new Error('missing node');
 		expect(computeLabel(levels({ 1: { style: '1.0' } }), b)).toBe('2.0');
+	});
+
+	it('gives up the "1.0" placeholder to the child level ("3.1", never "3.0.1")', () => {
+		const doc = '@ A\n@ B\n@ C\n@@ C.1';
+		const parsed = parseOutline(doc);
+		const target = parsed.roots[2]?.children[0];
+		if (!target) throw new Error('missing node');
+		expect(computeLabel(levels({ 1: { style: '1.0' } }), target)).toBe('3.1');
+	});
+
+	it('keeps the "1.0" placeholder when every deeper level renders nothing', () => {
+		const doc = '@ A\n@@ A.1';
+		const parsed = parseOutline(doc);
+		const target = parsed.roots[0]?.children[0];
+		if (!target) throw new Error('missing node');
+		expect(computeLabel(levels({ 1: { style: '1.0' }, 2: { style: 'none' } }), target)).toBe('1.0');
+	});
+
+	it('drops the "1.0" placeholder three levels deep', () => {
+		const doc = '@ A\n@@ A.1\n@@ A.2\n@@@ A.2.a';
+		const parsed = parseOutline(doc);
+		const target = parsed.roots[0]?.children[1]?.children[0];
+		if (!target) throw new Error('missing node');
+		expect(computeLabel(levels({ 1: { style: '1.0' } }), target)).toBe('1.2.1');
 	});
 
 	it('joins mixed per-level styles as in the "I.B.3" example', () => {

@@ -65,7 +65,6 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private editorTimers = new Map<EditorView, number>();
 	private diskTimers = new Map<string, number>();
 	private changeListeners = new Set<() => void>();
-	private initialRendered = new Set<string>();
 	private cssVarStyleEl: HTMLStyleElement | null = null;
 
 	async onload(): Promise<void> {
@@ -102,7 +101,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				levels: () => this.settings.levels,
 				viewState: (path) => this.viewStateFor(path),
 				collapsedIds: (path) => this.collapsedIdsFor(path),
-				getBody: (path) => this.states.get(path)?.body ?? null,
+				indentBody: () => this.settings.indentBody,
 			}),
 		);
 
@@ -186,6 +185,15 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				this.notifyChange();
 			}),
 		);
+
+		// A note already open when the plugin loads never fires `file-open`,
+		// so the sidebar would sit empty until the user switched away and
+		// back. (Reading view no longer depends on this cache — it reads the
+		// document out of the section info it is handed.)
+		this.app.workspace.onLayoutReady(() => {
+			const file = this.app.workspace.getActiveFile();
+			if (file && file.extension === 'md') void this.ensureFileState(file.path);
+		});
 	}
 
 	onunload(): void {
@@ -201,7 +209,22 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		await this.persist();
 		this.applyLevelCssVars();
 		for (const view of this.editors) this.decorate(view);
+		this.rerenderPreviews(null);
 		this.notifyChange();
+	}
+
+	// Reading view is a one-shot post-processor render, so anything that
+	// changes what it should draw (settings, view state, a collapse) has to
+	// ask Obsidian to run it again — the editor's decoration path has no
+	// equivalent effect on it. `path === null` means every open preview.
+	private rerenderPreviews(path: string | null): void {
+		for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+			const view = leaf.view;
+			if (!(view instanceof MarkdownView)) continue;
+			if (view.getMode() !== 'preview') continue;
+			if (path !== null && view.file?.path !== path) continue;
+			view.previewMode.rerender(true);
+		}
 	}
 
 	private async persist(): Promise<void> {
@@ -356,22 +379,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		const file = this.app.vault.getFileByPath(path);
 		if (!file || file.extension !== 'md') return null;
 		const doc = await this.app.vault.cachedRead(file);
-		const state = this.setStateFromDoc(path, doc);
-		this.scheduleInitialPreviewRender(path);
-		return state;
-	}
-
-	private scheduleInitialPreviewRender(path: string): void {
-		if (this.initialRendered.has(path)) return;
-		this.initialRendered.add(path);
-		window.setTimeout(() => {
-			for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
-				const view = leaf.view;
-				if (view instanceof MarkdownView && view.getMode() === 'preview' && view.file?.path === path) {
-					view.previewMode.rerender(true);
-				}
-			}
-		}, 0);
+		return this.setStateFromDoc(path, doc);
 	}
 
 	private setStateFromDoc(path: string, doc: string): OutlineFileState {
@@ -446,6 +454,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			this.settings.levels,
 			state.viewState,
 			state.collapsedIds,
+			this.settings.indentBody,
 		);
 		const decorations = buildOutlineDecorations(view, plan, this.settings.sigil);
 		view.dispatch({ effects: setOutlineDecorations.of(decorations) });
@@ -461,6 +470,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		for (const view of this.editors) {
 			if (editorViewPath(view) === path) this.decorate(view);
 		}
+		this.rerenderPreviews(path);
 	}
 
 	// ── Commands ──────────────────────────────────────────────────────────────

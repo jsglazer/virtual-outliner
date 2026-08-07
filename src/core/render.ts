@@ -66,6 +66,9 @@ export function computeRenderPlan(
 	levels: readonly LevelFormat[],
 	viewState: ViewState,
 	collapsedIds: ReadonlySet<string>,
+	// The "Indent body under its outline level" setting. When false, only
+	// entry lines are indented and body prose stays flush left.
+	indentBody = true,
 ): RenderPlan {
 	const parsed = parseOutline(body, sigilChar);
 	const collapseRanges: LineRange[] = [];
@@ -111,10 +114,12 @@ export function computeRenderPlan(
 		indentLevel.set(node.entryLine, node.level);
 	}
 
-	for (const node of parsed.flat) {
-		for (let line = node.ownBodyStart; line < node.ownBodyEnd; line++) {
-			if (isLineHidden(hiddenLineRanges, line)) continue;
-			indentLevel.set(line, node.level);
+	if (indentBody) {
+		for (const node of parsed.flat) {
+			for (let line = node.ownBodyStart; line < node.ownBodyEnd; line++) {
+				if (isLineHidden(hiddenLineRanges, line)) continue;
+				indentLevel.set(line, node.level);
+			}
 		}
 	}
 

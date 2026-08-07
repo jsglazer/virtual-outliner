@@ -101,53 +101,79 @@
 	font-style: var(--vo-l6-style, normal);
 }
 
-.cm-line.vo-entry-l1 {
-	margin-top: var(--vo-l1-spacing, 0);
+/* Indent/spacing is delivered in two steps so the level-specific part stays
+   a cheap custom-property assignment while the declaration that actually
+   paints can be scoped tightly enough to outrank Obsidian's own `.cm-line`
+   padding rules (which are more specific than a bare `.cm-line.vo-indent-lN`
+   and were silently winning). The same pair of aliases serves reading view,
+   where the element is a paragraph/heading rather than a `.cm-line`. */
+
+.vo-indent-l1 {
+	--vo-indent: var(--vo-l1-indent, 0px);
 }
-.cm-line.vo-entry-l2 {
-	margin-top: var(--vo-l2-spacing, 0);
+.vo-indent-l2 {
+	--vo-indent: var(--vo-l2-indent, 0px);
 }
-.cm-line.vo-entry-l3 {
-	margin-top: var(--vo-l3-spacing, 0);
+.vo-indent-l3 {
+	--vo-indent: var(--vo-l3-indent, 0px);
 }
-.cm-line.vo-entry-l4 {
-	margin-top: var(--vo-l4-spacing, 0);
+.vo-indent-l4 {
+	--vo-indent: var(--vo-l4-indent, 0px);
 }
-.cm-line.vo-entry-l5 {
-	margin-top: var(--vo-l5-spacing, 0);
+.vo-indent-l5 {
+	--vo-indent: var(--vo-l5-indent, 0px);
 }
-.cm-line.vo-entry-l6 {
-	margin-top: var(--vo-l6-spacing, 0);
+.vo-indent-l6 {
+	--vo-indent: var(--vo-l6-indent, 0px);
 }
 
-.cm-line.vo-indent-l1 {
-	padding-left: var(--vo-l1-indent, 0);
+.vo-entry-l1 {
+	--vo-spacing: var(--vo-l1-spacing, 0px);
+}
+.vo-entry-l2 {
+	--vo-spacing: var(--vo-l2-spacing, 0px);
+}
+.vo-entry-l3 {
+	--vo-spacing: var(--vo-l3-spacing, 0px);
+}
+.vo-entry-l4 {
+	--vo-spacing: var(--vo-l4-spacing, 0px);
+}
+.vo-entry-l5 {
+	--vo-spacing: var(--vo-l5-spacing, 0px);
+}
+.vo-entry-l6 {
+	--vo-spacing: var(--vo-l6-spacing, 0px);
+}
+
+.markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-indent-l'],
+.markdown-rendered [class*='vo-indent-l'] {
+	padding-inline-start: var(--vo-indent, 0px);
 	box-sizing: border-box;
 }
-.cm-line.vo-indent-l2 {
-	padding-left: var(--vo-l2-indent, 0);
-	box-sizing: border-box;
+
+.markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-entry-l'],
+.markdown-rendered [class*='vo-entry-l'] {
+	margin-top: var(--vo-spacing, 0px);
 }
-.cm-line.vo-indent-l3 {
-	padding-left: var(--vo-l3-indent, 0);
-	box-sizing: border-box;
+
+/* Reading view only: one source line inside a `<br>`-joined paragraph,
+   promoted to its own block so it can carry that line's indent and spacing
+   (see editor/readingView.ts blockWrapSegment). */
+.markdown-rendered .vo-line {
+	display: block;
 }
-.cm-line.vo-indent-l4 {
-	padding-left: var(--vo-l4-indent, 0);
-	box-sizing: border-box;
-}
-.cm-line.vo-indent-l5 {
-	padding-left: var(--vo-l5-indent, 0);
-	box-sizing: border-box;
-}
-.cm-line.vo-indent-l6 {
-	padding-left: var(--vo-l6-indent, 0);
-	box-sizing: border-box;
+
+.markdown-rendered .vo-line:empty {
+	min-height: 1em;
 }
 
 /* Reading view: hides entries/body per the current view state, or a
-   collapsed node's subtree — applied via addClass, never inline style. */
-.vo-hidden {
+   collapsed node's subtree — applied via addClass, never inline style. The
+   `.markdown-rendered` pairing is only there to outrank `.vo-line`'s own
+   `display: block` on a wrapper that is both. */
+.vo-hidden,
+.markdown-rendered .vo-hidden {
 	display: none;
 }
 
@@ -250,4 +276,22 @@
 .vo-fixture-note {
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
+}
+
+.vo-level-details {
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.vo-level-summary {
+	cursor: pointer;
+	padding: var(--size-4-2) 0;
+	font-weight: var(--font-semibold);
+}
+
+.vo-level-details[open] .vo-level-summary {
+	color: var(--text-accent);
+}
+
+.vo-level-details .setting-item {
+	padding-left: var(--size-4-4);
 }

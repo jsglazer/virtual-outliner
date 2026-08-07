@@ -31,13 +31,13 @@ describe('generateFilteredCopy', () => {
 	it('"both" materializes computed labels into the entry text', () => {
 		const out = generateFilteredCopy(doc, '@', levels(), 'both', new Set());
 		expect(out).toBe(
-			['1.0 Background', 'Some prose about the background.', '1.0.1 Details', 'More prose.'].join('\n'),
+			['1.0 Background', 'Some prose about the background.', '1.1 Details', 'More prose.'].join('\n'),
 		);
 	});
 
 	it('"outline" keeps only labeled entries', () => {
 		const out = generateFilteredCopy(doc, '@', levels(), 'outline', new Set());
-		expect(out).toBe(['1.0 Background', '1.0.1 Details'].join('\n'));
+		expect(out).toBe(['1.0 Background', '1.1 Details'].join('\n'));
 	});
 
 	it('"body" keeps only prose, with no labels', () => {

@@ -57,12 +57,23 @@ function dottedPath(indices: readonly number[]): string {
 	return indices.join('.');
 }
 
-function segmentFor(style: LabelStyle, ownIndex: number, pathIndices: readonly number[]): string {
+function segmentFor(
+	style: LabelStyle,
+	ownIndex: number,
+	pathIndices: readonly number[],
+	hasDeeperSegment: boolean,
+): string {
 	switch (style) {
 		case '1':
 			return String(ownIndex);
 		case '1.0':
-			return `${ownIndex}.0`;
+			// Word-style multilevel numbering: the trailing ".0" is a
+			// PLACEHOLDER for the next level's index, not part of the number.
+			// It only shows when this segment is the last one in the composite
+			// ("3.0"); once a child level contributes its own segment the
+			// placeholder gives up its slot so the label reads "3.1" rather
+			// than "3.0.1".
+			return hasDeeperSegment ? String(ownIndex) : `${ownIndex}.0`;
 		case '1.1':
 			return dottedPath(pathIndices);
 		case 'I':
@@ -98,15 +109,26 @@ export function ancestorChain(node: OutlineNode): OutlineNode[] {
 export function computeLabel(levelFormats: readonly LevelFormat[], node: OutlineNode): string {
 	const chain = ancestorChain(node);
 	const pathIndices = chain.map((n) => n.siblingIndex);
+	const formats = chain.map((n) => levelFormats[n.level - 1] ?? levelFormats[levelFormats.length - 1] ?? null);
 	const segments: string[] = [];
 	for (let i = 0; i < chain.length; i++) {
 		const ancestor = chain[i];
-		if (!ancestor) continue;
-		const format = levelFormats[ancestor.level - 1] ?? levelFormats[levelFormats.length - 1];
-		if (!format) continue;
-		const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1));
+		const format = formats[i];
+		if (!ancestor || !format) continue;
+		// Whether any DEEPER ancestor will actually contribute a segment —
+		// a 'none' level contributes nothing, so it must not make a '1.0'
+		// segment drop its placeholder.
+		let hasDeeperSegment = false;
+		for (let j = i + 1; j < chain.length; j++) {
+			const deeper = formats[j];
+			if (deeper && deeper.style !== 'none') {
+				hasDeeperSegment = true;
+				break;
+			}
+		}
+		const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment);
 		if (segment === '') continue;
-		const prefix = i === 0 || segments.length === 0 ? '' : format.separator;
+		const prefix = segments.length === 0 ? '' : format.separator;
 		segments.push(prefix + segment);
 	}
 	return segments.join('');

@@ -24,6 +24,7 @@
 
 import type { MarkdownPostProcessorContext } from 'obsidian';
 
+import { parseMetaDocument } from '../core/metadata';
 import { computeRenderPlan, isLineHidden } from '../core/render';
 import { entrySegments } from '../core/sigil';
 import type { LevelFormat, ViewState } from '../core/types';
@@ -33,9 +34,7 @@ export interface ReadingHost {
 	levels(path: string): readonly LevelFormat[];
 	viewState(path: string): ViewState;
 	collapsedIds(path: string): ReadonlySet<string>;
-	// Synchronous cached body lookup (the shell keeps this warm from vault
-	// events); null when nothing is cached yet for this path.
-	getBody(path: string): string | null;
+	indentBody(path: string): boolean;
 }
 
 function collectFirstAndLastTextNode(nodes: Iterable<Node>): { first: Text | null; last: Text | null } {
@@ -109,19 +108,43 @@ function materializeLabel(el: HTMLElement, line: string, sigilChar: string, labe
 
 // A section spanning multiple source lines (entries with no blank line
 // between them, which Obsidian renders as ONE paragraph joined by <br>) has
-// one segment of top-level child nodes per source line, `<br>` elements as
-// the separators. Splitting on those lets each line's label/text be
-// materialized independently instead of being skipped wholesale.
-function splitByLineBreak(el: HTMLElement): Node[][] {
-	const segments: Node[][] = [[]];
+// one run of top-level child nodes per source line, `<br>` elements as the
+// separators. `br` is the break that TERMINATES the run (null on the last
+// one) — kept so a run can be turned into a block of its own and its now
+// redundant break removed from the flow.
+interface LineSegment {
+	nodes: Node[];
+	br: HTMLElement | null;
+}
+
+function splitByLineBreak(el: HTMLElement): LineSegment[] {
+	const segments: LineSegment[] = [{ nodes: [], br: null }];
 	for (const child of Array.from(el.childNodes)) {
+		const current = segments[segments.length - 1];
+		if (!current) continue;
 		if (child.nodeName === 'BR') {
-			segments.push([]);
+			current.br = child as HTMLElement;
+			segments.push({ nodes: [], br: null });
 		} else {
-			segments[segments.length - 1]?.push(child);
+			current.nodes.push(child);
 		}
 	}
 	return segments;
+}
+
+// Turns one source line's run of inline nodes into its own block element so
+// it can carry that line's indent/spacing (a `<span>` shared with five other
+// lines inside one `<p>` cannot). The terminating `<br>` is dropped: with the
+// run now `display: block` it would add a second line break.
+function blockWrapSegment(segment: LineSegment, classes: readonly string[], doc: Document): HTMLElement | null {
+	const first = segment.nodes[0];
+	if (!first) return null;
+	const wrapper = doc.createElement('span');
+	wrapper.className = classes.join(' ');
+	first.parentNode?.insertBefore(wrapper, first);
+	for (const node of segment.nodes) wrapper.appendChild(node);
+	segment.br?.remove();
+	return wrapper;
 }
 
 function levelClasses(indentLevel: number | undefined, entryLevel: number | undefined): string[] {
@@ -133,16 +156,29 @@ function levelClasses(indentLevel: number | undefined, entryLevel: number | unde
 
 export function createReadingPostProcessor(host: ReadingHost) {
 	return (el: HTMLElement, ctx: MarkdownPostProcessorContext): void => {
-		const body = host.getBody(ctx.sourcePath);
-		if (body === null) return;
 		const section = ctx.getSectionInfo(el);
 		if (!section) return;
+
+		// `section.text` is the WHOLE current file — the same string
+		// `lineStart`/`lineEnd` index into. Deriving the body from it rather
+		// than from a plugin-side cache is what makes this correct on the
+		// very first render: a note already open when the plugin loads never
+		// fires `file-open`, so a cache lookup would come back empty and the
+		// raw sigils would render through untouched.
+		const { body } = parseMetaDocument(section.text);
 
 		const sigilChar = host.sigilChar(ctx.sourcePath);
 		const levels = host.levels(ctx.sourcePath);
 		const viewState = host.viewState(ctx.sourcePath);
 		const collapsedIds = host.collapsedIds(ctx.sourcePath);
-		const plan = computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds);
+		const plan = computeRenderPlan(
+			body,
+			sigilChar,
+			levels,
+			viewState,
+			collapsedIds,
+			host.indentBody(ctx.sourcePath),
+		);
 
 		const { lineStart, lineEnd } = section;
 
@@ -176,33 +212,50 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			return;
 		}
 
-		// Best-effort indent for a merged multi-line paragraph: apply the
-		// first (visible) line's level to the whole block, since a single
-		// block element can't carry different padding per visual sub-line.
-		for (let line = lineStart; line <= lineEnd; line++) {
-			if (isLineHidden(plan.hiddenLineRanges, line)) continue;
-			const indent = plan.indentLevel.get(line);
-			const entryLvl = plan.entryLevel.get(line);
-			if (indent === undefined && entryLvl === undefined) continue;
-			for (const cls of levelClasses(indent, entryLvl)) el.addClass(cls);
-			break;
+		const doc = el.ownerDocument;
+		const segments = splitByLineBreak(el);
+
+		if (segments.length !== lineEnd - lineStart + 1) {
+			// An Obsidian rendering shape this module doesn't recognize —
+			// leave the DOM alone rather than risk mis-splicing it, and fall
+			// back to indenting the whole block by its first visible line.
+			for (let line = lineStart; line <= lineEnd; line++) {
+				if (isLineHidden(plan.hiddenLineRanges, line)) continue;
+				const indent = plan.indentLevel.get(line);
+				const entryLvl = plan.entryLevel.get(line);
+				if (indent === undefined && entryLvl === undefined) continue;
+				for (const cls of levelClasses(indent, entryLvl)) el.addClass(cls);
+				break;
+			}
+			return;
 		}
 
-		const segments = splitByLineBreak(el);
-		if (segments.length === lineEnd - lineStart + 1) {
-			const lines = body.split('\n');
-			for (let i = 0; i < segments.length; i++) {
-				const line = lineStart + i;
-				if (isLineHidden(plan.hiddenLineRanges, line)) continue;
-				const label = plan.labels.get(line);
-				if (label === undefined) continue;
-				const level = plan.entryLevel.get(line) ?? 1;
-				const lineText = lines[line];
-				if (lineText === undefined) continue;
-				const segment = segments[i];
-				if (!segment) continue;
-				materializeLabelIn(segment, lineText, sigilChar, label, level, el.ownerDocument);
+		const lines = body.split('\n');
+		for (let i = 0; i < segments.length; i++) {
+			const segment = segments[i];
+			if (!segment) continue;
+			const line = lineStart + i;
+			const hidden = isLineHidden(plan.hiddenLineRanges, line);
+
+			if (segment.nodes.length === 0) {
+				// Nothing to wrap (an empty visual line) — only its break is
+				// left to suppress when the line is hidden.
+				if (hidden) segment.br?.remove();
+				continue;
 			}
+
+			const classes = hidden
+				? ['vo-hidden']
+				: ['vo-line', ...levelClasses(plan.indentLevel.get(line), plan.entryLevel.get(line))];
+			const wrapper = blockWrapSegment(segment, classes, doc);
+			if (!wrapper || hidden) continue;
+
+			const label = plan.labels.get(line);
+			if (label === undefined) continue;
+			const lineText = lines[line];
+			if (lineText === undefined) continue;
+			const level = plan.entryLevel.get(line) ?? 1;
+			materializeLabelIn(Array.from(wrapper.childNodes), lineText, sigilChar, label, level, doc);
 		}
 	};
 }

@@ -67,12 +67,12 @@ function toAlpha(n) {
 function dottedPath(indices) {
   return indices.join(".");
 }
-function segmentFor(style, ownIndex, pathIndices) {
+function segmentFor(style, ownIndex, pathIndices, hasDeeperSegment) {
   switch (style) {
     case "1":
       return String(ownIndex);
     case "1.0":
-      return `${ownIndex}.0`;
+      return hasDeeperSegment ? String(ownIndex) : `${ownIndex}.0`;
     case "1.1":
       return dottedPath(pathIndices);
     case "I":
@@ -99,18 +99,28 @@ function ancestorChain(node) {
   return chain;
 }
 function computeLabel(levelFormats, node) {
-  var _a;
   const chain = ancestorChain(node);
   const pathIndices = chain.map((n) => n.siblingIndex);
+  const formats = chain.map((n) => {
+    var _a, _b;
+    return (_b = (_a = levelFormats[n.level - 1]) != null ? _a : levelFormats[levelFormats.length - 1]) != null ? _b : null;
+  });
   const segments = [];
   for (let i = 0; i < chain.length; i++) {
     const ancestor = chain[i];
-    if (!ancestor) continue;
-    const format = (_a = levelFormats[ancestor.level - 1]) != null ? _a : levelFormats[levelFormats.length - 1];
-    if (!format) continue;
-    const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1));
+    const format = formats[i];
+    if (!ancestor || !format) continue;
+    let hasDeeperSegment = false;
+    for (let j = i + 1; j < chain.length; j++) {
+      const deeper = formats[j];
+      if (deeper && deeper.style !== "none") {
+        hasDeeperSegment = true;
+        break;
+      }
+    }
+    const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment);
     if (segment === "") continue;
-    const prefix = i === 0 || segments.length === 0 ? "" : format.separator;
+    const prefix = segments.length === 0 ? "" : format.separator;
     segments.push(prefix + segment);
   }
   return segments.join("");
@@ -443,7 +453,7 @@ function isLineHidden(hidden, line) {
   }
   return false;
 }
-function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds) {
+function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, indentBody = true) {
   const parsed = parseOutline(body, sigilChar);
   const collapseRanges = [];
   for (const node of parsed.flat) {
@@ -480,10 +490,12 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds) {
     if (showLabels) labels.set(node.entryLine, computeLabel(levels, node));
     indentLevel.set(node.entryLine, node.level);
   }
-  for (const node of parsed.flat) {
-    for (let line = node.ownBodyStart; line < node.ownBodyEnd; line++) {
-      if (isLineHidden(hiddenLineRanges, line)) continue;
-      indentLevel.set(line, node.level);
+  if (indentBody) {
+    for (const node of parsed.flat) {
+      for (let line = node.ownBodyStart; line < node.ownBodyEnd; line++) {
+        if (isLineHidden(hiddenLineRanges, line)) continue;
+        indentLevel.set(line, node.level);
+      }
     }
   }
   return { parsed, labels, indentLevel, entryLevel: entryLevel2, hiddenLineRanges };
@@ -522,7 +534,11 @@ function defaultLevelFormat(level) {
     fontFamily: "",
     color: "",
     italic: false,
-    indentStep: "1.5em",
+    // Cumulative: a level's own step is added to every step above it, so
+    // level 1's step is the whole outline's base offset (0 = flush left)
+    // and each deeper level's step is how much further right it sits than
+    // its parent.
+    indentStep: level === 1 ? "0" : "1.5em",
     spacing: level === 1 ? "0.75em" : "0.25em",
     labelGap: "0.3em"
   };
@@ -613,7 +629,8 @@ function levelCssVars(levels) {
     vars[`--vo-l${n}-style`] = level.italic ? "italic" : "normal";
     vars[`--vo-l${n}-spacing`] = level.spacing !== "" ? cssValue(level.spacing) : "0px";
     vars[`--vo-l${n}-gap`] = level.labelGap !== "" ? cssValue(level.labelGap) : "0px";
-    cumulativeIndent = cumulativeIndent === "" ? cssValue(level.indentStep) : `calc(${cumulativeIndent} + ${cssValue(level.indentStep)})`;
+    const step = level.indentStep !== "" ? cssValue(level.indentStep) : "0px";
+    cumulativeIndent = cumulativeIndent === "" ? step : `calc(${cumulativeIndent} + ${step})`;
     vars[`--vo-l${n}-indent`] = cumulativeIndent !== "" ? cumulativeIndent : "0px";
   }
   return vars;
@@ -963,16 +980,29 @@ function materializeLabel(el, line, sigilChar, label, level) {
   materializeLabelIn(el.childNodes, line, sigilChar, label, level, el.ownerDocument);
 }
 function splitByLineBreak(el) {
-  var _a;
-  const segments = [[]];
+  const segments = [{ nodes: [], br: null }];
   for (const child of Array.from(el.childNodes)) {
+    const current = segments[segments.length - 1];
+    if (!current) continue;
     if (child.nodeName === "BR") {
-      segments.push([]);
+      current.br = child;
+      segments.push({ nodes: [], br: null });
     } else {
-      (_a = segments[segments.length - 1]) == null ? void 0 : _a.push(child);
+      current.nodes.push(child);
     }
   }
   return segments;
+}
+function blockWrapSegment(segment, classes, doc) {
+  var _a, _b;
+  const first = segment.nodes[0];
+  if (!first) return null;
+  const wrapper = doc.createElement("span");
+  wrapper.className = classes.join(" ");
+  (_a = first.parentNode) == null ? void 0 : _a.insertBefore(wrapper, first);
+  for (const node of segment.nodes) wrapper.appendChild(node);
+  (_b = segment.br) == null ? void 0 : _b.remove();
+  return wrapper;
 }
 function levelClasses(indentLevel, entryLevel2) {
   const classes = [];
@@ -982,16 +1012,22 @@ function levelClasses(indentLevel, entryLevel2) {
 }
 function createReadingPostProcessor(host) {
   return (el, ctx) => {
-    var _a, _b;
-    const body = host.getBody(ctx.sourcePath);
-    if (body === null) return;
+    var _a, _b, _c;
     const section = ctx.getSectionInfo(el);
     if (!section) return;
+    const { body } = parseMetaDocument(section.text);
     const sigilChar = host.sigilChar(ctx.sourcePath);
     const levels = host.levels(ctx.sourcePath);
     const viewState = host.viewState(ctx.sourcePath);
     const collapsedIds = host.collapsedIds(ctx.sourcePath);
-    const plan = computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds);
+    const plan = computeRenderPlan(
+      body,
+      sigilChar,
+      levels,
+      viewState,
+      collapsedIds,
+      host.indentBody(ctx.sourcePath)
+    );
     const { lineStart, lineEnd } = section;
     if (lineStart === lineEnd) {
       if (isLineHidden(plan.hiddenLineRanges, lineStart)) {
@@ -1004,8 +1040,8 @@ function createReadingPostProcessor(host) {
       const label = plan.labels.get(lineStart);
       if (label === void 0) return;
       const level = (_a = plan.entryLevel.get(lineStart)) != null ? _a : 1;
-      const lines = body.split("\n");
-      const lineText = lines[lineStart];
+      const lines2 = body.split("\n");
+      const lineText = lines2[lineStart];
       if (lineText === void 0) return;
       materializeLabel(el, lineText, sigilChar, label, level);
       return;
@@ -1021,29 +1057,38 @@ function createReadingPostProcessor(host) {
       el.addClass("vo-hidden");
       return;
     }
-    for (let line = lineStart; line <= lineEnd; line++) {
-      if (isLineHidden(plan.hiddenLineRanges, line)) continue;
-      const indent = plan.indentLevel.get(line);
-      const entryLvl = plan.entryLevel.get(line);
-      if (indent === void 0 && entryLvl === void 0) continue;
-      for (const cls of levelClasses(indent, entryLvl)) el.addClass(cls);
-      break;
-    }
+    const doc = el.ownerDocument;
     const segments = splitByLineBreak(el);
-    if (segments.length === lineEnd - lineStart + 1) {
-      const lines = body.split("\n");
-      for (let i = 0; i < segments.length; i++) {
-        const line = lineStart + i;
+    if (segments.length !== lineEnd - lineStart + 1) {
+      for (let line = lineStart; line <= lineEnd; line++) {
         if (isLineHidden(plan.hiddenLineRanges, line)) continue;
-        const label = plan.labels.get(line);
-        if (label === void 0) continue;
-        const level = (_b = plan.entryLevel.get(line)) != null ? _b : 1;
-        const lineText = lines[line];
-        if (lineText === void 0) continue;
-        const segment = segments[i];
-        if (!segment) continue;
-        materializeLabelIn(segment, lineText, sigilChar, label, level, el.ownerDocument);
+        const indent = plan.indentLevel.get(line);
+        const entryLvl = plan.entryLevel.get(line);
+        if (indent === void 0 && entryLvl === void 0) continue;
+        for (const cls of levelClasses(indent, entryLvl)) el.addClass(cls);
+        break;
       }
+      return;
+    }
+    const lines = body.split("\n");
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+      if (!segment) continue;
+      const line = lineStart + i;
+      const hidden = isLineHidden(plan.hiddenLineRanges, line);
+      if (segment.nodes.length === 0) {
+        if (hidden) (_b = segment.br) == null ? void 0 : _b.remove();
+        continue;
+      }
+      const classes = hidden ? ["vo-hidden"] : ["vo-line", ...levelClasses(plan.indentLevel.get(line), plan.entryLevel.get(line))];
+      const wrapper = blockWrapSegment(segment, classes, doc);
+      if (!wrapper || hidden) continue;
+      const label = plan.labels.get(line);
+      if (label === void 0) continue;
+      const lineText = lines[line];
+      if (lineText === void 0) continue;
+      const level = (_c = plan.entryLevel.get(line)) != null ? _c : 1;
+      materializeLabelIn(Array.from(wrapper.childNodes), lineText, sigilChar, label, level, doc);
     }
   };
 }
@@ -1108,7 +1153,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
     new import_obsidian2.Setting(containerEl).setName("Level format").setHeading();
     containerEl.createEl("p", {
       cls: "vo-fixture-note",
-      text: `Composite labels join one segment per level (e.g. "I.B.3") \u2014 each level below controls its own segment's style, separator, and typography.`
+      text: `Composite labels join one segment per level (e.g. "I.B.3") \u2014 each level below controls its own segment's style, separator, and typography. Click a level to open it.`
     });
     for (let level = 1; level <= MAX_LEVEL; level++) {
       this.renderLevelSetting(containerEl, level);
@@ -1120,70 +1165,106 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
     });
     this.renderMetaFields(containerEl);
   }
+  // One collapsible block per level, one NAMED row per property. The
+  // previous layout packed all nine controls into a single unlabelled row,
+  // where an unlabelled toggle sat between a colour swatch and a text box
+  // with nothing to say it meant "italic" — easy to flip by accident and
+  // impossible to identify afterwards.
   renderLevelSetting(containerEl, level) {
     const format = this.plugin.settings.levels[level - 1];
     if (!format) return;
-    const setting = new import_obsidian2.Setting(containerEl).setName(`Level ${level}`);
-    setting.addDropdown((dropdown) => {
+    const details = containerEl.createEl("details", { cls: "vo-level-details" });
+    details.createEl("summary", { cls: "vo-level-summary", text: `Level ${level}` });
+    new import_obsidian2.Setting(details).setName("Number style").setDesc("How this level's own segment of the composite label is numbered.").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(LABEL_STYLE_OPTIONS)) dropdown.addOption(value, label);
       dropdown.setValue(format.style).onChange(async (value) => {
         format.style = value;
         await this.plugin.saveSettings();
       });
     });
-    setting.addText((text) => {
-      text.setPlaceholder("Separator").setValue(format.separator);
-      text.onChange(async (value) => {
+    this.addTextRow(
+      details,
+      "Separator",
+      `Placed before this level's segment when a level above it already contributed one (e.g. "." gives 2.1).`,
+      format.separator,
+      async (value) => {
         format.separator = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    setting.addText((text) => {
-      text.setPlaceholder("Font size").setValue(format.fontSize);
-      text.onChange(async (value) => {
-        format.fontSize = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    setting.addText((text) => {
-      text.setPlaceholder("Weight").setValue(format.fontWeight);
-      text.onChange(async (value) => {
-        format.fontWeight = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    setting.addColorPicker((picker) => {
-      if (format.color !== "") picker.setValue(format.color);
-      picker.onChange(async (value) => {
-        format.color = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    setting.addToggle((toggle) => {
-      toggle.setTooltip("Italic").setValue(format.italic);
+      }
+    );
+    new import_obsidian2.Setting(details).setName("Italic").setDesc("Renders this level's number and entry text in italics.").addToggle((toggle) => {
+      toggle.setValue(format.italic);
       toggle.onChange(async (value) => {
         format.italic = value;
         await this.plugin.saveSettings();
       });
     });
-    setting.addText((text) => {
-      text.setPlaceholder("Indent step").setValue(format.indentStep);
-      text.onChange(async (value) => {
+    new import_obsidian2.Setting(details).setName("Colour").setDesc("Colour of this level's number and entry text.").addColorPicker((picker) => {
+      if (format.color !== "") picker.setValue(format.color);
+      picker.onChange(async (value) => {
+        format.color = value;
+        await this.plugin.saveSettings();
+      });
+    }).addExtraButton((button) => {
+      button.setIcon("rotate-ccw").setTooltip("Use the theme colour").onClick(async () => {
+        format.color = "";
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    });
+    this.addTextRow(
+      details,
+      "Font size",
+      "Any CSS length (e.g. 1.2em). Blank inherits the note's font size.",
+      format.fontSize,
+      async (value) => {
+        format.fontSize = value;
+      }
+    );
+    this.addTextRow(
+      details,
+      "Font weight",
+      "A CSS weight (e.g. 600, bold). Blank inherits.",
+      format.fontWeight,
+      async (value) => {
+        format.fontWeight = value;
+      }
+    );
+    this.addTextRow(details, "Font family", "A CSS font family. Blank inherits.", format.fontFamily, async (value) => {
+      format.fontFamily = value;
+    });
+    this.addTextRow(
+      details,
+      "Indent step",
+      level === 1 ? "A CSS length. Level 1 sets the whole outline's base offset from the left margin \u2014 0 keeps it flush." : "A CSS length: how much further right this level sits than the level above it.",
+      format.indentStep,
+      async (value) => {
         format.indentStep = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    setting.addText((text) => {
-      text.setPlaceholder("Label gap").setValue(format.labelGap);
-      text.onChange(async (value) => {
+      }
+    );
+    this.addTextRow(
+      details,
+      "Space above",
+      "A CSS length added above each entry at this level.",
+      format.spacing,
+      async (value) => {
+        format.spacing = value;
+      }
+    );
+    this.addTextRow(
+      details,
+      "Label gap",
+      "A CSS length between the number and the entry text.",
+      format.labelGap,
+      async (value) => {
         format.labelGap = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    setting.addText((text) => {
-      text.setPlaceholder("Font family").setValue(format.fontFamily);
-      text.onChange(async (value) => {
-        format.fontFamily = value;
+      }
+    );
+  }
+  addTextRow(containerEl, name, desc, value, apply) {
+    new import_obsidian2.Setting(containerEl).setName(name).setDesc(desc).addText((text) => {
+      text.setValue(value);
+      text.onChange(async (next) => {
+        await apply(next);
         await this.plugin.saveSettings();
       });
     });
@@ -1372,7 +1453,6 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     this.editorTimers = /* @__PURE__ */ new Map();
     this.diskTimers = /* @__PURE__ */ new Map();
     this.changeListeners = /* @__PURE__ */ new Set();
-    this.initialRendered = /* @__PURE__ */ new Set();
     this.cssVarStyleEl = null;
   }
   async onload() {
@@ -1406,10 +1486,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
         levels: () => this.settings.levels,
         viewState: (path) => this.viewStateFor(path),
         collapsedIds: (path) => this.collapsedIdsFor(path),
-        getBody: (path) => {
-          var _a, _b;
-          return (_b = (_a = this.states.get(path)) == null ? void 0 : _a.body) != null ? _b : null;
-        }
+        indentBody: () => this.settings.indentBody
       })
     );
     this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new OutlineSidebarView(leaf, this.sidebarHost()));
@@ -1488,6 +1565,10 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
         this.notifyChange();
       })
     );
+    this.app.workspace.onLayoutReady(() => {
+      const file = this.app.workspace.getActiveFile();
+      if (file && file.extension === "md") void this.ensureFileState(file.path);
+    });
   }
   onunload() {
     var _a;
@@ -1502,7 +1583,22 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     await this.persist();
     this.applyLevelCssVars();
     for (const view of this.editors) this.decorate(view);
+    this.rerenderPreviews(null);
     this.notifyChange();
+  }
+  // Reading view is a one-shot post-processor render, so anything that
+  // changes what it should draw (settings, view state, a collapse) has to
+  // ask Obsidian to run it again — the editor's decoration path has no
+  // equivalent effect on it. `path === null` means every open preview.
+  rerenderPreviews(path) {
+    var _a;
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (!(view instanceof import_obsidian4.MarkdownView)) continue;
+      if (view.getMode() !== "preview") continue;
+      if (path !== null && ((_a = view.file) == null ? void 0 : _a.path) !== path) continue;
+      view.previewMode.rerender(true);
+    }
   }
   async persist() {
     const fileState = {};
@@ -1645,22 +1741,7 @@ ${body}
     const file = this.app.vault.getFileByPath(path);
     if (!file || file.extension !== "md") return null;
     const doc = await this.app.vault.cachedRead(file);
-    const state = this.setStateFromDoc(path, doc);
-    this.scheduleInitialPreviewRender(path);
-    return state;
-  }
-  scheduleInitialPreviewRender(path) {
-    if (this.initialRendered.has(path)) return;
-    this.initialRendered.add(path);
-    window.setTimeout(() => {
-      var _a;
-      for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-        const view = leaf.view;
-        if (view instanceof import_obsidian4.MarkdownView && view.getMode() === "preview" && ((_a = view.file) == null ? void 0 : _a.path) === path) {
-          view.previewMode.rerender(true);
-        }
-      }
-    }, 0);
+    return this.setStateFromDoc(path, doc);
   }
   setStateFromDoc(path, doc) {
     const { body } = parseMetaDocument(doc);
@@ -1727,7 +1808,8 @@ ${body}
       this.settings.sigil,
       this.settings.levels,
       state.viewState,
-      state.collapsedIds
+      state.collapsedIds,
+      this.settings.indentBody
     );
     const decorations = buildOutlineDecorations(view, plan, this.settings.sigil);
     view.dispatch({ effects: setOutlineDecorations.of(decorations) });
@@ -1742,6 +1824,7 @@ ${body}
     for (const view of this.editors) {
       if (editorViewPath(view) === path) this.decorate(view);
     }
+    this.rerenderPreviews(path);
   }
   // ── Commands ──────────────────────────────────────────────────────────────
   async generateFilteredCopyFor(file) {
