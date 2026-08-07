@@ -94,7 +94,14 @@ export function hiddenBlockRanges(state: EditorState): { from: number; to: numbe
 export function buildHiddenContentGuard(onBlocked: () => void): Extension {
 	return EditorState.transactionFilter.of((tr): TransactionSpec | readonly TransactionSpec[] => {
 		if (!tr.docChanged || !tr.isUserEvent('delete')) return tr;
-		const blocks = hiddenBlockRanges(tr.startState);
+		// Only ranges holding actual text are worth protecting. A hidden run of
+		// nothing but blank lines has nothing to lose, and refusing to delete it
+		// strands the user: in Outline-only view those blank lines are invisible,
+		// so the guard would make them unremovable from the one view where the
+		// user can see they are in the way.
+		const blocks = hiddenBlockRanges(tr.startState).filter(
+			(b) => tr.startState.doc.sliceString(b.from, b.to).trim() !== '',
+		);
 		if (blocks.length === 0) return tr;
 
 		let destroys = false;

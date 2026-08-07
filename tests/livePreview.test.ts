@@ -193,6 +193,35 @@ describe('hidden-content delete guard (Outline-only view)', () => {
 		expect(blocked).toBe(0);
 	});
 
+	it('allows deleting a hidden run that is only blank lines', () => {
+		blocked = 0;
+		// Two blank lines between entries: hidden in Outline-only view, and
+		// invisible everywhere the user might otherwise remove them.
+		const doc = ['@ Thesis', '', '', '@@ Detail'].join('\n');
+		let state = EditorState.create({
+			doc,
+			extensions: [
+				outlineDecoField,
+				buildHiddenContentGuard(() => {
+					blocked++;
+				}),
+			],
+		});
+		state = decorate(state);
+
+		const block = blockRanges(state)[0];
+		expect(block).toBeDefined();
+		expect(state.doc.sliceString(block!.from, block!.to).trim()).toBe('');
+
+		const next = state.update({
+			changes: { from: block!.from, to: block!.to, insert: '' },
+			userEvent: 'delete.backward',
+		}).state;
+
+		expect(next.doc.toString()).toBe('@ Thesis\n@@ Detail');
+		expect(blocked).toBe(0);
+	});
+
 	it('leaves undo alone', () => {
 		const state = guarded();
 		const block = blockRanges(state)[0];

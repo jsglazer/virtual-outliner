@@ -697,7 +697,9 @@ function hiddenBlockRanges(state) {
 function buildHiddenContentGuard(onBlocked) {
   return import_state.EditorState.transactionFilter.of((tr) => {
     if (!tr.docChanged || !tr.isUserEvent("delete")) return tr;
-    const blocks = hiddenBlockRanges(tr.startState);
+    const blocks = hiddenBlockRanges(tr.startState).filter(
+      (b) => tr.startState.doc.sliceString(b.from, b.to).trim() !== ""
+    );
     if (blocks.length === 0) return tr;
     let destroys = false;
     tr.changes.iterChanges((fromA, toA) => {
