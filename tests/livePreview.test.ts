@@ -60,19 +60,41 @@ function startState(): EditorState {
 }
 
 describe('hidden-body block replacements (Outline-only view)', () => {
-	it('starts each hidden run at the end of the entry line above it', () => {
+	it('covers whole hidden lines through their trailing break', () => {
 		const state = startState();
-		const entryLineEnd = state.doc.line(1).to; // end of "@ Thesis"
-
 		const ranges = blockRanges(state);
 		expect(ranges.length).toBeGreaterThan(0);
-		expect(ranges[0]?.from).toBe(entryLineEnd);
+
+		// Starts at the first hidden line's own start, NOT at the end of the
+		// entry line above it, and runs to the start of the next visible line.
+		// Leaving the last hidden line's break behind made CM6 render an empty
+		// .cm-line in its place — a blank line after every hidden run.
+		expect(ranges[0]?.from).toBe(state.doc.line(2).from); // "body under thesis"
+		expect(ranges[0]?.to).toBe(state.doc.line(3).from); // "@@ Detail"
+	});
+
+	it('leaves the following entry line its own line decoration', () => {
+		// Regression guard for the reason the old geometry existed: ending a
+		// block replacement at the next line's start used to swallow that line's
+		// Decoration.line, stripping its indent/colour classes.
+		const state = startState();
+		const entryStart = state.doc.line(3).from; // "@@ Detail"
+
+		let found = false;
+		const iter = state.field(outlineDecoField).iter();
+		for (; iter.value !== null; iter.next()) {
+			const cls: unknown = (iter.value.spec as { class?: unknown } | undefined)?.class;
+			if (iter.from === entryStart && typeof cls === 'string' && cls.includes('vo-entry-l')) found = true;
+		}
+		expect(found).toBe(true);
 	});
 
 	it('does not swallow a character typed at the end of an entry line', () => {
 		let state = startState();
-		const cursor = state.doc.line(1).to; // end of "@ Thesis" == a block's `from`
-		expect(blockRanges(state).some((r) => r.from === cursor)).toBe(true);
+		const cursor = state.doc.line(1).to; // end of "@ Thesis"
+		// The cursor sits directly against a hidden block: only the line break
+		// separates it from the block's start.
+		expect(blockRanges(state).some((r) => r.from === cursor + 1)).toBe(true);
 
 		state = state.update({
 			changes: { from: cursor, to: cursor, insert: 'X' },

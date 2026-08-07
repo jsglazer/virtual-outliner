@@ -779,10 +779,8 @@ function buildOutlineDecorations(view, plan, sigilChar) {
   for (const range of plan.hiddenLineRanges) {
     if (range.from >= lineCount || range.to > lineCount) continue;
     const lastLineNo = Math.min(range.to, lineCount);
-    const lastLine = doc.line(lastLineNo);
-    const atDocStart = range.from === 0;
-    const from = atDocStart ? doc.line(1).from : doc.line(range.from).to;
-    const to = lastLine.to;
+    const from = doc.line(range.from + 1).from;
+    const to = lastLineNo < lineCount ? doc.line(lastLineNo + 1).from : doc.length;
     if (from >= to) continue;
     items.push({
       from,

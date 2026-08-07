@@ -233,27 +233,35 @@ export function buildOutlineDecorations(
 		// `range` is a LINE range [from, to); translate to a CHARACTER range
 		// spanning whole lines, which is what a block replacement requires.
 		//
-		// The line break taken is the one BEFORE the block, not after it.
-		// Ending at the next line's start puts that line's own
-		// `Decoration.line` inside the replaced range, and CM6 drops it — so
-		// the first body line under any hidden entry silently lost its indent
-		// class while its siblings kept theirs, which read as indentation
-		// working only intermittently. A block starting at line 0 has no
-		// preceding break to take, so it USED to fall back to the trailing one
-		// instead — reintroducing the exact bug above for whatever line
-		// follows a hidden leading preamble (Update003: the first outline
-		// entry in a note with body text above it lost its colour/weight/gap
-		// entirely in Outline-only view, because that entry's own line sat
-		// right at the swallowed boundary). Always ending at `lastLine.to`
-		// avoids the collision in every case, accepting a blank leading line
-		// in the doc-start case as the lesser problem — nothing currently
-		// hides a leading preamble AND needs it visually gapless.
+		// Cover the hidden lines from the START of the first one THROUGH the
+		// line break that ends the last one, i.e. up to the start of the next
+		// visible line (or to end-of-document when the run reaches EOF). Taking
+		// the TRAILING break is what makes the run vanish completely.
+		//
+		// This previously took the LEADING break instead (from = end of the line
+		// above), which left the last hidden line's own break behind. CM6 then
+		// rendered an empty `.cm-line` for that leftover — a full line of height
+		// after every hidden run, which is precisely the "blank lines in
+		// Outline-only view" the user kept seeing. Confirmed from the live DOM:
+		// each zero-height `.vo-hidden-block` was followed by an empty
+		// `<div class="cm-line">` measuring 28px.
+		//
+		// Ending at the next line's start was originally avoided because it put
+		// that line's own `Decoration.line` inside the replaced range, so CM6
+		// dropped it and the following line lost its indent/colour classes
+		// (Update003). That hazard is gone now that the replacement is
+		// `inclusiveEnd: false` (below): its endSide is -599999999, which sorts
+		// BEFORE a `Decoration.line`'s -200000000 at the same offset, so the
+		// line decoration is no longer contained. It was only swallowed under
+		// the DEFAULT inclusive block end, whose +200000001 sorted after it.
+		//
+		// Starting at the first hidden line's own start also removes the special
+		// case for a run at line 0, which had no preceding break to take and so
+		// left a blank leading line by design.
 		if (range.from >= lineCount || range.to > lineCount) continue;
 		const lastLineNo = Math.min(range.to, lineCount);
-		const lastLine = doc.line(lastLineNo);
-		const atDocStart = range.from === 0;
-		const from = atDocStart ? doc.line(1).from : doc.line(range.from).to;
-		const to = lastLine.to;
+		const from = doc.line(range.from + 1).from;
+		const to = lastLineNo < lineCount ? doc.line(lastLineNo + 1).from : doc.length;
 		if (from >= to) continue;
 		// `inclusiveStart`/`inclusiveEnd` MUST be false. CM6's Decoration.replace
 		// derives them from `getInclusive(spec, block)`, which falls back to the
@@ -261,8 +269,8 @@ export function buildOutlineDecorations(
 		// BOTH boundaries, and text inserted exactly at a boundary is absorbed
 		// into the replaced (hidden) range.
 		//
-		// That is fatal here, because `from` above is the END of the entry line
-		// directly above the hidden run — exactly where the cursor sits while
+		// That was fatal when `from` was the END of the entry line directly above
+		// the hidden run — exactly where the cursor sits while
 		// editing that entry's text. Typing there used to: hide the typed
 		// character, map the cursor strictly INSIDE an atomic hidden range (which
 		// has no rendered DOM position), and so leave the browser to drop the
