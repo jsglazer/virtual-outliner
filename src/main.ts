@@ -68,6 +68,17 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private cssVarStyleEl: HTMLStyleElement | null = null;
 
 	async onload(): Promise<void> {
+		console.debug('[virtual-outliner] onload start');
+		try {
+			await this.onloadInner();
+			console.debug('[virtual-outliner] onload complete');
+		} catch (err) {
+			console.error('[virtual-outliner] onload THREW', err);
+			throw err;
+		}
+	}
+
+	private async onloadInner(): Promise<void> {
 		const raw: unknown = await this.loadData();
 		this.settings = normalizeSettings(raw);
 		this.loadFileState(raw);
@@ -78,6 +89,12 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		);
 
 		this.applyLevelCssVars();
+		console.debug(
+			'[virtual-outliner] after applyLevelCssVars: el connected =',
+			this.cssVarStyleEl?.isConnected,
+			'in head =',
+			activeDocument.head.contains(this.cssVarStyleEl),
+		);
 
 		this.registerEditorExtension([
 			buildOutlineKeymap({ sigilChar: () => this.settings.sigil }),
@@ -219,15 +236,21 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		// layout is already settled — the common case for a hot re-enable —
 		// so this reaches both the cold-start and the re-enable path.
 		this.app.workspace.onLayoutReady(() => {
+			console.debug('[virtual-outliner] onLayoutReady fired');
 			const file = this.app.workspace.getActiveFile();
 			if (file && file.extension === 'md') void this.ensureFileState(file.path);
 			this.applyLevelCssVars();
+			console.debug(
+				'[virtual-outliner] onLayoutReady: after applyLevelCssVars, in head =',
+				activeDocument.head.contains(this.cssVarStyleEl),
+			);
 			for (const view of this.editors) this.decorate(view);
 			this.rerenderPreviews(null);
 		});
 	}
 
 	onunload(): void {
+		console.debug('[virtual-outliner] onunload, removing style el =', this.cssVarStyleEl);
 		for (const timer of this.editorTimers.values()) window.clearTimeout(timer);
 		this.editorTimers.clear();
 		for (const timer of this.diskTimers.values()) window.clearTimeout(timer);
@@ -298,15 +321,19 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		// (covers a slow/pending unload), or drop the orphan and start fresh
 		// if it somehow got detached.
 		const existing = activeDocument.getElementById('virtual-outliner-level-vars');
+		console.debug('[virtual-outliner] applyLevelCssVars: existing =', existing, 'activeDocument =', activeDocument);
 		if (existing instanceof HTMLStyleElement && existing.isConnected) {
 			this.cssVarStyleEl = existing;
+			console.debug('[virtual-outliner] applyLevelCssVars: reusing existing element');
 		} else {
 			existing?.remove();
 			this.cssVarStyleEl = activeDocument.createElement('style');
 			this.cssVarStyleEl.id = 'virtual-outliner-level-vars';
 			activeDocument.head.appendChild(this.cssVarStyleEl);
+			console.debug('[virtual-outliner] applyLevelCssVars: created new element, appended =', this.cssVarStyleEl.isConnected);
 		}
 		this.cssVarStyleEl.textContent = `:root {\n${body}\n}`;
+		console.debug('[virtual-outliner] applyLevelCssVars: final isConnected =', this.cssVarStyleEl.isConnected);
 	}
 
 	// ── Per-file view/collapse state ─────────────────────────────────────────

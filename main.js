@@ -1545,6 +1545,17 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     this.cssVarStyleEl = null;
   }
   async onload() {
+    console.debug("[virtual-outliner] onload start");
+    try {
+      await this.onloadInner();
+      console.debug("[virtual-outliner] onload complete");
+    } catch (err) {
+      console.error("[virtual-outliner] onload THREW", err);
+      throw err;
+    }
+  }
+  async onloadInner() {
+    var _a;
     const raw = await this.loadData();
     this.settings = normalizeSettings(raw);
     this.loadFileState(raw);
@@ -1554,6 +1565,12 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       () => this.settings.levels
     );
     this.applyLevelCssVars();
+    console.debug(
+      "[virtual-outliner] after applyLevelCssVars: el connected =",
+      (_a = this.cssVarStyleEl) == null ? void 0 : _a.isConnected,
+      "in head =",
+      activeDocument.head.contains(this.cssVarStyleEl)
+    );
     this.registerEditorExtension([
       buildOutlineKeymap({ sigilChar: () => this.settings.sigil }),
       buildEditorExtension({
@@ -1626,8 +1643,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       id: "prune-orphaned-metadata",
       name: "Prune orphaned outline metadata",
       editorCallback: (_editor, ctx) => {
-        var _a;
-        const path = (_a = ctx.file) == null ? void 0 : _a.path;
+        var _a2;
+        const path = (_a2 = ctx.file) == null ? void 0 : _a2.path;
         const view = path !== void 0 ? this.editorFor(path) : null;
         if (!view || path === void 0) return;
         this.pruneOrphanedIn(view, path);
@@ -1664,15 +1681,21 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       })
     );
     this.app.workspace.onLayoutReady(() => {
+      console.debug("[virtual-outliner] onLayoutReady fired");
       const file = this.app.workspace.getActiveFile();
       if (file && file.extension === "md") void this.ensureFileState(file.path);
       this.applyLevelCssVars();
+      console.debug(
+        "[virtual-outliner] onLayoutReady: after applyLevelCssVars, in head =",
+        activeDocument.head.contains(this.cssVarStyleEl)
+      );
       for (const view of this.editors) this.decorate(view);
       this.rerenderPreviews(null);
     });
   }
   onunload() {
     var _a;
+    console.debug("[virtual-outliner] onunload, removing style el =", this.cssVarStyleEl);
     for (const timer of this.editorTimers.values()) window.clearTimeout(timer);
     this.editorTimers.clear();
     for (const timer of this.diskTimers.values()) window.clearTimeout(timer);
@@ -1727,17 +1750,21 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     const vars = levelCssVars(this.settings.levels);
     const body = Object.entries(vars).map(([key, value]) => `	${key}: ${value};`).join("\n");
     const existing = activeDocument.getElementById("virtual-outliner-level-vars");
+    console.debug("[virtual-outliner] applyLevelCssVars: existing =", existing, "activeDocument =", activeDocument);
     if (existing instanceof HTMLStyleElement && existing.isConnected) {
       this.cssVarStyleEl = existing;
+      console.debug("[virtual-outliner] applyLevelCssVars: reusing existing element");
     } else {
       existing == null ? void 0 : existing.remove();
       this.cssVarStyleEl = activeDocument.createElement("style");
       this.cssVarStyleEl.id = "virtual-outliner-level-vars";
       activeDocument.head.appendChild(this.cssVarStyleEl);
+      console.debug("[virtual-outliner] applyLevelCssVars: created new element, appended =", this.cssVarStyleEl.isConnected);
     }
     this.cssVarStyleEl.textContent = `:root {
 ${body}
 }`;
+    console.debug("[virtual-outliner] applyLevelCssVars: final isConnected =", this.cssVarStyleEl.isConnected);
   }
   // ── Per-file view/collapse state ─────────────────────────────────────────
   viewStateFor(path) {
