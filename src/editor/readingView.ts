@@ -75,6 +75,31 @@ function wrapEntryText(first: Text, last: Text | null, level: number, doc: Docum
 	}
 }
 
+// Obsidian emits a multi-line paragraph as `…<br>\n@ Thesis<br>\n…`, so the
+// text node for every line after the first BEGINS WITH THAT NEWLINE. A strict
+// `startsWith(prefix)` test misses on all of them, which is precisely the
+// document shape this plugin exists for — consecutive entry lines. Only
+// whitespace is allowed to precede the sigil run; anything else means this
+// text node isn't the start of the entry and is left alone.
+function stripLinePrefix(node: Text, prefix: string): boolean {
+	const raw = node.nodeValue ?? '';
+	const index = raw.indexOf(prefix);
+	if (index < 0 || raw.slice(0, index).trim() !== '') return false;
+	node.nodeValue = raw.slice(index + prefix.length);
+	return true;
+}
+
+// Trailing-whitespace tolerant for the same reason. A no-op when the id was
+// already stripped by Obsidian itself (which it does for a block id that
+// lands at the end of a block, but not for one mid-paragraph).
+function stripIdSuffix(node: Text, suffix: string): boolean {
+	const raw = node.nodeValue ?? '';
+	const trimmed = raw.trimEnd();
+	if (!trimmed.endsWith(suffix)) return false;
+	node.nodeValue = trimmed.slice(0, -suffix.length);
+	return true;
+}
+
 function materializeLabelIn(
 	nodes: Iterable<Node>,
 	line: string,
@@ -89,17 +114,15 @@ function materializeLabelIn(
 	const idSuffixStr = segs.textEnd < line.length ? line.slice(segs.textEnd) : '';
 
 	const { first, last } = collectFirstAndLastTextNode(nodes);
-	if (idSuffixStr !== '' && last?.nodeValue?.endsWith(idSuffixStr)) {
-		last.nodeValue = last.nodeValue.slice(0, -idSuffixStr.length);
-	}
-	if (first?.nodeValue?.startsWith(prefixStr)) {
-		first.nodeValue = first.nodeValue.slice(prefixStr.length);
-		const labelSpan = doc.createElement('span');
-		labelSpan.className = `vo-label vo-l${level}`;
-		labelSpan.textContent = label;
-		first.parentNode?.insertBefore(labelSpan, first);
-		wrapEntryText(first, last, level, doc);
-	}
+	if (!first) return;
+	if (idSuffixStr !== '' && last) stripIdSuffix(last, idSuffixStr);
+	if (!stripLinePrefix(first, prefixStr)) return;
+
+	const labelSpan = doc.createElement('span');
+	labelSpan.className = `vo-label vo-l${level}`;
+	labelSpan.textContent = label;
+	first.parentNode?.insertBefore(labelSpan, first);
+	wrapEntryText(first, last, level, doc);
 }
 
 function materializeLabel(el: HTMLElement, line: string, sigilChar: string, label: string, level: number): void {
@@ -115,6 +138,23 @@ function materializeLabel(el: HTMLElement, line: string, sigilChar: string, labe
 interface LineSegment {
 	nodes: Node[];
 	br: HTMLElement | null;
+}
+
+// The element a post-processor is handed is Obsidian's per-section wrapper
+// (`div.el-p`, `div.el-h2`, …), one level ABOVE the `<p>` that actually holds
+// the `<br>`-separated lines. Splitting the wrapper finds no breaks at all —
+// just one opaque child — so every multi-line section looked like a shape
+// this module didn't recognize and fell through to the block-level fallback,
+// leaving raw sigils on screen. Descend past any chain of single-element
+// wrappers to the node whose own children are the inline content.
+function inlineHost(el: HTMLElement): HTMLElement {
+	let host = el;
+	for (;;) {
+		const children = Array.from(host.childNodes);
+		const only = children.length === 1 ? children[0] : null;
+		if (!only || !only.instanceOf(HTMLElement)) return host;
+		host = only;
+	}
 }
 
 function splitByLineBreak(el: HTMLElement): LineSegment[] {
@@ -213,7 +253,7 @@ export function createReadingPostProcessor(host: ReadingHost) {
 		}
 
 		const doc = el.ownerDocument;
-		const segments = splitByLineBreak(el);
+		const segments = splitByLineBreak(inlineHost(el));
 
 		if (segments.length !== lineEnd - lineStart + 1) {
 			// An Obsidian rendering shape this module doesn't recognize —

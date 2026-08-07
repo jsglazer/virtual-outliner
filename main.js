@@ -957,27 +957,49 @@ function wrapEntryText(first, last, level, doc) {
     node = next;
   }
 }
+function stripLinePrefix(node, prefix) {
+  var _a;
+  const raw = (_a = node.nodeValue) != null ? _a : "";
+  const index = raw.indexOf(prefix);
+  if (index < 0 || raw.slice(0, index).trim() !== "") return false;
+  node.nodeValue = raw.slice(index + prefix.length);
+  return true;
+}
+function stripIdSuffix(node, suffix) {
+  var _a;
+  const raw = (_a = node.nodeValue) != null ? _a : "";
+  const trimmed = raw.trimEnd();
+  if (!trimmed.endsWith(suffix)) return false;
+  node.nodeValue = trimmed.slice(0, -suffix.length);
+  return true;
+}
 function materializeLabelIn(nodes, line, sigilChar, label, level, doc) {
-  var _a, _b, _c;
+  var _a;
   const segs = entrySegments(line, sigilChar);
   if (!segs) return;
   const prefixStr = line.slice(0, segs.prefixEnd);
   const idSuffixStr = segs.textEnd < line.length ? line.slice(segs.textEnd) : "";
   const { first, last } = collectFirstAndLastTextNode(nodes);
-  if (idSuffixStr !== "" && ((_a = last == null ? void 0 : last.nodeValue) == null ? void 0 : _a.endsWith(idSuffixStr))) {
-    last.nodeValue = last.nodeValue.slice(0, -idSuffixStr.length);
-  }
-  if ((_b = first == null ? void 0 : first.nodeValue) == null ? void 0 : _b.startsWith(prefixStr)) {
-    first.nodeValue = first.nodeValue.slice(prefixStr.length);
-    const labelSpan = doc.createElement("span");
-    labelSpan.className = `vo-label vo-l${level}`;
-    labelSpan.textContent = label;
-    (_c = first.parentNode) == null ? void 0 : _c.insertBefore(labelSpan, first);
-    wrapEntryText(first, last, level, doc);
-  }
+  if (!first) return;
+  if (idSuffixStr !== "" && last) stripIdSuffix(last, idSuffixStr);
+  if (!stripLinePrefix(first, prefixStr)) return;
+  const labelSpan = doc.createElement("span");
+  labelSpan.className = `vo-label vo-l${level}`;
+  labelSpan.textContent = label;
+  (_a = first.parentNode) == null ? void 0 : _a.insertBefore(labelSpan, first);
+  wrapEntryText(first, last, level, doc);
 }
 function materializeLabel(el, line, sigilChar, label, level) {
   materializeLabelIn(el.childNodes, line, sigilChar, label, level, el.ownerDocument);
+}
+function inlineHost(el) {
+  let host = el;
+  for (; ; ) {
+    const children = Array.from(host.childNodes);
+    const only = children.length === 1 ? children[0] : null;
+    if (!only || !only.instanceOf(HTMLElement)) return host;
+    host = only;
+  }
 }
 function splitByLineBreak(el) {
   const segments = [{ nodes: [], br: null }];
@@ -1058,7 +1080,7 @@ function createReadingPostProcessor(host) {
       return;
     }
     const doc = el.ownerDocument;
-    const segments = splitByLineBreak(el);
+    const segments = splitByLineBreak(inlineHost(el));
     if (segments.length !== lineEnd - lineStart + 1) {
       for (let line = lineStart; line <= lineEnd; line++) {
         if (isLineHidden(plan.hiddenLineRanges, line)) continue;
