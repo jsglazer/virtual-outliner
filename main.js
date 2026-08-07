@@ -1666,6 +1666,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     this.app.workspace.onLayoutReady(() => {
       const file = this.app.workspace.getActiveFile();
       if (file && file.extension === "md") void this.ensureFileState(file.path);
+      this.applyLevelCssVars();
       for (const view of this.editors) this.decorate(view);
       this.rerenderPreviews(null);
     });
@@ -1725,7 +1726,11 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
   applyLevelCssVars() {
     const vars = levelCssVars(this.settings.levels);
     const body = Object.entries(vars).map(([key, value]) => `	${key}: ${value};`).join("\n");
-    if (!this.cssVarStyleEl) {
+    const existing = activeDocument.getElementById("virtual-outliner-level-vars");
+    if (existing instanceof HTMLStyleElement && existing.isConnected) {
+      this.cssVarStyleEl = existing;
+    } else {
+      existing == null ? void 0 : existing.remove();
       this.cssVarStyleEl = activeDocument.createElement("style");
       this.cssVarStyleEl.id = "virtual-outliner-level-vars";
       activeDocument.head.appendChild(this.cssVarStyleEl);

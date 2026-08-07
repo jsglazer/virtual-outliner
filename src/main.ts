@@ -205,17 +205,23 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		// CM6 EditorViews and rendered Reading View DOM alive across the
 		// reload — unlike a full close/reopen of the vault, which recreates
 		// them from scratch against the freshly (re)registered extension and
-		// post-processor. Without an explicit nudge here, an editor that
-		// attached itself before this call sits on decorations computed by
-		// the OLD (disabled) instance, and a Reading View pane never re-runs
-		// the post-processor at all, so entries render as raw, unstyled
-		// `1.0Thesis` text until something else forces a re-render (closing
+		// post-processor. Labels/indentation self-heal on their own (each
+		// editor's own attach hook schedules its own decoration resolve), but
+		// the injected `--vo-lN-*` CSS variables come from a SINGLE style
+		// element this instance owns — a second, defensive re-apply here
+		// (on top of the one at the top of onload) covers the disabled
+		// instance's element still being mid-removal, or any other race in
+		// exactly when a hot re-enable's onload runs relative to the old
+		// instance's onunload. Rendered entries otherwise keep their labels
+		// and indentation but lose colour/weight/gap — `1.0Thesis` with no
+		// space, no colour — until something else forces a re-render (closing
 		// and reopening the vault). onLayoutReady runs immediately when the
 		// layout is already settled — the common case for a hot re-enable —
 		// so this reaches both the cold-start and the re-enable path.
 		this.app.workspace.onLayoutReady(() => {
 			const file = this.app.workspace.getActiveFile();
 			if (file && file.extension === 'md') void this.ensureFileState(file.path);
+			this.applyLevelCssVars();
 			for (const view of this.editors) this.decorate(view);
 			this.rerenderPreviews(null);
 		});
@@ -281,7 +287,21 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		const body = Object.entries(vars)
 			.map(([key, value]) => `\t${key}: ${value};`)
 			.join('\n');
-		if (!this.cssVarStyleEl) {
+		// A toggle-off/on cycle instantiates a brand new plugin object, so
+		// `this.cssVarStyleEl` (an instance field) starts null again even
+		// though a PREVIOUS instance's element may still be sitting in
+		// `<head>` — its `onunload()` removes its own node by direct
+		// reference, but that only works if onunload actually ran, and if it
+		// hasn't (yet), `!this.cssVarStyleEl` alone would create a second,
+		// possibly-conflicting element rather than reusing the orphan. Look
+		// the element up by id first — reuse it if it's still attached
+		// (covers a slow/pending unload), or drop the orphan and start fresh
+		// if it somehow got detached.
+		const existing = activeDocument.getElementById('virtual-outliner-level-vars');
+		if (existing instanceof HTMLStyleElement && existing.isConnected) {
+			this.cssVarStyleEl = existing;
+		} else {
+			existing?.remove();
 			this.cssVarStyleEl = activeDocument.createElement('style');
 			this.cssVarStyleEl.id = 'virtual-outliner-level-vars';
 			activeDocument.head.appendChild(this.cssVarStyleEl);
