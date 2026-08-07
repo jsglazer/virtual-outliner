@@ -18,6 +18,8 @@ export interface SidebarHost {
 	levels(path: string): readonly LevelFormat[];
 	isCollapsed(path: string, nodeId: string): boolean;
 	toggleCollapsed(path: string, node: OutlineNode): void;
+	collapseAll(path: string): void;
+	expandAll(path: string): void;
 	jumpToNode(path: string, node: OutlineNode): void;
 	onStateChange(listener: () => void): () => void;
 }
@@ -85,6 +87,18 @@ export class OutlineSidebarView extends ItemView {
 			this.render();
 		});
 
+		const toolbar = root.createDiv({ cls: 'vo-sidebar-toolbar' });
+		const foldAllBtn = toolbar.createEl('button', { text: 'Fold all' });
+		foldAllBtn.addEventListener('click', () => {
+			const path = this.host.activeOutlinePath();
+			if (path) this.host.collapseAll(path);
+		});
+		const expandAllBtn = toolbar.createEl('button', { text: 'Expand all' });
+		expandAllBtn.addEventListener('click', () => {
+			const path = this.host.activeOutlinePath();
+			if (path) this.host.expandAll(path);
+		});
+
 		const treeEl = root.createDiv({ cls: 'vo-sidebar-tree' });
 		const path = this.host.activeOutlinePath();
 		const parsed = path ? this.host.getParsed(path) : null;
@@ -121,9 +135,11 @@ export class OutlineSidebarView extends ItemView {
 		}
 
 		const hasChildren = node.children.length > 0;
+		const hasOwnBody = node.ownBodyStart < node.ownBodyEnd;
+		const canToggle = hasChildren || hasOwnBody;
 		const collapsed = node.id !== null && this.host.isCollapsed(path, node.id);
-		const toggle = row.createDiv({ cls: `vo-node-toggle${hasChildren ? '' : ' vo-node-toggle-empty'}` });
-		if (hasChildren) {
+		const toggle = row.createDiv({ cls: `vo-node-toggle${canToggle ? '' : ' vo-node-toggle-empty'}` });
+		if (canToggle) {
 			setIcon(toggle, collapsed ? 'chevron-right' : 'chevron-down');
 			toggle.addEventListener('click', (evt) => {
 				evt.stopPropagation();

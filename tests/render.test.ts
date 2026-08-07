@@ -16,8 +16,8 @@ describe('computeRenderPlan', () => {
 	it('"both": nothing hidden, every entry gets a label', () => {
 		const plan = computeRenderPlan(DOC, '@', levels(), 'both', new Set());
 		expect(plan.hiddenLineRanges).toEqual([]);
-		expect(plan.labels.get(1)).toBe('1'); // "@ A"
-		expect(plan.labels.get(3)).toBe('1.1'); // "@@ A.1"
+		expect(plan.labels.get(1)).toBe('1.0'); // "@ A"
+		expect(plan.labels.get(3)).toBe('1.0.1'); // "@@ A.1"
 	});
 
 	it('"outline": hides every body run, including the preamble, but not entries', () => {

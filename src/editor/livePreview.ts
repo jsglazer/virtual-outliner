@@ -149,6 +149,13 @@ export function buildOutlineDecorations(
 				deco: Decoration.replace({ widget: new LabelWidget(label, `vo-l${level}`) }),
 			});
 		}
+		if (segs.textEnd > segs.prefixEnd) {
+			items.push({
+				from: line.from + segs.prefixEnd,
+				to: line.from + segs.textEnd,
+				deco: Decoration.mark({ class: `vo-text vo-l${level}` }),
+			});
+		}
 		if (segs.textEnd < line.text.length) {
 			items.push({ from: line.from + segs.textEnd, to: line.to, deco: Decoration.replace({}) });
 		}

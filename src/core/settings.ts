@@ -24,7 +24,7 @@ export interface OutlineSettings {
 	metaFields: MetaFieldDef[];
 }
 
-const DEFAULT_LABEL_STYLES: LabelStyle[] = ['1', '1', '1', '1', '1', '1'];
+const DEFAULT_LABEL_STYLES: LabelStyle[] = ['1.0', '1', '1', '1', '1', '1'];
 
 export function defaultLevelFormat(level: number): LevelFormat {
 	return {
@@ -32,10 +32,12 @@ export function defaultLevelFormat(level: number): LevelFormat {
 		separator: level === 1 ? '' : '.',
 		fontSize: '',
 		fontWeight: level === 1 ? '600' : '',
+		fontFamily: '',
 		color: '',
 		italic: false,
 		indentStep: '1.5em',
 		spacing: level === 1 ? '0.75em' : '0.25em',
+		labelGap: '0.3em',
 	};
 }
 
@@ -70,7 +72,7 @@ function readBool(v: unknown, fallback: boolean): boolean {
 	return typeof v === 'boolean' ? v : fallback;
 }
 
-const LABEL_STYLES: ReadonlySet<string> = new Set(['1', '1.1', 'I', 'A', 'a', 'i', 'bullet', 'none']);
+const LABEL_STYLES: ReadonlySet<string> = new Set(['1', '1.0', '1.1', 'I', 'A', 'a', 'i', 'bullet', 'none']);
 
 function readLabelStyle(v: unknown, fallback: LabelStyle): LabelStyle {
 	return typeof v === 'string' && LABEL_STYLES.has(v) ? (v as LabelStyle) : fallback;
@@ -84,10 +86,12 @@ function normalizeLevelFormat(v: unknown, level: number): LevelFormat {
 		separator: readString(v.separator, fallback.separator),
 		fontSize: readString(v.fontSize, fallback.fontSize),
 		fontWeight: readString(v.fontWeight, fallback.fontWeight),
+		fontFamily: readString(v.fontFamily, fallback.fontFamily),
 		color: readString(v.color, fallback.color),
 		italic: readBool(v.italic, fallback.italic),
 		indentStep: readString(v.indentStep, fallback.indentStep),
 		spacing: readString(v.spacing, fallback.spacing),
+		labelGap: readString(v.labelGap, fallback.labelGap),
 	};
 }
 
@@ -131,10 +135,11 @@ export function normalizeSettings(raw: unknown): OutlineSettings {
 }
 
 // Per-level typography, driven entirely by settings, as CSS custom property
-// VALUES rather than a generated <style> element — Obsidian plugins apply
-// dynamic CSS by setting custom properties on a root element (via
-// `setCssProps`) that styles.css's static rules already reference
-// (`var(--vo-l1-color)`, …), never by injecting `<style>` elements.
+// VALUES that styles.css's static rules reference (`var(--vo-l1-color)`,
+// …) — the shell (main.ts applyLevelCssVars) writes these into a dedicated
+// `<style>` element rather than `body.setCssProps`, because Obsidian
+// periodically rewrites `document.body.style.cssText` wholesale from its own
+// appearance settings and silently drops anything a plugin added there.
 // Decorations themselves carry only class names (`vo-l1`…`vo-l6`), never
 // inline styles (Decision #12).
 export function levelCssVars(levels: readonly LevelFormat[]): Record<string, string> {
@@ -146,9 +151,11 @@ export function levelCssVars(levels: readonly LevelFormat[]): Record<string, str
 		const n = i + 1;
 		vars[`--vo-l${n}-size`] = level.fontSize !== '' ? cssValue(level.fontSize) : 'inherit';
 		vars[`--vo-l${n}-weight`] = level.fontWeight !== '' ? cssValue(level.fontWeight) : 'inherit';
+		vars[`--vo-l${n}-family`] = level.fontFamily !== '' ? cssValue(level.fontFamily) : 'inherit';
 		vars[`--vo-l${n}-color`] = level.color !== '' ? cssValue(level.color) : 'inherit';
 		vars[`--vo-l${n}-style`] = level.italic ? 'italic' : 'normal';
 		vars[`--vo-l${n}-spacing`] = level.spacing !== '' ? cssValue(level.spacing) : '0px';
+		vars[`--vo-l${n}-gap`] = level.labelGap !== '' ? cssValue(level.labelGap) : '0px';
 		cumulativeIndent =
 			cumulativeIndent === ''
 				? cssValue(level.indentStep)

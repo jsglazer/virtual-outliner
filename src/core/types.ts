@@ -46,7 +46,7 @@ export interface ParsedOutline {
 
 export type ViewState = 'outline' | 'body' | 'both';
 
-export type LabelStyle = '1' | '1.1' | 'I' | 'A' | 'a' | 'i' | 'bullet' | 'none';
+export type LabelStyle = '1' | '1.0' | '1.1' | 'I' | 'A' | 'a' | 'i' | 'bullet' | 'none';
 
 export interface LevelFormat {
 	style: LabelStyle;
@@ -56,10 +56,12 @@ export interface LevelFormat {
 	separator: string;
 	fontSize: string; // CSS length, '' = inherit
 	fontWeight: string; // CSS font-weight, '' = inherit
+	fontFamily: string; // CSS font-family, '' = inherit
 	color: string; // '#rrggbb' or '' = inherit
 	italic: boolean;
 	indentStep: string; // CSS length applied per level to body indentation
 	spacing: string; // CSS length, extra vertical margin above the entry
+	labelGap: string; // CSS length between the number/letter label and the entry text
 }
 
 export interface EditSplice {

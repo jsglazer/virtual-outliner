@@ -33,7 +33,15 @@ describe('computeLabel', () => {
 		const parsed = parseOutline(doc);
 		const target = parsed.roots[0]?.children[1]?.children[0];
 		if (!target) throw new Error('missing node');
-		expect(computeLabel(levels({}), target)).toBe('1.2.1');
+		expect(computeLabel(levels({ 1: { style: '1' } }), target)).toBe('1.2.1');
+	});
+
+	it('renders the "1.0" style as a bare integer plus a fixed ".0"', () => {
+		const doc = '@ A\n@ B';
+		const parsed = parseOutline(doc);
+		const b = parsed.roots[1];
+		if (!b) throw new Error('missing node');
+		expect(computeLabel(levels({ 1: { style: '1.0' } }), b)).toBe('2.0');
 	});
 
 	it('joins mixed per-level styles as in the "I.B.3" example', () => {

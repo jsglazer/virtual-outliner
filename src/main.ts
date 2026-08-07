@@ -66,6 +66,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private diskTimers = new Map<string, number>();
 	private changeListeners = new Set<() => void>();
 	private initialRendered = new Set<string>();
+	private cssVarStyleEl: HTMLStyleElement | null = null;
 
 	async onload(): Promise<void> {
 		const raw: unknown = await this.loadData();
@@ -192,6 +193,8 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		this.editorTimers.clear();
 		for (const timer of this.diskTimers.values()) window.clearTimeout(timer);
 		this.diskTimers.clear();
+		this.cssVarStyleEl?.remove();
+		this.cssVarStyleEl = null;
 	}
 
 	async saveSettings(): Promise<void> {
@@ -219,8 +222,23 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		}
 	}
 
+	// A <style> element rather than `body.setCssProps` (Decision superseded —
+	// see core/settings.ts levelCssVars doc comment): Obsidian periodically
+	// rewrites `document.body.style.cssText` wholesale from its own
+	// appearance settings (zoom, font overrides, indent-size), which silently
+	// drops any custom property a plugin added via setCssProps on body. A
+	// dedicated stylesheet is never touched by that rewrite.
 	private applyLevelCssVars(): void {
-		activeDocument.body.setCssProps(levelCssVars(this.settings.levels));
+		const vars = levelCssVars(this.settings.levels);
+		const body = Object.entries(vars)
+			.map(([key, value]) => `\t${key}: ${value};`)
+			.join('\n');
+		if (!this.cssVarStyleEl) {
+			this.cssVarStyleEl = activeDocument.createElement('style');
+			this.cssVarStyleEl.id = 'virtual-outliner-level-vars';
+			activeDocument.head.appendChild(this.cssVarStyleEl);
+		}
+		this.cssVarStyleEl.textContent = `:root {\n${body}\n}`;
 	}
 
 	// ── Per-file view/collapse state ─────────────────────────────────────────
@@ -279,6 +297,55 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		const withId = appendId('', id); // ' ^o-xxxxxxxx'
 		view.dispatch({ changes: { from: lineEnd, to: lineEnd, insert: withId } });
 		this.flipCollapse(path, id);
+	}
+
+	collapseAll(path: string): void {
+		const state = this.states.get(path);
+		if (!state) return;
+		const entry = this.fileStateEntry(path);
+		const eligible = state.parsed.flat.filter((n) => n.children.length > 0 || n.ownBodyStart < n.ownBodyEnd);
+		const view = this.editorFor(path);
+		let missingIdSkipped = false;
+
+		if (view) {
+			const doc = view.state.doc.toString();
+			const { body } = parseMetaDocument(doc);
+			const lines = body.split('\n');
+			const offsets = lineStartOffsets(lines);
+			const changes: { from: number; to: number; insert: string }[] = [];
+			const mintedIds: string[] = [];
+			for (const node of eligible) {
+				if (node.id !== null) {
+					entry.collapsedIds.add(node.id);
+					continue;
+				}
+				const lineText = lines[node.entryLine] ?? '';
+				const lineStart = offsets[node.entryLine] ?? 0;
+				const lineEnd = lineStart + lineText.length;
+				const id = mintId(Date.now(), Math.random());
+				changes.push({ from: lineEnd, to: lineEnd, insert: appendId('', id) });
+				mintedIds.push(id);
+			}
+			if (changes.length > 0) view.dispatch({ changes });
+			for (const id of mintedIds) entry.collapsedIds.add(id);
+		} else {
+			for (const node of eligible) {
+				if (node.id !== null) entry.collapsedIds.add(node.id);
+				else missingIdSkipped = true;
+			}
+		}
+
+		void this.persist();
+		this.decorateAllFor(path);
+		this.notifyChange();
+		if (missingIdSkipped) new Notice("Open this note to fold every entry — some don't have a stable ID yet.");
+	}
+
+	expandAll(path: string): void {
+		this.fileStateEntry(path).collapsedIds.clear();
+		void this.persist();
+		this.decorateAllFor(path);
+		this.notifyChange();
 	}
 
 	// ── Per-file parse/decoration state ──────────────────────────────────────
@@ -444,6 +511,8 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			levels: () => this.settings.levels,
 			isCollapsed: (path: string, id: string) => this.collapsedIdsFor(path).has(id),
 			toggleCollapsed: (path: string, node: OutlineNode) => this.toggleCollapsed(path, node),
+			collapseAll: (path: string) => this.collapseAll(path),
+			expandAll: (path: string) => this.expandAll(path),
 			jumpToNode: (path: string, node: OutlineNode) => void this.jumpToNode(path, node),
 			onStateChange: (listener: () => void) => this.onStateChange(listener),
 		};

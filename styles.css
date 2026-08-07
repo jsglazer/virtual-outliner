@@ -1,8 +1,8 @@
-/* Static structural CSS. Per-level typography (color, size, weight, italic,
-   indent, spacing) is driven by CSS custom properties set at runtime from
-   settings — see src/core/settings.ts (levelCssVars) — applied via
-   setCssProps rather than an injected <style> element, so the rules below
-   never change; only the --vo-lN-* values do. */
+/* Static structural CSS. Per-level typography (color, size, family, weight,
+   italic, indent, spacing, label gap) is driven by CSS custom properties set
+   at runtime from settings — see src/core/settings.ts (levelCssVars) and
+   main.ts (applyLevelCssVars) — so the rules below never change; only the
+   --vo-lN-* values do. */
 
 .vo-label {
 	user-select: none;
@@ -12,36 +12,91 @@
 .vo-label.vo-l1 {
 	font-size: var(--vo-l1-size, inherit);
 	font-weight: var(--vo-l1-weight, inherit);
+	font-family: var(--vo-l1-family, inherit);
 	color: var(--vo-l1-color, inherit);
 	font-style: var(--vo-l1-style, normal);
+	margin-right: var(--vo-l1-gap, 0);
 }
 .vo-label.vo-l2 {
 	font-size: var(--vo-l2-size, inherit);
 	font-weight: var(--vo-l2-weight, inherit);
+	font-family: var(--vo-l2-family, inherit);
 	color: var(--vo-l2-color, inherit);
 	font-style: var(--vo-l2-style, normal);
+	margin-right: var(--vo-l2-gap, 0);
 }
 .vo-label.vo-l3 {
 	font-size: var(--vo-l3-size, inherit);
 	font-weight: var(--vo-l3-weight, inherit);
+	font-family: var(--vo-l3-family, inherit);
 	color: var(--vo-l3-color, inherit);
 	font-style: var(--vo-l3-style, normal);
+	margin-right: var(--vo-l3-gap, 0);
 }
 .vo-label.vo-l4 {
 	font-size: var(--vo-l4-size, inherit);
 	font-weight: var(--vo-l4-weight, inherit);
+	font-family: var(--vo-l4-family, inherit);
 	color: var(--vo-l4-color, inherit);
 	font-style: var(--vo-l4-style, normal);
+	margin-right: var(--vo-l4-gap, 0);
 }
 .vo-label.vo-l5 {
 	font-size: var(--vo-l5-size, inherit);
 	font-weight: var(--vo-l5-weight, inherit);
+	font-family: var(--vo-l5-family, inherit);
 	color: var(--vo-l5-color, inherit);
 	font-style: var(--vo-l5-style, normal);
+	margin-right: var(--vo-l5-gap, 0);
 }
 .vo-label.vo-l6 {
 	font-size: var(--vo-l6-size, inherit);
 	font-weight: var(--vo-l6-weight, inherit);
+	font-family: var(--vo-l6-family, inherit);
+	color: var(--vo-l6-color, inherit);
+	font-style: var(--vo-l6-style, normal);
+	margin-right: var(--vo-l6-gap, 0);
+}
+
+.vo-text.vo-l1 {
+	font-size: var(--vo-l1-size, inherit);
+	font-weight: var(--vo-l1-weight, inherit);
+	font-family: var(--vo-l1-family, inherit);
+	color: var(--vo-l1-color, inherit);
+	font-style: var(--vo-l1-style, normal);
+}
+.vo-text.vo-l2 {
+	font-size: var(--vo-l2-size, inherit);
+	font-weight: var(--vo-l2-weight, inherit);
+	font-family: var(--vo-l2-family, inherit);
+	color: var(--vo-l2-color, inherit);
+	font-style: var(--vo-l2-style, normal);
+}
+.vo-text.vo-l3 {
+	font-size: var(--vo-l3-size, inherit);
+	font-weight: var(--vo-l3-weight, inherit);
+	font-family: var(--vo-l3-family, inherit);
+	color: var(--vo-l3-color, inherit);
+	font-style: var(--vo-l3-style, normal);
+}
+.vo-text.vo-l4 {
+	font-size: var(--vo-l4-size, inherit);
+	font-weight: var(--vo-l4-weight, inherit);
+	font-family: var(--vo-l4-family, inherit);
+	color: var(--vo-l4-color, inherit);
+	font-style: var(--vo-l4-style, normal);
+}
+.vo-text.vo-l5 {
+	font-size: var(--vo-l5-size, inherit);
+	font-weight: var(--vo-l5-weight, inherit);
+	font-family: var(--vo-l5-family, inherit);
+	color: var(--vo-l5-color, inherit);
+	font-style: var(--vo-l5-style, normal);
+}
+.vo-text.vo-l6 {
+	font-size: var(--vo-l6-size, inherit);
+	font-weight: var(--vo-l6-weight, inherit);
+	font-family: var(--vo-l6-family, inherit);
 	color: var(--vo-l6-color, inherit);
 	font-style: var(--vo-l6-style, normal);
 }
@@ -111,6 +166,17 @@
 
 .vo-sidebar-search input {
 	width: 100%;
+}
+
+.vo-sidebar-toolbar {
+	flex: 0 0 auto;
+	display: flex;
+	gap: var(--size-4-2);
+	padding: 0 var(--size-4-2) var(--size-4-2);
+}
+
+.vo-sidebar-toolbar button {
+	flex: 1 1 auto;
 }
 
 .vo-sidebar-tree {

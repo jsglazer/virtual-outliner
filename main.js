@@ -71,6 +71,8 @@ function segmentFor(style, ownIndex, pathIndices) {
   switch (style) {
     case "1":
       return String(ownIndex);
+    case "1.0":
+      return `${ownIndex}.0`;
     case "1.1":
       return dottedPath(pathIndices);
     case "I":
@@ -509,7 +511,7 @@ function generateFilteredCopy(doc, sigilChar, levels, viewState, collapsedIds) {
 }
 
 // src/core/settings.ts
-var DEFAULT_LABEL_STYLES = ["1", "1", "1", "1", "1", "1"];
+var DEFAULT_LABEL_STYLES = ["1.0", "1", "1", "1", "1", "1"];
 function defaultLevelFormat(level) {
   var _a;
   return {
@@ -517,10 +519,12 @@ function defaultLevelFormat(level) {
     separator: level === 1 ? "" : ".",
     fontSize: "",
     fontWeight: level === 1 ? "600" : "",
+    fontFamily: "",
     color: "",
     italic: false,
     indentStep: "1.5em",
-    spacing: level === 1 ? "0.75em" : "0.25em"
+    spacing: level === 1 ? "0.75em" : "0.25em",
+    labelGap: "0.3em"
   };
 }
 function defaultMetaFields() {
@@ -549,7 +553,7 @@ function readString(v, fallback) {
 function readBool(v, fallback) {
   return typeof v === "boolean" ? v : fallback;
 }
-var LABEL_STYLES = /* @__PURE__ */ new Set(["1", "1.1", "I", "A", "a", "i", "bullet", "none"]);
+var LABEL_STYLES = /* @__PURE__ */ new Set(["1", "1.0", "1.1", "I", "A", "a", "i", "bullet", "none"]);
 function readLabelStyle(v, fallback) {
   return typeof v === "string" && LABEL_STYLES.has(v) ? v : fallback;
 }
@@ -561,10 +565,12 @@ function normalizeLevelFormat(v, level) {
     separator: readString(v.separator, fallback.separator),
     fontSize: readString(v.fontSize, fallback.fontSize),
     fontWeight: readString(v.fontWeight, fallback.fontWeight),
+    fontFamily: readString(v.fontFamily, fallback.fontFamily),
     color: readString(v.color, fallback.color),
     italic: readBool(v.italic, fallback.italic),
     indentStep: readString(v.indentStep, fallback.indentStep),
-    spacing: readString(v.spacing, fallback.spacing)
+    spacing: readString(v.spacing, fallback.spacing),
+    labelGap: readString(v.labelGap, fallback.labelGap)
   };
 }
 function normalizeMetaField(v) {
@@ -602,9 +608,11 @@ function levelCssVars(levels) {
     const n = i + 1;
     vars[`--vo-l${n}-size`] = level.fontSize !== "" ? cssValue(level.fontSize) : "inherit";
     vars[`--vo-l${n}-weight`] = level.fontWeight !== "" ? cssValue(level.fontWeight) : "inherit";
+    vars[`--vo-l${n}-family`] = level.fontFamily !== "" ? cssValue(level.fontFamily) : "inherit";
     vars[`--vo-l${n}-color`] = level.color !== "" ? cssValue(level.color) : "inherit";
     vars[`--vo-l${n}-style`] = level.italic ? "italic" : "normal";
     vars[`--vo-l${n}-spacing`] = level.spacing !== "" ? cssValue(level.spacing) : "0px";
+    vars[`--vo-l${n}-gap`] = level.labelGap !== "" ? cssValue(level.labelGap) : "0px";
     cumulativeIndent = cumulativeIndent === "" ? cssValue(level.indentStep) : `calc(${cumulativeIndent} + ${cssValue(level.indentStep)})`;
     vars[`--vo-l${n}-indent`] = cumulativeIndent !== "" ? cumulativeIndent : "0px";
   }
@@ -705,6 +713,13 @@ function buildOutlineDecorations(view, plan, sigilChar) {
         from: line.from,
         to: line.from + segs.prefixEnd,
         deco: import_view.Decoration.replace({ widget: new LabelWidget(label, `vo-l${level}`) })
+      });
+    }
+    if (segs.textEnd > segs.prefixEnd) {
+      items.push({
+        from: line.from + segs.prefixEnd,
+        to: line.from + segs.textEnd,
+        deco: import_view.Decoration.mark({ class: `vo-text vo-l${level}` })
       });
     }
     if (segs.textEnd < line.text.length) {
@@ -892,39 +907,82 @@ function buildOutlineKeymap(host) {
 }
 
 // src/editor/readingView.ts
-function collectFirstAndLastTextNode(root) {
-  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+function collectFirstAndLastTextNode(nodes) {
   let first = null;
   let last = null;
-  let node = walker.nextNode();
-  while (node) {
-    if (!first) first = node;
-    last = node;
-    node = walker.nextNode();
+  for (const root of nodes) {
+    if (root.nodeType === Node.TEXT_NODE) {
+      if (!first) first = root;
+      last = root;
+      continue;
+    }
+    if (!root.instanceOf(HTMLElement)) continue;
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      if (!first) first = node;
+      last = node;
+      node = walker.nextNode();
+    }
   }
   return { first, last };
 }
-function materializeLabel(el, line, sigilChar, label, level) {
+function wrapEntryText(first, last, level, doc) {
+  var _a;
+  const wrapper = doc.createElement("span");
+  wrapper.className = `vo-text vo-l${level}`;
+  (_a = first.parentNode) == null ? void 0 : _a.insertBefore(wrapper, first);
+  let node = first;
+  while (node) {
+    const next = node.nextSibling;
+    wrapper.appendChild(node);
+    if (node === last) break;
+    node = next;
+  }
+}
+function materializeLabelIn(nodes, line, sigilChar, label, level, doc) {
   var _a, _b, _c;
   const segs = entrySegments(line, sigilChar);
   if (!segs) return;
   const prefixStr = line.slice(0, segs.prefixEnd);
   const idSuffixStr = segs.textEnd < line.length ? line.slice(segs.textEnd) : "";
-  const { first, last } = collectFirstAndLastTextNode(el);
+  const { first, last } = collectFirstAndLastTextNode(nodes);
   if (idSuffixStr !== "" && ((_a = last == null ? void 0 : last.nodeValue) == null ? void 0 : _a.endsWith(idSuffixStr))) {
     last.nodeValue = last.nodeValue.slice(0, -idSuffixStr.length);
   }
   if ((_b = first == null ? void 0 : first.nodeValue) == null ? void 0 : _b.startsWith(prefixStr)) {
     first.nodeValue = first.nodeValue.slice(prefixStr.length);
-    const labelSpan = el.ownerDocument.createElement("span");
+    const labelSpan = doc.createElement("span");
     labelSpan.className = `vo-label vo-l${level}`;
     labelSpan.textContent = label;
     (_c = first.parentNode) == null ? void 0 : _c.insertBefore(labelSpan, first);
+    wrapEntryText(first, last, level, doc);
   }
+}
+function materializeLabel(el, line, sigilChar, label, level) {
+  materializeLabelIn(el.childNodes, line, sigilChar, label, level, el.ownerDocument);
+}
+function splitByLineBreak(el) {
+  var _a;
+  const segments = [[]];
+  for (const child of Array.from(el.childNodes)) {
+    if (child.nodeName === "BR") {
+      segments.push([]);
+    } else {
+      (_a = segments[segments.length - 1]) == null ? void 0 : _a.push(child);
+    }
+  }
+  return segments;
+}
+function levelClasses(indentLevel, entryLevel2) {
+  const classes = [];
+  if (indentLevel !== void 0) classes.push(`vo-indent-l${indentLevel}`);
+  if (entryLevel2 !== void 0) classes.push(`vo-entry-l${entryLevel2}`);
+  return classes;
 }
 function createReadingPostProcessor(host) {
   return (el, ctx) => {
-    var _a;
+    var _a, _b;
     const body = host.getBody(ctx.sourcePath);
     if (body === null) return;
     const section = ctx.getSectionInfo(el);
@@ -939,6 +997,9 @@ function createReadingPostProcessor(host) {
       if (isLineHidden(plan.hiddenLineRanges, lineStart)) {
         el.addClass("vo-hidden");
         return;
+      }
+      for (const cls of levelClasses(plan.indentLevel.get(lineStart), plan.entryLevel.get(lineStart))) {
+        el.addClass(cls);
       }
       const label = plan.labels.get(lineStart);
       if (label === void 0) return;
@@ -956,7 +1017,34 @@ function createReadingPostProcessor(host) {
         break;
       }
     }
-    if (allHidden) el.addClass("vo-hidden");
+    if (allHidden) {
+      el.addClass("vo-hidden");
+      return;
+    }
+    for (let line = lineStart; line <= lineEnd; line++) {
+      if (isLineHidden(plan.hiddenLineRanges, line)) continue;
+      const indent = plan.indentLevel.get(line);
+      const entryLvl = plan.entryLevel.get(line);
+      if (indent === void 0 && entryLvl === void 0) continue;
+      for (const cls of levelClasses(indent, entryLvl)) el.addClass(cls);
+      break;
+    }
+    const segments = splitByLineBreak(el);
+    if (segments.length === lineEnd - lineStart + 1) {
+      const lines = body.split("\n");
+      for (let i = 0; i < segments.length; i++) {
+        const line = lineStart + i;
+        if (isLineHidden(plan.hiddenLineRanges, line)) continue;
+        const label = plan.labels.get(line);
+        if (label === void 0) continue;
+        const level = (_b = plan.entryLevel.get(line)) != null ? _b : 1;
+        const lineText = lines[line];
+        if (lineText === void 0) continue;
+        const segment = segments[i];
+        if (!segment) continue;
+        materializeLabelIn(segment, lineText, sigilChar, label, level, el.ownerDocument);
+      }
+    }
   };
 }
 
@@ -964,6 +1052,7 @@ function createReadingPostProcessor(host) {
 var import_obsidian2 = require("obsidian");
 var LABEL_STYLE_OPTIONS = {
   "1": "1, 2, 3",
+  "1.0": "N.0 (1.0, 2.0, 3.0)",
   "1.1": "Dotted path (1.2.1)",
   I: "I, II, III",
   i: "i, ii, iii",
@@ -1084,6 +1173,20 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
         await this.plugin.saveSettings();
       });
     });
+    setting.addText((text) => {
+      text.setPlaceholder("Label gap").setValue(format.labelGap);
+      text.onChange(async (value) => {
+        format.labelGap = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    setting.addText((text) => {
+      text.setPlaceholder("Font family").setValue(format.fontFamily);
+      text.onChange(async (value) => {
+        format.fontFamily = value;
+        await this.plugin.saveSettings();
+      });
+    });
   }
   renderMetaFields(containerEl) {
     const fields = this.plugin.settings.metaFields;
@@ -1189,6 +1292,17 @@ var OutlineSidebarView = class extends import_obsidian3.ItemView {
       this.searchQuery = input.value;
       this.render();
     });
+    const toolbar = root.createDiv({ cls: "vo-sidebar-toolbar" });
+    const foldAllBtn = toolbar.createEl("button", { text: "Fold all" });
+    foldAllBtn.addEventListener("click", () => {
+      const path2 = this.host.activeOutlinePath();
+      if (path2) this.host.collapseAll(path2);
+    });
+    const expandAllBtn = toolbar.createEl("button", { text: "Expand all" });
+    expandAllBtn.addEventListener("click", () => {
+      const path2 = this.host.activeOutlinePath();
+      if (path2) this.host.expandAll(path2);
+    });
     const treeEl = root.createDiv({ cls: "vo-sidebar-tree" });
     const path = this.host.activeOutlinePath();
     const parsed = path ? this.host.getParsed(path) : null;
@@ -1213,9 +1327,11 @@ var OutlineSidebarView = class extends import_obsidian3.ItemView {
       row.addClass("vo-node-match");
     }
     const hasChildren = node.children.length > 0;
+    const hasOwnBody = node.ownBodyStart < node.ownBodyEnd;
+    const canToggle = hasChildren || hasOwnBody;
     const collapsed = node.id !== null && this.host.isCollapsed(path, node.id);
-    const toggle = row.createDiv({ cls: `vo-node-toggle${hasChildren ? "" : " vo-node-toggle-empty"}` });
-    if (hasChildren) {
+    const toggle = row.createDiv({ cls: `vo-node-toggle${canToggle ? "" : " vo-node-toggle-empty"}` });
+    if (canToggle) {
       (0, import_obsidian3.setIcon)(toggle, collapsed ? "chevron-right" : "chevron-down");
       toggle.addEventListener("click", (evt) => {
         evt.stopPropagation();
@@ -1257,6 +1373,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     this.diskTimers = /* @__PURE__ */ new Map();
     this.changeListeners = /* @__PURE__ */ new Set();
     this.initialRendered = /* @__PURE__ */ new Set();
+    this.cssVarStyleEl = null;
   }
   async onload() {
     const raw = await this.loadData();
@@ -1373,10 +1490,13 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     );
   }
   onunload() {
+    var _a;
     for (const timer of this.editorTimers.values()) window.clearTimeout(timer);
     this.editorTimers.clear();
     for (const timer of this.diskTimers.values()) window.clearTimeout(timer);
     this.diskTimers.clear();
+    (_a = this.cssVarStyleEl) == null ? void 0 : _a.remove();
+    this.cssVarStyleEl = null;
   }
   async saveSettings() {
     await this.persist();
@@ -1400,8 +1520,23 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       this.fileState.set(path, { viewState: entry.viewState, collapsedIds: new Set(entry.collapsedIds) });
     }
   }
+  // A <style> element rather than `body.setCssProps` (Decision superseded —
+  // see core/settings.ts levelCssVars doc comment): Obsidian periodically
+  // rewrites `document.body.style.cssText` wholesale from its own
+  // appearance settings (zoom, font overrides, indent-size), which silently
+  // drops any custom property a plugin added via setCssProps on body. A
+  // dedicated stylesheet is never touched by that rewrite.
   applyLevelCssVars() {
-    activeDocument.body.setCssProps(levelCssVars(this.settings.levels));
+    const vars = levelCssVars(this.settings.levels);
+    const body = Object.entries(vars).map(([key, value]) => `	${key}: ${value};`).join("\n");
+    if (!this.cssVarStyleEl) {
+      this.cssVarStyleEl = activeDocument.createElement("style");
+      this.cssVarStyleEl.id = "virtual-outliner-level-vars";
+      activeDocument.head.appendChild(this.cssVarStyleEl);
+    }
+    this.cssVarStyleEl.textContent = `:root {
+${body}
+}`;
   }
   // ── Per-file view/collapse state ─────────────────────────────────────────
   viewStateFor(path) {
@@ -1456,6 +1591,52 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     const withId = appendId("", id);
     view.dispatch({ changes: { from: lineEnd, to: lineEnd, insert: withId } });
     this.flipCollapse(path, id);
+  }
+  collapseAll(path) {
+    var _a, _b;
+    const state = this.states.get(path);
+    if (!state) return;
+    const entry = this.fileStateEntry(path);
+    const eligible = state.parsed.flat.filter((n) => n.children.length > 0 || n.ownBodyStart < n.ownBodyEnd);
+    const view = this.editorFor(path);
+    let missingIdSkipped = false;
+    if (view) {
+      const doc = view.state.doc.toString();
+      const { body } = parseMetaDocument(doc);
+      const lines = body.split("\n");
+      const offsets = lineStartOffsets(lines);
+      const changes = [];
+      const mintedIds = [];
+      for (const node of eligible) {
+        if (node.id !== null) {
+          entry.collapsedIds.add(node.id);
+          continue;
+        }
+        const lineText = (_a = lines[node.entryLine]) != null ? _a : "";
+        const lineStart = (_b = offsets[node.entryLine]) != null ? _b : 0;
+        const lineEnd = lineStart + lineText.length;
+        const id = mintId(Date.now(), Math.random());
+        changes.push({ from: lineEnd, to: lineEnd, insert: appendId("", id) });
+        mintedIds.push(id);
+      }
+      if (changes.length > 0) view.dispatch({ changes });
+      for (const id of mintedIds) entry.collapsedIds.add(id);
+    } else {
+      for (const node of eligible) {
+        if (node.id !== null) entry.collapsedIds.add(node.id);
+        else missingIdSkipped = true;
+      }
+    }
+    void this.persist();
+    this.decorateAllFor(path);
+    this.notifyChange();
+    if (missingIdSkipped) new import_obsidian4.Notice("Open this note to fold every entry \u2014 some don't have a stable ID yet.");
+  }
+  expandAll(path) {
+    this.fileStateEntry(path).collapsedIds.clear();
+    void this.persist();
+    this.decorateAllFor(path);
+    this.notifyChange();
   }
   // ── Per-file parse/decoration state ──────────────────────────────────────
   async ensureFileState(path) {
@@ -1609,6 +1790,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       levels: () => this.settings.levels,
       isCollapsed: (path, id) => this.collapsedIdsFor(path).has(id),
       toggleCollapsed: (path, node) => this.toggleCollapsed(path, node),
+      collapseAll: (path) => this.collapseAll(path),
+      expandAll: (path) => this.expandAll(path),
       jumpToNode: (path, node) => void this.jumpToNode(path, node),
       onStateChange: (listener) => this.onStateChange(listener)
     };

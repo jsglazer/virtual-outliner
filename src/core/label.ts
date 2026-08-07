@@ -61,6 +61,8 @@ function segmentFor(style: LabelStyle, ownIndex: number, pathIndices: readonly n
 	switch (style) {
 		case '1':
 			return String(ownIndex);
+		case '1.0':
+			return `${ownIndex}.0`;
 		case '1.1':
 			return dottedPath(pathIndices);
 		case 'I':

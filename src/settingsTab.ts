@@ -7,6 +7,7 @@ import type VirtualOutlinerPlugin from './main';
 
 const LABEL_STYLE_OPTIONS: Record<LabelStyle, string> = {
 	'1': '1, 2, 3',
+	'1.0': 'N.0 (1.0, 2.0, 3.0)',
 	'1.1': 'Dotted path (1.2.1)',
 	I: 'I, II, III',
 	i: 'i, ii, iii',
@@ -148,6 +149,20 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 			text.setPlaceholder('Indent step').setValue(format.indentStep);
 			text.onChange(async (value) => {
 				format.indentStep = value;
+				await this.plugin.saveSettings();
+			});
+		});
+		setting.addText((text) => {
+			text.setPlaceholder('Label gap').setValue(format.labelGap);
+			text.onChange(async (value) => {
+				format.labelGap = value;
+				await this.plugin.saveSettings();
+			});
+		});
+		setting.addText((text) => {
+			text.setPlaceholder('Font family').setValue(format.fontFamily);
+			text.onChange(async (value) => {
+				format.fontFamily = value;
 				await this.plugin.saveSettings();
 			});
 		});
