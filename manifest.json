@@ -1,7 +1,7 @@
 {
 	"id": "virtual-outliner",
 	"name": "Virtual Outliner",
-	"version": "1.0.21",
+	"version": "1.0.22",
 	"minAppVersion": "1.7.2",
 	"description": "Outline-first authoring: a computed outline layer over your prose in one Markdown file, with a real outliner keymap that never orphans body text.",
 	"author": "Josh Glazer",

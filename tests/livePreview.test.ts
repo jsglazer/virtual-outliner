@@ -73,6 +73,28 @@ describe('hidden-body block replacements (Outline-only view)', () => {
 		expect(ranges[0]?.to).toBe(state.doc.line(3).from); // "@@ Detail"
 	});
 
+	it('keeps startSide negative so CM6 opens no line before the block', () => {
+		// CM6's content builder: `if (deco.startSide > 0)
+		// b.addLineStartIfNotCovered(...)` before `addBlockWidget`. A positive
+		// startSide (what `inclusiveStart: false` produces) makes it open a line
+		// there, rendering an empty .cm-line — a blank line for every hidden run,
+		// in documents with no blank lines at all.
+		const state = startState();
+		const deco = state.field(outlineDecoField);
+		let checked = 0;
+		for (const iter = deco.iter(); iter.value !== null; iter.next()) {
+			const spec: unknown = iter.value.spec;
+			const isBlock = typeof spec === 'object' && spec !== null && (spec as { block?: unknown }).block === true;
+			if (!isBlock) continue;
+			checked++;
+			expect(iter.value.startSide).toBeLessThan(0);
+			// And the end must sort before a Decoration.line (-200000000) at the
+			// same offset, or the next visible line loses its classes.
+			expect(iter.value.endSide).toBeLessThan(-200000000);
+		}
+		expect(checked).toBeGreaterThan(0);
+	});
+
 	it('leaves the following entry line its own line decoration', () => {
 		// Regression guard for the reason the old geometry existed: ending a
 		// block replacement at the next line's start used to swallow that line's

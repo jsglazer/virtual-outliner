@@ -263,29 +263,46 @@ export function buildOutlineDecorations(
 		const from = doc.line(range.from + 1).from;
 		const to = lastLineNo < lineCount ? doc.line(lastLineNo + 1).from : doc.length;
 		if (from >= to) continue;
-		// `inclusiveStart`/`inclusiveEnd` MUST be false. CM6's Decoration.replace
-		// derives them from `getInclusive(spec, block)`, which falls back to the
-		// `block` flag — so a plain `{block: true}` replacement is inclusive at
-		// BOTH boundaries, and text inserted exactly at a boundary is absorbed
-		// into the replaced (hidden) range.
+		// `inclusiveEnd: false` is required; `inclusiveStart` must be left at its
+		// default. CM6's Decoration.replace derives both from
+		// `getInclusive(spec, block)`, which falls back to the `block` flag, so a
+		// plain `{block: true}` replacement is inclusive at BOTH boundaries and
+		// absorbs text inserted exactly at either one.
 		//
-		// That was fatal when `from` was the END of the entry line directly above
-		// the hidden run — exactly where the cursor sits while
-		// editing that entry's text. Typing there used to: hide the typed
-		// character, map the cursor strictly INSIDE an atomic hidden range (which
-		// has no rendered DOM position), and so leave the browser to drop the
-		// caret at the next visible position — the start of the following entry
-		// line. Every keystroke after that landed in front of that entry's
-		// sigils, turning `@@@ More detail` into `en@@@ More detail`, which no
-		// longer parses as an entry and silently vanished from the outline.
-		// Non-inclusive boundaries keep edits at the seam outside the hidden
-		// range, where they belong. Covered by tests/livePreview.test.ts.
+		// END — must be non-inclusive, for two reasons. It keeps a character
+		// typed at the start of the next visible line outside the hidden range,
+		// and it sets `endSide` to -599999999, which sorts before a
+		// `Decoration.line`'s -200000000 at the same offset so the following
+		// line keeps its indent/colour classes (see the geometry note above).
+		//
+		// START — must stay INCLUSIVE, i.e. `startSide` negative. CM6's content
+		// builder does:
+		//
+		//     if (deco.block) {
+		//         if (deco.startSide > 0) b.addLineStartIfNotCovered(...);
+		//         b.addBlockWidget(tile);
+		//     }
+		//
+		// `inclusiveStart: false` makes `startSide` +499999999 — positive — so
+		// CM6 opened a line before every hidden block, rendering an empty
+		// `.cm-line` there. That is a blank line per hidden run, in Outline-only
+		// and Body-only alike, in documents containing no blank lines at all.
+		//
+		// Setting it false was only ever needed under the OLD geometry, where
+		// `from` was the end of the entry line above — the exact spot the cursor
+		// occupies while editing that entry, so a keystroke there was swallowed
+		// into the hidden range (the corruption that turned `@@@ More detail`
+		// into `en@@@ More detail`). Now that `from` is the start of the FIRST
+		// HIDDEN line, the cursor sits at `from - 1`, and an insertion strictly
+		// before `from` shifts the range regardless of inclusivity — so the
+		// protection is inherent in the geometry and no longer needs the flag.
+		// Covered by tests/livePreview.test.ts, including a guard on the sign of
+		// `startSide` itself.
 		items.push({
 			from,
 			to,
 			deco: Decoration.replace({
 				block: true,
-				inclusiveStart: false,
 				inclusiveEnd: false,
 				widget: hiddenBlockWidget,
 			}),

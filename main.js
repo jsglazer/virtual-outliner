@@ -787,7 +787,6 @@ function buildOutlineDecorations(view, plan, sigilChar) {
       to,
       deco: import_view.Decoration.replace({
         block: true,
-        inclusiveStart: false,
         inclusiveEnd: false,
         widget: hiddenBlockWidget
       })
