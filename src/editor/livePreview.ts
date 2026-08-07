@@ -39,8 +39,18 @@ export const outlineDecoField = StateField.define<DecorationSet>({
 		EditorView.decorations.from(field),
 		// A block-replace range must also be atomic so the cursor can never
 		// land inside it (Decision #16) — the same DecorationSet doubles as
-		// the atomic-ranges source.
-		EditorView.atomicRanges.of((view) => view.state.field(field)),
+		// the atomic-ranges source, filtered to POINT ranges only (replace/
+		// widget decorations: hidden body blocks, the sigil-prefix label, the
+		// hidden id suffix). `RangeValue.point` is what CM6's own atomicRanges
+		// contract keys on — a `Decoration.mark` (e.g. the visible `vo-text`
+		// entry-text span) has `point: false` and must NOT be atomic, or the
+		// whole marked span becomes one unnavigable unit: clicks and arrow
+		// keys can no longer land inside the visible entry text at all, and
+		// deleting at its edge deletes the entire span in one bite instead of
+		// one character.
+		EditorView.atomicRanges.of((view) =>
+			view.state.field(field).update({ filter: (_from, _to, value) => value.point }),
+		),
 	],
 });
 
