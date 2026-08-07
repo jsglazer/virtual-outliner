@@ -523,20 +523,21 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			this.settings.indentBody,
 		);
 		const decorations = buildOutlineDecorations(view, plan, this.settings.sigil);
-		// Explicitly reassert the current selection alongside the decoration
-		// effect, even though its VALUE is unchanged. An effects-only dispatch
-		// still touches the DOM around any hidden atomic block whose position
-		// shifted (e.g. an entry hidden in body/outline view sitting right next
-		// to the cursor after ordinary typing) — and contentEditable's native
-		// caret can silently drift to the far side of that redrawn region while
-		// CM6's own state.selection still reports the old, correct offset. The
-		// browser then reports the NEXT keystroke at wherever the native caret
-		// actually drifted to (reported live: typing "Here" split into "H" on
-		// one line and "ere" landing at the start of a different line, past a
-		// hidden entry). Including `selection` in the same dispatch makes CM6
-		// resync the native caret to the true state value after the DOM update,
-		// which a bare effects-only dispatch does not do on its own.
-		view.dispatch({ effects: setOutlineDecorations.of(decorations), selection: view.state.selection });
+		// Reasserting the (unchanged) selection alongside the decoration effect
+		// makes CM6 rewrite the DOM selection after the update, rather than
+		// trusting whatever contentEditable left behind. This was originally
+		// added to chase the "typed text lands on the wrong line" corruption;
+		// that turned out to be a decoration-boundary bug instead — see the
+		// inclusiveStart/inclusiveEnd note in editor/livePreview.ts, which is
+		// the actual fix. It stays only as a cheap caret resync.
+		//
+		// Skipped while an IME composition is active: dispatching a selection
+		// mid-composition aborts it, which would break CJK and dead-key input
+		// for the sake of a defensive no-op.
+		view.dispatch({
+			effects: setOutlineDecorations.of(decorations),
+			selection: view.composing ? undefined : view.state.selection,
+		});
 	}
 
 	private decorateAllFor(path: string): void {

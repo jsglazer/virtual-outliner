@@ -739,7 +739,11 @@ function buildOutlineDecorations(view, plan, sigilChar) {
     const from = atDocStart ? doc.line(1).from : doc.line(range.from).to;
     const to = lastLine.to;
     if (from >= to) continue;
-    items.push({ from, to, deco: import_view.Decoration.replace({ block: true }) });
+    items.push({
+      from,
+      to,
+      deco: import_view.Decoration.replace({ block: true, inclusiveStart: false, inclusiveEnd: false })
+    });
   }
   for (const [lineIndex, label] of plan.labels) {
     if (lineIndex >= lineCount) continue;
@@ -1970,7 +1974,10 @@ ${body}
       this.settings.indentBody
     );
     const decorations = buildOutlineDecorations(view, plan, this.settings.sigil);
-    view.dispatch({ effects: setOutlineDecorations.of(decorations), selection: view.state.selection });
+    view.dispatch({
+      effects: setOutlineDecorations.of(decorations),
+      selection: view.composing ? void 0 : view.state.selection
+    });
   }
   decorateAllFor(path) {
     const state = this.states.get(path);

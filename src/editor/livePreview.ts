@@ -160,7 +160,28 @@ export function buildOutlineDecorations(
 		const from = atDocStart ? doc.line(1).from : doc.line(range.from).to;
 		const to = lastLine.to;
 		if (from >= to) continue;
-		items.push({ from, to, deco: Decoration.replace({ block: true }) });
+		// `inclusiveStart`/`inclusiveEnd` MUST be false. CM6's Decoration.replace
+		// derives them from `getInclusive(spec, block)`, which falls back to the
+		// `block` flag — so a plain `{block: true}` replacement is inclusive at
+		// BOTH boundaries, and text inserted exactly at a boundary is absorbed
+		// into the replaced (hidden) range.
+		//
+		// That is fatal here, because `from` above is the END of the entry line
+		// directly above the hidden run — exactly where the cursor sits while
+		// editing that entry's text. Typing there used to: hide the typed
+		// character, map the cursor strictly INSIDE an atomic hidden range (which
+		// has no rendered DOM position), and so leave the browser to drop the
+		// caret at the next visible position — the start of the following entry
+		// line. Every keystroke after that landed in front of that entry's
+		// sigils, turning `@@@ More detail` into `en@@@ More detail`, which no
+		// longer parses as an entry and silently vanished from the outline.
+		// Non-inclusive boundaries keep edits at the seam outside the hidden
+		// range, where they belong. Covered by tests/livePreview.test.ts.
+		items.push({
+			from,
+			to,
+			deco: Decoration.replace({ block: true, inclusiveStart: false, inclusiveEnd: false }),
+		});
 	}
 
 	for (const [lineIndex, label] of plan.labels) {

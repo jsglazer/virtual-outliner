@@ -1,0 +1,125 @@
+// Decoration GEOMETRY regression tests: which character ranges the hidden-body
+// block replacements cover, and — critically — where those boundaries end up
+// after the user types at one of them.
+//
+// The bug these exist for (Update004): in Outline-only view every run of body
+// lines is hidden, and each hidden run's block replacement starts at the END of
+// the entry line above it. That is exactly where the cursor sits while editing
+// an entry's text. A CM6 block replacement is inclusive at both boundaries by
+// DEFAULT (Decoration.replace's getInclusive falls back to `block`), so a
+// character typed at that boundary was absorbed INTO the hidden range: it
+// vanished from view, the mapped cursor landed strictly inside an atomic hidden
+// range that has no rendered DOM position, and the browser dropped the caret at
+// the next visible position — the start of the following entry line. Every
+// subsequent keystroke was then inserted in front of THAT entry's sigils,
+// corrupting it into a non-entry (`@@@ More detail` -> `en@@@ More detail`) and
+// silently dropping it out of the outline.
+
+import { describe, expect, it } from 'vitest';
+import { EditorState } from '@codemirror/state';
+import type { EditorView } from '@codemirror/view';
+
+import { computeRenderPlan } from '../src/core/render';
+import { defaultSettings } from '../src/core/settings';
+import { buildOutlineDecorations, outlineDecoField, setOutlineDecorations } from '../src/editor/livePreview';
+
+const SIGIL = '@';
+const LEVELS = defaultSettings().levels;
+
+const DOC = ['@ Thesis', 'body under thesis', '@@ Detail', 'more body'].join('\n');
+
+// buildOutlineDecorations only ever reads view.state.doc.
+function fakeView(state: EditorState): EditorView {
+	return { state } as unknown as EditorView;
+}
+
+function decorate(state: EditorState): EditorState {
+	const plan = computeRenderPlan(state.doc.toString(), SIGIL, LEVELS, 'outline', new Set(), false);
+	const deco = buildOutlineDecorations(fakeView(state), plan, SIGIL);
+	return state.update({ effects: setOutlineDecorations.of(deco) }).state;
+}
+
+// The block (whole-line) replacements only — the label widget and id-suffix
+// replacements are point ranges on a single line and are not what hides body.
+function blockRanges(state: EditorState): { from: number; to: number }[] {
+	const out: { from: number; to: number }[] = [];
+	const iter = state.field(outlineDecoField).iter();
+	for (; iter.value !== null; iter.next()) {
+		if (iter.value.spec?.block === true) out.push({ from: iter.from, to: iter.to });
+	}
+	return out;
+}
+
+function startState(): EditorState {
+	return decorate(EditorState.create({ doc: DOC, extensions: [outlineDecoField] }));
+}
+
+describe('hidden-body block replacements (Outline-only view)', () => {
+	it('starts each hidden run at the end of the entry line above it', () => {
+		const state = startState();
+		const entryLineEnd = state.doc.line(1).to; // end of "@ Thesis"
+
+		const ranges = blockRanges(state);
+		expect(ranges.length).toBeGreaterThan(0);
+		expect(ranges[0]?.from).toBe(entryLineEnd);
+	});
+
+	it('does not swallow a character typed at the end of an entry line', () => {
+		let state = startState();
+		const cursor = state.doc.line(1).to; // end of "@ Thesis" == a block's `from`
+		expect(blockRanges(state).some((r) => r.from === cursor)).toBe(true);
+
+		state = state.update({
+			changes: { from: cursor, to: cursor, insert: 'X' },
+			selection: { anchor: cursor + 1 },
+		}).state;
+
+		// The typed character occupies [cursor, cursor + 1). If any hidden block
+		// still covers it, it has been absorbed into the hidden range and the
+		// user's own keystroke is invisible.
+		const covering = blockRanges(state).filter((r) => r.from <= cursor && r.to > cursor);
+		expect(covering).toEqual([]);
+
+		// The entry line must actually contain the typed text.
+		expect(state.doc.line(1).text).toBe('@ ThesisX');
+	});
+
+	it('leaves the mapped cursor at a position outside every hidden range', () => {
+		let state = startState();
+		const cursor = state.doc.line(1).to;
+
+		state = state.update({
+			changes: { from: cursor, to: cursor, insert: 'X' },
+			selection: { anchor: cursor + 1 },
+		}).state;
+
+		// Strictly inside (from < pos < to) is the unrenderable case: an atomic
+		// range with no DOM position for the caret, which is what sent the next
+		// keystroke to the following entry line.
+		const head = state.selection.main.head;
+		const inside = blockRanges(state).filter((r) => r.from < head && r.to > head);
+		expect(inside).toEqual([]);
+	});
+
+	it('keeps consecutive keystrokes on the entry line (the corruption repro)', () => {
+		let state = startState();
+		let cursor = state.doc.line(1).to;
+
+		for (const ch of 'abc') {
+			state = state.update({
+				changes: { from: cursor, to: cursor, insert: ch },
+				selection: { anchor: cursor + 1 },
+			}).state;
+			cursor = state.selection.main.head;
+			// Re-running the resolve mid-typing (the 200ms debounce firing) must
+			// not move the caret either.
+			state = decorate(state);
+			expect(state.selection.main.head).toBe(cursor);
+		}
+
+		expect(state.doc.line(1).text).toBe('@ Thesisabc');
+		// The following entry must be untouched — this is the exact corruption
+		// that was observed (`@@ Detail` -> `bc@@ Detail`).
+		expect(state.doc.line(3).text).toBe('@@ Detail');
+	});
+});
