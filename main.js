@@ -1941,7 +1941,7 @@ ${body}
       window.setTimeout(() => {
         this.editorTimers.delete(view);
         this.resolveEditor(view);
-      }, delayMs || RESOLVE_DEBOUNCE_MS)
+      }, delayMs === 0 ? 0 : delayMs || RESOLVE_DEBOUNCE_MS)
     );
   }
   resolveEditor(view) {

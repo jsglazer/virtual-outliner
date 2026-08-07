@@ -475,12 +475,23 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private scheduleEditorResolve(view: EditorView, delayMs: number): void {
 		const existing = this.editorTimers.get(view);
 		if (existing !== undefined) window.clearTimeout(existing);
+		// `0` is a deliberate caller value (the initial resolve on editor
+		// attach wants to run on the very next tick, not debounced) — `||`
+		// treats 0 as "no delay given" and silently substitutes the full
+		// 200ms debounce instead, so a freshly opened/reactivated editor's
+		// FIRST decoration resolve was delayed a full 200ms rather than
+		// firing immediately. That put decorations one recompute cycle
+		// behind for however long it took the user to start typing —
+		// exactly the class of window where a decoration recompute (and the
+		// DOM redraw it causes around any hidden-block boundary) can land in
+		// the middle of the user's first few keystrokes after reopening a
+		// note, rather than before them.
 		this.editorTimers.set(
 			view,
 			window.setTimeout(() => {
 				this.editorTimers.delete(view);
 				this.resolveEditor(view);
-			}, delayMs || RESOLVE_DEBOUNCE_MS),
+			}, delayMs === 0 ? 0 : delayMs || RESOLVE_DEBOUNCE_MS),
 		);
 	}
 
