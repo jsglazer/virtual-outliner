@@ -18,7 +18,7 @@ Outline-first authoring for Obsidian: lay down a full multi-level outline, then 
   - Every operation is also available as a hotkey-less command, so it works on iPad without a hardware keyboard.
 - **Collapse per node** — hide a node's body and descendants while keeping its entry visible, from the sidebar. Honored in Live Preview and Reading View alike, down to the individual source line.
 - **Searchable, collapsible outline sidebar** — click any entry to jump straight to its prose.
-- **Per-level formatting** — number style, separator, italic, colour, font size, font weight, font family, indent step, space above, and label gap, each independently configurable per level from its own collapsible block in Settings. A level's font size sizes the whole line, so setting a level below 1em tightens its leading to match rather than leaving full-size gaps around shrunken text. Indentation is cumulative: level 1's step is the whole outline's base offset from the left margin (0 by default, so it sits flush), and each deeper level's step is how much further right it sits than its parent. Body prose indents with its entry unless you turn **Indent body under its outline level** off.
+- **One format, every level.** Number style, separator, italic, colour, font size, font weight, font family, indent step, space above, and label gap are set once in Settings and applied uniformly across all levels — no more editing the same ten fields six times. A level's font size sizes the whole line, so setting it below 1em tightens the leading to match rather than leaving full-size gaps around shrunken text. Indentation is cumulative: level 1 always stays flush left, and the shared indent step is how much further right each deeper level sits than the one above it. Body prose indents with its entry unless you turn **Indent body under its outline level** off (in Settings, or via the **Indent body with outline** command).
 - **Per-node metadata** (Status, Note, or any fields you configure) stored out-of-band in a single `%%md-outline` block at the end of the file, exposed read-only to Dataview/Datacore.
 - **Generate filtered copy** — a command that produces a new file containing only what the current view state shows, with labels materialized into literal text.
 - Full desktop **and** mobile/iPad support.
@@ -69,6 +69,7 @@ dv.table(['Label', 'Text', 'Status'], nodes.map(n => [n.label, n.text, n.meta?.S
 
 - **Open outline sidebar**
 - **Show outline only** / **Show body only** / **Show outline and body**
+- **Indent body with outline** — toggles the same setting as **Indent body under its outline level** in Settings
 - **Generate filtered copy** — writes a new `.md` file with the current view honored and labels materialized
 - **Prune orphaned outline metadata** — removes metadata records whose node no longer exists, after reporting what it's about to remove
 
