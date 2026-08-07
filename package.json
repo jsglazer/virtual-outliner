@@ -1,6 +1,6 @@
 {
 	"name": "virtual-outliner",
-	"version": "1.0.10",
+	"version": "1.0.11",
 	"description": "Outline-first authoring layer for Obsidian: a computed, collapsible outline over your prose in one Markdown file, with a real outliner keymap that never orphans body text.",
 	"main": "main.js",
 	"type": "module",

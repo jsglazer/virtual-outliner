@@ -722,7 +722,7 @@ function buildOutlineDecorations(view, plan, sigilChar) {
     const lastLine = doc.line(lastLineNo);
     const atDocStart = range.from === 0;
     const from = atDocStart ? doc.line(1).from : doc.line(range.from).to;
-    const to = atDocStart && lastLineNo < lineCount ? doc.line(lastLineNo + 1).from : lastLine.to;
+    const to = lastLine.to;
     if (from >= to) continue;
     items.push({ from, to, deco: import_view.Decoration.replace({ block: true }) });
   }

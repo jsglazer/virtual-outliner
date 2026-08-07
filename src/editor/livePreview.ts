@@ -133,15 +133,22 @@ export function buildOutlineDecorations(
 		// `Decoration.line` inside the replaced range, and CM6 drops it — so
 		// the first body line under any hidden entry silently lost its indent
 		// class while its siblings kept theirs, which read as indentation
-		// working only intermittently. Only a block starting at line 0 has no
-		// preceding break to take, and must fall back to the trailing one or
-		// it would leave an empty line behind.
+		// working only intermittently. A block starting at line 0 has no
+		// preceding break to take, so it USED to fall back to the trailing one
+		// instead — reintroducing the exact bug above for whatever line
+		// follows a hidden leading preamble (Update003: the first outline
+		// entry in a note with body text above it lost its colour/weight/gap
+		// entirely in Outline-only view, because that entry's own line sat
+		// right at the swallowed boundary). Always ending at `lastLine.to`
+		// avoids the collision in every case, accepting a blank leading line
+		// in the doc-start case as the lesser problem — nothing currently
+		// hides a leading preamble AND needs it visually gapless.
 		if (range.from >= lineCount || range.to > lineCount) continue;
 		const lastLineNo = Math.min(range.to, lineCount);
 		const lastLine = doc.line(lastLineNo);
 		const atDocStart = range.from === 0;
 		const from = atDocStart ? doc.line(1).from : doc.line(range.from).to;
-		const to = atDocStart && lastLineNo < lineCount ? doc.line(lastLineNo + 1).from : lastLine.to;
+		const to = lastLine.to;
 		if (from >= to) continue;
 		items.push({ from, to, deco: Decoration.replace({ block: true }) });
 	}
