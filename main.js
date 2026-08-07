@@ -454,7 +454,9 @@ function isLineHidden(hidden, line) {
   return false;
 }
 function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, indentBody = true) {
+  var _a;
   const parsed = parseOutline(body, sigilChar);
+  const lines = body.split("\n");
   const collapseRanges = [];
   for (const node of parsed.flat) {
     if (node.id !== null && collapsedIds.has(node.id) && node.subtreeEnd > node.entryLine + 1) {
@@ -464,9 +466,8 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
   const viewStateRanges = [];
   if (viewState === "outline") {
     let runStart = null;
-    const entryLines = new Set(parsed.flat.map((n) => n.entryLine));
     for (let i = 0; i < parsed.lineCount; i++) {
-      if (entryLines.has(i)) {
+      if (isOutlineLine((_a = lines[i]) != null ? _a : "", sigilChar)) {
         if (runStart !== null) viewStateRanges.push({ from: runStart, to: i });
         runStart = null;
       } else if (runStart === null) {

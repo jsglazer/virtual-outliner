@@ -14,6 +14,7 @@
 
 import { computeLabel } from './label';
 import { parseOutline } from './parser';
+import { isOutlineLine } from './sigil';
 import type { LevelFormat, OutlineNode, ParsedOutline, ViewState } from './types';
 
 export interface LineRange {
@@ -71,6 +72,7 @@ export function computeRenderPlan(
 	indentBody = true,
 ): RenderPlan {
 	const parsed = parseOutline(body, sigilChar);
+	const lines = body.split('\n');
 	const collapseRanges: LineRange[] = [];
 	for (const node of parsed.flat) {
 		if (node.id !== null && collapsedIds.has(node.id) && node.subtreeEnd > node.entryLine + 1) {
@@ -82,10 +84,25 @@ export function computeRenderPlan(
 	if (viewState === 'outline') {
 		// Hide every run of non-entry (body) lines, including any preamble
 		// before the first entry.
+		//
+		// Visibility is decided by `isOutlineLine` (sigils + the required space,
+		// text OPTIONAL) rather than by the parsed nodes, which exist only for
+		// entries that already have text. Enter opens a new sibling as bare
+		// `@@@ ` — no text yet — so keying off `parsed.flat` classified the line
+		// the user was about to type into as BODY and hid it instantly. The
+		// caret was then inside an atomic hidden block with no rendered DOM
+		// position, so the browser dropped it at the next visible line and the
+		// following keystrokes were inserted in front of THAT entry's sigils
+		// (typing "add" after an entry produced `a@@ And here` and
+		// `dd@ This is level 6`, with the new `@@@` stranded).
+		//
+		// A blank entry has no node, so it gets no label widget or indent class
+		// until its first character lands — it shows its raw sigils for that one
+		// keystroke. That is the deliberate trade: visible and editable beats
+		// invisible and corrupting.
 		let runStart: number | null = null;
-		const entryLines = new Set(parsed.flat.map((n) => n.entryLine));
 		for (let i = 0; i < parsed.lineCount; i++) {
-			if (entryLines.has(i)) {
+			if (isOutlineLine(lines[i] ?? '', sigilChar)) {
 				if (runStart !== null) viewStateRanges.push({ from: runStart, to: i });
 				runStart = null;
 			} else if (runStart === null) {

@@ -20,6 +20,31 @@ describe('computeRenderPlan', () => {
 		expect(plan.labels.get(3)).toBe('1.1'); // "@@ A.1" — the child takes the placeholder's slot
 	});
 
+	it('"outline": keeps a brand-new blank entry visible', () => {
+		// Enter opens a sibling as bare sigils + space, with no text yet, so it
+		// has no parsed node. Hiding it put the caret inside an atomic hidden
+		// block with no DOM position: the browser moved it to the next visible
+		// line and the user's next keystrokes were inserted in front of THAT
+		// entry's sigils. Typing "add" produced `a@@ And here` /
+		// `dd@ This is level 6` and left the new `@@@` stranded.
+		const doc = ['@ A', 'A body', '@@ ', '@ B'].join('\n');
+		const plan = computeRenderPlan(doc, '@', levels(), 'outline', new Set());
+
+		expect(isLineHidden(plan.hiddenLineRanges, 2)).toBe(false); // the blank "@@ "
+		expect(isLineHidden(plan.hiddenLineRanges, 1)).toBe(true); // real body still hidden
+		expect(isLineHidden(plan.hiddenLineRanges, 3)).toBe(false); // "@ B"
+	});
+
+	it('"outline": a blank entry stays visible while its first character lands', () => {
+		// The transition the user actually types through: "@@ " -> "@@ a".
+		const blank = computeRenderPlan(['@ A', '@@ ', '@ B'].join('\n'), '@', levels(), 'outline', new Set());
+		expect(isLineHidden(blank.hiddenLineRanges, 1)).toBe(false);
+
+		const typed = computeRenderPlan(['@ A', '@@ a', '@ B'].join('\n'), '@', levels(), 'outline', new Set());
+		expect(isLineHidden(typed.hiddenLineRanges, 1)).toBe(false);
+		expect(typed.labels.get(1)).toBeDefined(); // now a real node, so it gets its label
+	});
+
 	it('"outline": hides every body run, including the preamble, but not entries', () => {
 		const plan = computeRenderPlan(DOC, '@', levels(), 'outline', new Set());
 		expect(isLineHidden(plan.hiddenLineRanges, 0)).toBe(true); // preamble
