@@ -21,7 +21,12 @@ import type { EditorView } from '@codemirror/view';
 
 import { computeRenderPlan } from '../src/core/render';
 import { defaultSettings } from '../src/core/settings';
-import { buildOutlineDecorations, outlineDecoField, setOutlineDecorations } from '../src/editor/livePreview';
+import {
+	buildHiddenContentGuard,
+	buildOutlineDecorations,
+	outlineDecoField,
+	setOutlineDecorations,
+} from '../src/editor/livePreview';
 
 const SIGIL = '@';
 const LEVELS = defaultSettings().levels;
@@ -121,5 +126,83 @@ describe('hidden-body block replacements (Outline-only view)', () => {
 		// The following entry must be untouched — this is the exact corruption
 		// that was observed (`@@ Detail` -> `bc@@ Detail`).
 		expect(state.doc.line(3).text).toBe('@@ Detail');
+	});
+});
+
+// Second, worse failure mode of the same atomic hidden blocks: atomicRanges
+// makes them atomic for DELETION too, so one Backspace at the gap between two
+// entries took out an entire run of body prose that the user could not see.
+// Live report: Test.md went from 43 lines to 15 while "removing extra line
+// spaces between the outline lines" in Outline-only view.
+describe('hidden-content delete guard (Outline-only view)', () => {
+	let blocked = 0;
+
+	function guarded(): EditorState {
+		blocked = 0;
+		const state = EditorState.create({
+			doc: DOC,
+			extensions: [
+				outlineDecoField,
+				buildHiddenContentGuard(() => {
+					blocked++;
+				}),
+			],
+		});
+		return decorate(state);
+	}
+
+	it('rejects a delete that would remove an entire hidden body run', () => {
+		const state = guarded();
+		const block = blockRanges(state)[0];
+		expect(block).toBeDefined();
+
+		// Exactly what an atomic-range-expanded Backspace produced.
+		const next = state.update({
+			changes: { from: block!.from, to: block!.to, insert: '' },
+			userEvent: 'delete.backward',
+		}).state;
+
+		expect(next.doc.toString()).toBe(DOC);
+		expect(blocked).toBe(1);
+	});
+
+	it('still allows deleting the last character of an entry line', () => {
+		const state = guarded();
+		const cursor = state.doc.line(1).to; // end of "@ Thesis" == a block's `from`
+
+		const next = state.update({
+			changes: { from: cursor - 1, to: cursor, insert: '' },
+			userEvent: 'delete.backward',
+		}).state;
+
+		expect(next.doc.line(1).text).toBe('@ Thesi');
+		expect(blocked).toBe(0);
+	});
+
+	it('leaves the plugin’s own structural rewrites alone', () => {
+		const state = guarded();
+		const block = blockRanges(state)[0];
+
+		// dispatchSplice carries no userEvent — moving a subtree legitimately
+		// rewrites hidden lines and must not be filtered.
+		const next = state.update({
+			changes: { from: block!.from, to: block!.to, insert: '\nmoved body' },
+		}).state;
+
+		expect(next.doc.toString()).not.toBe(DOC);
+		expect(blocked).toBe(0);
+	});
+
+	it('leaves undo alone', () => {
+		const state = guarded();
+		const block = blockRanges(state)[0];
+
+		const next = state.update({
+			changes: { from: block!.from, to: block!.to, insert: '' },
+			userEvent: 'undo',
+		}).state;
+
+		expect(next.doc.toString()).not.toBe(DOC);
+		expect(blocked).toBe(0);
 	});
 });

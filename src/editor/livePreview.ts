@@ -13,8 +13,8 @@
 // The ViewPlugin below is also how the plugin obtains EditorView handles: no
 // undocumented Obsidian internals are needed to reach the editor.
 
-import { RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
-import type { Extension } from '@codemirror/state';
+import { EditorState, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
+import type { Extension, TransactionSpec } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
@@ -53,6 +53,63 @@ export const outlineDecoField = StateField.define<DecorationSet>({
 		),
 	],
 });
+
+// Character ranges currently replaced by a whole-line (block) decoration —
+// i.e. body/collapsed content the user cannot see in this view state.
+export function hiddenBlockRanges(state: EditorState): { from: number; to: number }[] {
+	const deco = state.field(outlineDecoField, false);
+	if (!deco) return [];
+	const out: { from: number; to: number }[] = [];
+	for (const iter = deco.iter(); iter.value !== null; iter.next()) {
+		const spec: unknown = iter.value.spec;
+		const isBlock = typeof spec === 'object' && spec !== null && (spec as { block?: unknown }).block === true;
+		if (isBlock) out.push({ from: iter.from, to: iter.to });
+	}
+	return out;
+}
+
+// Refuse any user-initiated DELETE that would remove hidden content.
+//
+// `EditorView.atomicRanges` (above) makes a range atomic for cursor motion AND
+// DELETION: CM6's delete commands are built on the same motion primitives, so
+// they skip ACROSS an atomic range and take the whole thing with them. In
+// Outline-only view every run of body prose is one hidden atomic block, so a
+// single Backspace at the gap between two entries deleted an entire run of
+// paragraphs — invisibly, since the user cannot see what the gap contains.
+// Reported live: "most of my body doc just got deleted when I tried to remove
+// extra line spaces between the outline lines", taking Test.md from 43 lines
+// to 15 in a few keystrokes.
+//
+// Making the blocks non-atomic would stop the mass delete but let the caret
+// wander into unrendered text, so instead the atomicity stays and the
+// destructive transaction is rejected outright. Scoped to `delete` user events,
+// which covers every keyboard/menu/cut path while leaving alone: this plugin's
+// own structural ops (Tab/Alt-arrow rewrites span hidden lines legitimately and
+// carry no userEvent), undo/redo (`undo`/`redo`), and all typing.
+//
+// Deleting up to a boundary is still allowed — only overlap with hidden content
+// itself is blocked — so backspacing the last character of an entry's visible
+// text works normally. Body text remains editable in Both/Body view, where it
+// is visible.
+export function buildHiddenContentGuard(onBlocked: () => void): Extension {
+	return EditorState.transactionFilter.of((tr): TransactionSpec | readonly TransactionSpec[] => {
+		if (!tr.docChanged || !tr.isUserEvent('delete')) return tr;
+		const blocks = hiddenBlockRanges(tr.startState);
+		if (blocks.length === 0) return tr;
+
+		let destroys = false;
+		tr.changes.iterChanges((fromA, toA) => {
+			if (destroys || toA <= fromA) return; // insertions remove nothing
+			// Strict overlap: a deletion ending exactly at `from`, or starting
+			// exactly at `to`, only touches the seam, not the hidden text.
+			if (blocks.some((b) => fromA < b.to && toA > b.from)) destroys = true;
+		});
+		if (!destroys) return tr;
+
+		onBlocked();
+		return [];
+	});
+}
 
 export interface EditorHost {
 	attachEditor(view: EditorView): void;

@@ -683,6 +683,32 @@ var outlineDecoField = import_state.StateField.define({
     )
   ]
 });
+function hiddenBlockRanges(state) {
+  const deco = state.field(outlineDecoField, false);
+  if (!deco) return [];
+  const out = [];
+  for (const iter = deco.iter(); iter.value !== null; iter.next()) {
+    const spec = iter.value.spec;
+    const isBlock = typeof spec === "object" && spec !== null && spec.block === true;
+    if (isBlock) out.push({ from: iter.from, to: iter.to });
+  }
+  return out;
+}
+function buildHiddenContentGuard(onBlocked) {
+  return import_state.EditorState.transactionFilter.of((tr) => {
+    if (!tr.docChanged || !tr.isUserEvent("delete")) return tr;
+    const blocks = hiddenBlockRanges(tr.startState);
+    if (blocks.length === 0) return tr;
+    let destroys = false;
+    tr.changes.iterChanges((fromA, toA) => {
+      if (destroys || toA <= fromA) return;
+      if (blocks.some((b) => fromA < b.to && toA > b.from)) destroys = true;
+    });
+    if (!destroys) return tr;
+    onBlocked();
+    return [];
+  });
+}
 var EDITOR_RESOLVE_DEBOUNCE_MS = 200;
 function buildEditorExtension(host) {
   const watcher = import_view.ViewPlugin.fromClass(
@@ -1593,6 +1619,9 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     );
     this.applyLevelCssVars();
     this.registerEditorExtension([
+      buildHiddenContentGuard(() => {
+        new import_obsidian4.Notice("Hidden text is not deleted from this view \u2014 switch to outline and body to edit it.");
+      }),
       buildOutlineKeymap({
         sigilChar: () => this.settings.sigil,
         resolveNow: (view) => this.resolveEditor(view)

@@ -25,6 +25,7 @@ import { levelCssVars, normalizeSettings } from './core/settings';
 import type { OutlineNode, ViewState } from './core/types';
 import {
 	buildEditorExtension,
+	buildHiddenContentGuard,
 	buildOutlineDecorations,
 	editorViewPath,
 	setOutlineDecorations,
@@ -80,6 +81,9 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		this.applyLevelCssVars();
 
 		this.registerEditorExtension([
+			buildHiddenContentGuard(() => {
+				new Notice('Hidden text is not deleted from this view — switch to outline and body to edit it.');
+			}),
 			buildOutlineKeymap({
 				sigilChar: () => this.settings.sigil,
 				resolveNow: (view) => this.resolveEditor(view),
