@@ -7,16 +7,17 @@ Outline-first authoring for Obsidian: lay down a full multi-level outline, then 
 ## What it does
 
 - **Outline as a layer, not a filter.** One Markdown file, two views. An outline entry is just a line starting with a repeated sigil (`@`, `@@`, `@@@`, …, configurable); everything else — your own prose, headings, lists, tables, code — is the body. A **node** is one entry plus every body line beneath it, up to the next entry.
-- **Computed labels, never written to disk.** `1`, `1.1`, `I`, `A`, bullets, or none — per level, composited into things like `I.B.3` — are rendered at edit/view time in both Live Preview and Reading View. The raw sigils are never visible. Nothing is ever renumbered on disk; there is no auto-renumber engine to fight your undo history or corrupt your file.
+- **Computed labels, never written to disk.** `1`, `1.0`, `1.1`, `I`, `A`, bullets, or none — per level, composited into things like `I.B.3` — are rendered at edit/view time in both Live Preview and Reading View. The raw sigils are never visible. Nothing is ever renumbered on disk; there is no auto-renumber engine to fight your undo history or corrupt your file.
+  - The `1.0` style is Word-style multilevel numbering: the trailing `.0` is a placeholder for the next level down, so a top-level entry reads `3.0` on its own and its first child reads `3.1` — not `3.0.1`.
 - **Three view states** — outline only, body only, or both — by command, and remembered per note.
 - **A real outliner keymap**, scoped to outline lines only:
   - `Enter` at the end of an entry inserts a new sibling **after that node's entire subtree** — it never splits an existing node's body or children out from under it.
   - `Tab` / `Shift-Tab` demote/promote a node, carrying its whole subtree (body and descendants) with it — nothing is ever orphaned.
   - `Alt-↑` / `Alt-↓` move a node past its previous/next sibling, subtree and all.
   - Every operation is also available as a hotkey-less command, so it works on iPad without a hardware keyboard.
-- **Collapse per node** — hide a node's body and descendants while keeping its entry visible, from the sidebar.
+- **Collapse per node** — hide a node's body and descendants while keeping its entry visible, from the sidebar. Honored in Live Preview and Reading View alike, down to the individual source line.
 - **Searchable, collapsible outline sidebar** — click any entry to jump straight to its prose.
-- **Per-level formatting** — label style, separator, font size, weight, color, italic, indent step, and spacing, each independently configurable per level.
+- **Per-level formatting** — number style, separator, italic, colour, font size, font weight, font family, indent step, space above, and label gap, each independently configurable per level from its own collapsible block in Settings. Indentation is cumulative: level 1's step is the whole outline's base offset from the left margin (0 by default, so it sits flush), and each deeper level's step is how much further right it sits than its parent. Body prose indents with its entry unless you turn **Indent body under its outline level** off.
 - **Per-node metadata** (Status, Note, or any fields you configure) stored out-of-band in a single `%%md-outline` block at the end of the file, exposed read-only to Dataview/Datacore.
 - **Generate filtered copy** — a command that produces a new file containing only what the current view state shows, with labels materialized into literal text.
 - Full desktop **and** mobile/iPad support.
@@ -34,13 +35,13 @@ More body text, nested under "Early history".
 @ Analysis
 ```
 
-Renders (outline view) as something like:
+Renders (outline view), with the default per-level styles, as:
 
 ```
-1 Background
-1.1 Early history
-1.2 Recent developments
-2 Analysis
+1.0 Background
+    1.1 Early history
+    1.2 Recent developments
+2.0 Analysis
 ```
 
 The sigil character, the label style per level, and everything else about how this renders is configurable in **Settings → Virtual Outliner**.
