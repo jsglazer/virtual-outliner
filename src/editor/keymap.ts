@@ -14,6 +14,7 @@ import type { Extension } from '@codemirror/state';
 import type { EditorView, KeyBinding } from '@codemirror/view';
 import { keymap } from '@codemirror/view';
 
+import { ID_SUFFIX_RE } from '../core/id';
 import { parseMetaDocument } from '../core/metadata';
 import { addBodyLine, addSibling, demote, moveDown, moveUp, promote } from '../core/ops';
 import { isOutlineLine } from '../core/sigil';
@@ -54,6 +55,18 @@ function activeLine(view: EditorView): ActiveLine | null {
 	if (!sel.empty) return null;
 	const line = view.state.doc.lineAt(sel.head);
 	return { lineIndex: line.number - 1, lineText: line.text, col: sel.head - line.from };
+}
+
+// True document end (line.length) or the "visible" end — right before a
+// hidden ` ^o-xxxxxxxx` id suffix — both read as end-of-line to the user,
+// since nothing renders after either position (mirrors addSibling's own
+// `visibleEnd` check in core/ops.ts, which exists for the same reason: any
+// edit landing at the raw cursor offset instead of past the id suffix
+// strands the id on its own line, visible as literal text).
+function isAtVisibleEnd(line: ActiveLine): boolean {
+	const idMatch = ID_SUFFIX_RE.exec(line.lineText);
+	const visibleEnd = idMatch ? idMatch.index : line.lineText.length;
+	return line.col === line.lineText.length || line.col === visibleEnd;
 }
 
 function dispatchSplice(view: EditorView, host: KeymapHost, splice: EditSplice, selection?: number): boolean {
@@ -121,9 +134,34 @@ function bodyLineBinding(host: KeymapHost): (view: EditorView) => boolean {
 	};
 }
 
+// Shift-Enter at the end of an entry line (including its visible end, right
+// before a hidden id suffix): default newline insertion has no id-suffix
+// awareness and would split the line right through ` ^o-xxxxxxxx`, stranding
+// it on its own visible line (the same hazard addSibling already guards
+// against for plain Enter — see core/ops.ts). With nothing after the cursor
+// but the id, the correctly-split result IS exactly addBodyLine's own output
+// (an empty line opened right after the full entry), so this reuses it
+// rather than duplicating the splice math. Anywhere else on the line — mid-
+// text, or off an outline line entirely — falls through to Obsidian's normal
+// Shift-Enter handling, unchanged.
+function shiftEnterBinding(host: KeymapHost): (view: EditorView) => boolean {
+	return (view: EditorView): boolean => {
+		const line = activeLine(view);
+		if (!line) return false;
+		const sigil = host.sigilChar(view);
+		if (!isOutlineLine(line.lineText, sigil)) return false;
+		if (!isAtVisibleEnd(line)) return false; // mid-line: fall through to a normal soft break
+
+		const splice = addBodyLine(bodyOf(view), line.lineIndex, sigil);
+		if (!splice) return true; // consumed no-op
+		return dispatchSplice(view, host, splice, splice.from + splice.insert.length);
+	};
+}
+
 export function buildOutlineKeymap(host: KeymapHost): Extension {
 	const bindings: KeyBinding[] = [
 		{ key: 'Enter', run: enterBinding(host) },
+		{ key: 'Shift-Enter', run: shiftEnterBinding(host) },
 		{ key: 'Mod-Enter', run: bodyLineBinding(host) },
 		{ key: 'Tab', run: structuralBinding(host, demote) },
 		{ key: 'Shift-Tab', run: structuralBinding(host, promote) },

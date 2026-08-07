@@ -914,6 +914,11 @@ function activeLine(view) {
   const line = view.state.doc.lineAt(sel.head);
   return { lineIndex: line.number - 1, lineText: line.text, col: sel.head - line.from };
 }
+function isAtVisibleEnd(line) {
+  const idMatch = ID_SUFFIX_RE.exec(line.lineText);
+  const visibleEnd = idMatch ? idMatch.index : line.lineText.length;
+  return line.col === line.lineText.length || line.col === visibleEnd;
+}
 function dispatchSplice(view, host, splice, selection) {
   view.dispatch({
     changes: { from: splice.from, to: splice.to, insert: splice.insert },
@@ -958,9 +963,22 @@ function bodyLineBinding(host) {
     return dispatchSplice(view, host, splice, splice.from + splice.insert.length);
   };
 }
+function shiftEnterBinding(host) {
+  return (view) => {
+    const line = activeLine(view);
+    if (!line) return false;
+    const sigil = host.sigilChar(view);
+    if (!isOutlineLine(line.lineText, sigil)) return false;
+    if (!isAtVisibleEnd(line)) return false;
+    const splice = addBodyLine(bodyOf(view), line.lineIndex, sigil);
+    if (!splice) return true;
+    return dispatchSplice(view, host, splice, splice.from + splice.insert.length);
+  };
+}
 function buildOutlineKeymap(host) {
   const bindings = [
     { key: "Enter", run: enterBinding(host) },
+    { key: "Shift-Enter", run: shiftEnterBinding(host) },
     { key: "Mod-Enter", run: bodyLineBinding(host) },
     { key: "Tab", run: structuralBinding(host, demote) },
     { key: "Shift-Tab", run: structuralBinding(host, promote) },
