@@ -126,12 +126,22 @@ export function buildOutlineDecorations(
 
 	for (const range of plan.hiddenLineRanges) {
 		// `range` is a LINE range [from, to); translate to a CHARACTER range
-		// covering those lines including trailing newlines, matching how
-		// core/lines.ts computed it.
+		// spanning whole lines, which is what a block replacement requires.
+		//
+		// The line break taken is the one BEFORE the block, not after it.
+		// Ending at the next line's start puts that line's own
+		// `Decoration.line` inside the replaced range, and CM6 drops it — so
+		// the first body line under any hidden entry silently lost its indent
+		// class while its siblings kept theirs, which read as indentation
+		// working only intermittently. Only a block starting at line 0 has no
+		// preceding break to take, and must fall back to the trailing one or
+		// it would leave an empty line behind.
 		if (range.from >= lineCount || range.to > lineCount) continue;
-		const from = doc.line(range.from + 1).from;
-		const lastLine = range.to <= lineCount ? range.to : lineCount;
-		const to = lastLine < lineCount ? doc.line(lastLine + 1).from : doc.line(lastLine).to;
+		const lastLineNo = Math.min(range.to, lineCount);
+		const lastLine = doc.line(lastLineNo);
+		const atDocStart = range.from === 0;
+		const from = atDocStart ? doc.line(1).from : doc.line(range.from).to;
+		const to = atDocStart && lastLineNo < lineCount ? doc.line(lastLineNo + 1).from : lastLine.to;
 		if (from >= to) continue;
 		items.push({ from, to, deco: Decoration.replace({ block: true }) });
 	}

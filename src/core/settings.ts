@@ -39,7 +39,7 @@ export function defaultLevelFormat(level: number): LevelFormat {
 		// level 1's step is the whole outline's base offset (0 = flush left)
 		// and each deeper level's step is how much further right it sits than
 		// its parent.
-		indentStep: level === 1 ? '0' : '1.5em',
+		indentStep: level === 1 ? '0px' : '1.5em',
 		spacing: level === 1 ? '0.75em' : '0.25em',
 		labelGap: '0.3em',
 	};
@@ -160,9 +160,9 @@ export function levelCssVars(levels: readonly LevelFormat[]): Record<string, str
 		vars[`--vo-l${n}-style`] = level.italic ? 'italic' : 'normal';
 		vars[`--vo-l${n}-spacing`] = level.spacing !== '' ? cssValue(level.spacing) : '0px';
 		vars[`--vo-l${n}-gap`] = level.labelGap !== '' ? cssValue(level.labelGap) : '0px';
-		const step = level.indentStep !== '' ? cssValue(level.indentStep) : '0px';
+		const step = cssLength(level.indentStep);
 		cumulativeIndent = cumulativeIndent === '' ? step : `calc(${cumulativeIndent} + ${step})`;
-		vars[`--vo-l${n}-indent`] = cumulativeIndent !== '' ? cumulativeIndent : '0px';
+		vars[`--vo-l${n}-indent`] = cumulativeIndent;
 	}
 	return vars;
 }
@@ -172,4 +172,14 @@ export function levelCssVars(levels: readonly LevelFormat[]): Record<string, str
 // property value.
 function cssValue(v: string): string {
 	return v.replace(/[;{}<>]/g, '').trim();
+}
+
+// A length destined for `calc(a + b)`, where a UNITLESS zero is invalid — CSS
+// refuses to add a bare number to a length, which would silently invalidate
+// the whole accumulated indent (and every level below it) the moment someone
+// typed a plain "0". Blank means the same thing the user meant by "0".
+function cssLength(v: string): string {
+	const value = cssValue(v);
+	if (value === '' || /^[+-]?0*(\.0*)?$/.test(value)) return '0px';
+	return value;
 }

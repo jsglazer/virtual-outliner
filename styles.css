@@ -106,7 +106,90 @@
    paints can be scoped tightly enough to outrank Obsidian's own `.cm-line`
    padding rules (which are more specific than a bare `.cm-line.vo-indent-lN`
    and were silently winning). The same pair of aliases serves reading view,
-   where the element is a paragraph/heading rather than a `.cm-line`. */
+   where the element is a paragraph/heading rather than a `.cm-line`.
+
+   These are REGISTERED as <length> deliberately. An unregistered custom
+   property is substituted as raw tokens, so an `em` inside one resolves
+   against the font-size of whatever element finally USES it — which made a
+   heading indent further than the prose beside it at the same outline
+   level, since the heading's own font-size is larger. Registering makes the
+   browser compute each value once, where it is declared (`:root`, written
+   by main.ts applyLevelCssVars), so a level's step is one fixed distance no
+   matter what the line's font-size happens to be. It also means a nonsense
+   value degrades to the initial 0px instead of invalidating the whole
+   declaration. */
+
+@property --vo-l1-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l2-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l3-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l4-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l5-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l6-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+
+@property --vo-l1-spacing {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l2-spacing {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l3-spacing {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l4-spacing {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l5-spacing {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l6-spacing {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-spacing {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
 
 .vo-indent-l1 {
 	--vo-indent: var(--vo-l1-indent, 0px);

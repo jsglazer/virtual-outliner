@@ -538,7 +538,7 @@ function defaultLevelFormat(level) {
     // level 1's step is the whole outline's base offset (0 = flush left)
     // and each deeper level's step is how much further right it sits than
     // its parent.
-    indentStep: level === 1 ? "0" : "1.5em",
+    indentStep: level === 1 ? "0px" : "1.5em",
     spacing: level === 1 ? "0.75em" : "0.25em",
     labelGap: "0.3em"
   };
@@ -629,14 +629,19 @@ function levelCssVars(levels) {
     vars[`--vo-l${n}-style`] = level.italic ? "italic" : "normal";
     vars[`--vo-l${n}-spacing`] = level.spacing !== "" ? cssValue(level.spacing) : "0px";
     vars[`--vo-l${n}-gap`] = level.labelGap !== "" ? cssValue(level.labelGap) : "0px";
-    const step = level.indentStep !== "" ? cssValue(level.indentStep) : "0px";
+    const step = cssLength(level.indentStep);
     cumulativeIndent = cumulativeIndent === "" ? step : `calc(${cumulativeIndent} + ${step})`;
-    vars[`--vo-l${n}-indent`] = cumulativeIndent !== "" ? cumulativeIndent : "0px";
+    vars[`--vo-l${n}-indent`] = cumulativeIndent;
   }
   return vars;
 }
 function cssValue(v) {
   return v.replace(/[;{}<>]/g, "").trim();
+}
+function cssLength(v) {
+  const value = cssValue(v);
+  if (value === "" || /^[+-]?0*(\.0*)?$/.test(value)) return "0px";
+  return value;
 }
 
 // src/editor/livePreview.ts
@@ -713,9 +718,11 @@ function buildOutlineDecorations(view, plan, sigilChar) {
   const items = [];
   for (const range of plan.hiddenLineRanges) {
     if (range.from >= lineCount || range.to > lineCount) continue;
-    const from = doc.line(range.from + 1).from;
-    const lastLine = range.to <= lineCount ? range.to : lineCount;
-    const to = lastLine < lineCount ? doc.line(lastLine + 1).from : doc.line(lastLine).to;
+    const lastLineNo = Math.min(range.to, lineCount);
+    const lastLine = doc.line(lastLineNo);
+    const atDocStart = range.from === 0;
+    const from = atDocStart ? doc.line(1).from : doc.line(range.from).to;
+    const to = atDocStart && lastLineNo < lineCount ? doc.line(lastLineNo + 1).from : lastLine.to;
     if (from >= to) continue;
     items.push({ from, to, deco: import_view.Decoration.replace({ block: true }) });
   }
