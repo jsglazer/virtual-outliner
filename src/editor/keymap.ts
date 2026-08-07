@@ -21,6 +21,16 @@ import type { EditSplice } from '../core/types';
 
 export interface KeymapHost {
 	sigilChar(view: EditorView): string;
+	// Recompute and apply outline decorations synchronously, bypassing the
+	// docChanged debounce (livePreview.ts's EDITOR_RESOLVE_DEBOUNCE_MS). Every
+	// binding below inserts or moves text right at a hidden-range boundary
+	// (a sibling entry after a collapsed/hidden body run, a promoted/demoted
+	// line crossing one, …) — leaving the stale pre-edit decoration set in
+	// place for 200ms after one of these edits let the still-hidden run's
+	// atomic block decoration swallow the new caret position, so the raw
+	// sigil characters briefly rendered as literal text instead of the new
+	// line appearing to have been created at all.
+	resolveNow(view: EditorView): void;
 }
 
 interface ActiveLine {
@@ -46,12 +56,13 @@ function activeLine(view: EditorView): ActiveLine | null {
 	return { lineIndex: line.number - 1, lineText: line.text, col: sel.head - line.from };
 }
 
-function dispatchSplice(view: EditorView, splice: EditSplice, selection?: number): boolean {
+function dispatchSplice(view: EditorView, host: KeymapHost, splice: EditSplice, selection?: number): boolean {
 	view.dispatch({
 		changes: { from: splice.from, to: splice.to, insert: splice.insert },
 		selection: selection !== undefined ? { anchor: selection } : undefined,
 		scrollIntoView: true,
 	});
+	host.resolveNow(view);
 	return true;
 }
 
@@ -71,7 +82,7 @@ function structuralBinding(
 
 		const splice = op(bodyOf(view), line.lineIndex, sigil);
 		if (!splice) return true; // consumed no-op
-		return dispatchSplice(view, splice);
+		return dispatchSplice(view, host, splice);
 	};
 }
 
@@ -87,7 +98,7 @@ function enterBinding(host: KeymapHost): (view: EditorView) => boolean {
 
 		const trailingNewline = splice.insert.endsWith('\n') ? 1 : 0;
 		const cursor = splice.from + splice.insert.length - trailingNewline;
-		return dispatchSplice(view, splice, cursor);
+		return dispatchSplice(view, host, splice, cursor);
 	};
 }
 
@@ -106,7 +117,7 @@ function bodyLineBinding(host: KeymapHost): (view: EditorView) => boolean {
 		if (!splice) return true; // consumed no-op
 		// The caret goes to the start of the line just opened, i.e. one past
 		// the inserted newline.
-		return dispatchSplice(view, splice, splice.from + splice.insert.length);
+		return dispatchSplice(view, host, splice, splice.from + splice.insert.length);
 	};
 }
 

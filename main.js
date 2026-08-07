@@ -584,7 +584,12 @@ function normalizeLevelFormat(v, level) {
     fontFamily: readString(v.fontFamily, fallback.fontFamily),
     color: readString(v.color, fallback.color),
     italic: readBool(v.italic, fallback.italic),
-    indentStep: readString(v.indentStep, fallback.indentStep),
+    // Level 1's indent step is never exposed in the settings UI (it's the
+    // outline's flush-left base offset, not a per-level user control), so
+    // unlike every other field it is NOT read from persisted data — this
+    // also self-heals data.json files saved before flush-left became the
+    // fixed behavior.
+    indentStep: level === 1 ? fallback.indentStep : readString(v.indentStep, fallback.indentStep),
     spacing: readString(v.spacing, fallback.spacing),
     labelGap: readString(v.labelGap, fallback.labelGap)
   };
@@ -899,12 +904,13 @@ function activeLine(view) {
   const line = view.state.doc.lineAt(sel.head);
   return { lineIndex: line.number - 1, lineText: line.text, col: sel.head - line.from };
 }
-function dispatchSplice(view, splice, selection) {
+function dispatchSplice(view, host, splice, selection) {
   view.dispatch({
     changes: { from: splice.from, to: splice.to, insert: splice.insert },
     selection: selection !== void 0 ? { anchor: selection } : void 0,
     scrollIntoView: true
   });
+  host.resolveNow(view);
   return true;
 }
 function structuralBinding(host, op) {
@@ -915,7 +921,7 @@ function structuralBinding(host, op) {
     if (!isOutlineLine(line.lineText, sigil)) return false;
     const splice = op(bodyOf(view), line.lineIndex, sigil);
     if (!splice) return true;
-    return dispatchSplice(view, splice);
+    return dispatchSplice(view, host, splice);
   };
 }
 function enterBinding(host) {
@@ -928,7 +934,7 @@ function enterBinding(host) {
     if (!splice) return false;
     const trailingNewline = splice.insert.endsWith("\n") ? 1 : 0;
     const cursor = splice.from + splice.insert.length - trailingNewline;
-    return dispatchSplice(view, splice, cursor);
+    return dispatchSplice(view, host, splice, cursor);
   };
 }
 function bodyLineBinding(host) {
@@ -939,7 +945,7 @@ function bodyLineBinding(host) {
     if (!isOutlineLine(line.lineText, sigil)) return false;
     const splice = addBodyLine(bodyOf(view), line.lineIndex, sigil);
     if (!splice) return true;
-    return dispatchSplice(view, splice, splice.from + splice.insert.length);
+    return dispatchSplice(view, host, splice, splice.from + splice.insert.length);
   };
 }
 function buildOutlineKeymap(host) {
@@ -1555,7 +1561,10 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     );
     this.applyLevelCssVars();
     this.registerEditorExtension([
-      buildOutlineKeymap({ sigilChar: () => this.settings.sigil }),
+      buildOutlineKeymap({
+        sigilChar: () => this.settings.sigil,
+        resolveNow: (view) => this.resolveEditor(view)
+      }),
       buildEditorExtension({
         attachEditor: (view) => this.editors.add(view),
         detachEditor: (view) => {

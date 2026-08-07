@@ -93,7 +93,12 @@ function normalizeLevelFormat(v: unknown, level: number): LevelFormat {
 		fontFamily: readString(v.fontFamily, fallback.fontFamily),
 		color: readString(v.color, fallback.color),
 		italic: readBool(v.italic, fallback.italic),
-		indentStep: readString(v.indentStep, fallback.indentStep),
+		// Level 1's indent step is never exposed in the settings UI (it's the
+		// outline's flush-left base offset, not a per-level user control), so
+		// unlike every other field it is NOT read from persisted data — this
+		// also self-heals data.json files saved before flush-left became the
+		// fixed behavior.
+		indentStep: level === 1 ? fallback.indentStep : readString(v.indentStep, fallback.indentStep),
 		spacing: readString(v.spacing, fallback.spacing),
 		labelGap: readString(v.labelGap, fallback.labelGap),
 	};

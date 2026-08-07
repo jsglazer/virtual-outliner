@@ -80,7 +80,10 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		this.applyLevelCssVars();
 
 		this.registerEditorExtension([
-			buildOutlineKeymap({ sigilChar: () => this.settings.sigil }),
+			buildOutlineKeymap({
+				sigilChar: () => this.settings.sigil,
+				resolveNow: (view) => this.resolveEditor(view),
+			}),
 			buildEditorExtension({
 				attachEditor: (view) => this.editors.add(view),
 				detachEditor: (view) => {
