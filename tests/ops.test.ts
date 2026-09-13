@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { addBodyLine, addSibling, demote, moveDown, moveUp, promote } from '../src/core/ops';
+import { addBodyLine, addSibling, demote, moveDown, moveUp, ownerNodeAtLine, promote } from '../src/core/ops';
 import { parseOutline } from '../src/core/parser';
 import type { EditSplice } from '../src/core/types';
 
@@ -76,6 +76,56 @@ describe('moveUp / moveDown (Alt-Up / Alt-Down)', () => {
 		expect(moveDown(doc, 5)).toBeNull(); // C is already last
 	});
 
+	it('moves the last block of the note without merging lines or leaving a blank line', () => {
+		const eof = '@ A\nA body\n@ B';
+		expect(apply(eof, moveDown(eof, 0))).toBe('@ B\n@ A\nA body');
+		expect(apply(eof, moveUp(eof, 2))).toBe('@ B\n@ A\nA body');
+		const trailing = '@ A\n@ B\n';
+		expect(apply(trailing, moveDown(trailing, 0))).toBe('@ B\n@ A\n');
+	});
+
+	it('reports where the moved block now starts', () => {
+		const down = moveDown(doc, 0);
+		expect(down?.movedTo).toBe(apply(doc, down).indexOf('@ A'));
+		const up = moveUp(doc, 3);
+		expect(up?.movedTo).toBe(0);
+	});
+
+	it('moves a first child up out of its parent, to the end of the previous section', () => {
+		const nested = ['@ One', '@@ One.1', '@ Two', 'Two body', '@@ Two.1', 'Two.1 body', '@@@ Two.1.1', '@@ Two.2'].join('\n');
+		const splice = moveUp(nested, 4); // Two.1 (with Two.1.1)
+		const result = apply(nested, splice);
+		expect(result).toBe(
+			['@ One', '@@ One.1', '@@ Two.1', 'Two.1 body', '@@@ Two.1.1', '@ Two', 'Two body', '@@ Two.2'].join('\n'),
+		);
+		expect(splice?.movedTo).toBe(result.indexOf('@@ Two.1'));
+		const parsed = parseOutline(result);
+		expect(parsed.roots[0]?.children.map((n) => n.text)).toEqual(['One.1', 'Two.1']);
+	});
+
+	it('moves a last child down out of its parent, to the start of the next section', () => {
+		const nested = ['@ One', '@@ One.1', '@@ One.2', 'One.2 body', '@ Two', 'Two body', '@@ Two.1'].join('\n');
+		const splice = moveDown(nested, 2); // One.2
+		const result = apply(nested, splice);
+		expect(result).toBe(['@ One', '@@ One.1', '@ Two', 'Two body', '@@ One.2', 'One.2 body', '@@ Two.1'].join('\n'));
+		expect(splice?.movedTo).toBe(result.indexOf('@@ One.2'));
+		const parsed = parseOutline(result);
+		expect(parsed.roots[1]?.children.map((n) => n.text)).toEqual(['One.2', 'Two.1']);
+	});
+
+	it('stops at the edge when there is no neighbouring section to cross into', () => {
+		const nested = ['@ One', '@@ One.1', '@ Two'].join('\n');
+		expect(moveUp(nested, 1)).toBeNull(); // One has no previous sibling
+		const last = ['@ One', '@ Two', '@@ Two.1'].join('\n');
+		expect(moveDown(last, 2)).toBeNull(); // Two has no next sibling
+	});
+
+	it('finds the owning entry for a body line', () => {
+		expect(ownerNodeAtLine(doc, 1)?.text).toBe('A');
+		expect(ownerNodeAtLine(doc, 4)?.text).toBe('B');
+		expect(ownerNodeAtLine('preamble\n@ A', 0)).toBeNull();
+	});
+
 	it('does not treat a child as a sibling to move past', () => {
 		// A.1 is B's neighbor in the flat list but is A's CHILD, not B's sibling.
 		expect(moveUp(doc, 3)).not.toBeNull();
@@ -100,9 +150,54 @@ describe('addSibling (Enter)', () => {
 		expect(result).toBe('@ A\nA body\n@ ');
 	});
 
-	it('falls through (returns null) when the cursor is mid-line', () => {
-		const doc = '@ Some entry text';
-		expect(addSibling(doc, 0, 3)).toBeNull();
+	it('splits the entry when the cursor is mid-text, the tail becoming a same-level entry below', () => {
+		const doc = ['@ A', '@@ Some entry text', '@ B'].join('\n');
+		const splice = addSibling(doc, 1, '@@ Some entry'.length);
+		const result = apply(doc, splice);
+		expect(result).toBe(['@ A', '@@ Some entry', '@@ text', '@ B'].join('\n'));
+		expect(splice?.cursor).toBe(result.indexOf('@@ text') + '@@ '.length);
+	});
+
+	it('keeps the id suffix on the original entry when splitting', () => {
+		const doc = '@ one two ^o-abcdefgh';
+		const result = apply(doc, addSibling(doc, 0, '@ one'.length));
+		expect(result).toBe('@ one ^o-abcdefgh\n@ two');
+	});
+
+	it('opens a blank entry above when Enter is pressed at the start of the text', () => {
+		const doc = '@ A\n@@ Text ^o-abcdefgh';
+		const splice = addSibling(doc, 1, '@@ '.length);
+		const result = apply(doc, splice);
+		expect(result).toBe('@ A\n@@ \n@@ Text ^o-abcdefgh');
+		expect(splice?.cursor).toBe(result.indexOf('@@ Text') + '@@ '.length);
+	});
+
+	it('treats trailing whitespace after the caret as end of line', () => {
+		const doc = '@ A   ';
+		const result = apply(doc, addSibling(doc, 0, '@ A'.length));
+		expect(result).toBe('@ A   \n@ ');
+	});
+
+	it('does not put a blank line between entries when the section ends in blank lines', () => {
+		const doc = ['@ A', 'body', '', '', '@ B'].join('\n');
+		const splice = addSibling(doc, 0, '@ A'.length);
+		const result = apply(doc, splice);
+		expect(result).toBe(['@ A', 'body', '@ ', '', '', '@ B'].join('\n'));
+		expect(splice?.cursor).toBe(result.indexOf('@ \n') + '@ '.length);
+	});
+
+	it('does not put a blank line before the new entry when the file ends with a newline', () => {
+		const doc = '@ A\n@ B\n';
+		const result = apply(doc, addSibling(doc, 1, '@ B'.length));
+		expect(result).toBe('@ A\n@ B\n@ \n');
+	});
+
+	it('"line" behavior opens the sibling on the very next line, ahead of body and children', () => {
+		const doc = ['@ A', 'A body', '@@ A.1', '@ B'].join('\n');
+		const splice = addSibling(doc, 0, '@ A'.length, '@', 'line');
+		const result = apply(doc, splice);
+		expect(result).toBe(['@ A', '@ ', 'A body', '@@ A.1', '@ B'].join('\n'));
+		expect(splice?.cursor).toBe('@ A\n@ '.length);
 	});
 
 	it('strips the sigils on an empty entry instead of creating another empty sibling', () => {

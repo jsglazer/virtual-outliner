@@ -484,6 +484,7 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
   const labels = /* @__PURE__ */ new Map();
   const entryLevel2 = /* @__PURE__ */ new Map();
   const indentLevel = /* @__PURE__ */ new Map();
+  const bodyIndentLevel = /* @__PURE__ */ new Map();
   const showLabels = viewState === "outline" || viewState === "both";
   for (const node of parsed.flat) {
     if (isLineHidden(hiddenLineRanges, node.entryLine)) continue;
@@ -495,11 +496,11 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
     for (const node of parsed.flat) {
       for (let line = node.ownBodyStart; line < node.ownBodyEnd; line++) {
         if (isLineHidden(hiddenLineRanges, line)) continue;
-        indentLevel.set(line, node.level);
+        bodyIndentLevel.set(line, node.level);
       }
     }
   }
-  return { parsed, labels, indentLevel, entryLevel: entryLevel2, hiddenLineRanges };
+  return { parsed, labels, indentLevel, bodyIndentLevel, entryLevel: entryLevel2, hiddenLineRanges };
 }
 
 // src/core/exportFilter.ts
@@ -524,6 +525,24 @@ function generateFilteredCopy(doc, sigilChar, levels, viewState, collapsedIds) {
 }
 
 // src/core/settings.ts
+function colorOption(color = "") {
+  return { enabled: color !== "", color };
+}
+function makeToolbarHighlight(onLight = "#fff3a3", onDark = "#7a6f1f") {
+  return {
+    toolbarUuid: "",
+    itemUuid: "",
+    on: { light: colorOption(onLight), dark: colorOption(onDark) },
+    off: { light: colorOption(), dark: colorOption() }
+  };
+}
+function defaultToolbarHighlights() {
+  return {
+    sidebar: makeToolbarHighlight(),
+    indentBody: makeToolbarHighlight(),
+    enterBehavior: makeToolbarHighlight()
+  };
+}
 var DEFAULT_LABEL_STYLES = ["1.0", "1", "1", "1", "1", "1"];
 function defaultLevelFormat(level) {
   var _a;
@@ -557,8 +576,10 @@ function defaultSettings() {
     sigil: DEFAULT_SIGIL_CHAR,
     defaultViewState: "both",
     indentBody: true,
+    enterBehavior: "section",
     levels,
-    metaFields: defaultMetaFields()
+    metaFields: defaultMetaFields(),
+    toolbarHighlights: defaultToolbarHighlights()
   };
 }
 function isRecord2(v) {
@@ -602,6 +623,32 @@ function normalizeMetaField(v) {
   const options = Array.isArray(v.options) ? v.options.filter((o) => typeof o === "string") : [];
   return { name: v.name, type, options };
 }
+function readColorOption(v) {
+  if (!isRecord2(v)) return colorOption();
+  return { enabled: v.enabled === true, color: readString(v.color, "") };
+}
+function readThemedColorOption(v, fallback) {
+  if (!isRecord2(v)) return fallback;
+  return { light: readColorOption(v.light), dark: readColorOption(v.dark) };
+}
+function readToolbarHighlight(v, fallback) {
+  if (!isRecord2(v)) return fallback;
+  return {
+    toolbarUuid: readString(v.toolbarUuid, ""),
+    itemUuid: readString(v.itemUuid, ""),
+    on: readThemedColorOption(v.on, fallback.on),
+    off: readThemedColorOption(v.off, fallback.off)
+  };
+}
+function readToolbarHighlights(v) {
+  const fallback = defaultToolbarHighlights();
+  if (!isRecord2(v)) return fallback;
+  return {
+    sidebar: readToolbarHighlight(v.sidebar, fallback.sidebar),
+    indentBody: readToolbarHighlight(v.indentBody, fallback.indentBody),
+    enterBehavior: readToolbarHighlight(v.enterBehavior, fallback.enterBehavior)
+  };
+}
 var VIEW_STATES = /* @__PURE__ */ new Set(["outline", "body", "both"]);
 function normalizeSettings(raw) {
   const fallback = defaultSettings();
@@ -617,11 +664,19 @@ function normalizeSettings(raw) {
     sigil,
     defaultViewState,
     indentBody: readBool(raw.indentBody, fallback.indentBody),
+    enterBehavior: raw.enterBehavior === "line" ? "line" : "section",
     levels,
-    metaFields: metaFields.length > 0 ? metaFields : fallback.metaFields
+    metaFields: metaFields.length > 0 ? metaFields : fallback.metaFields,
+    toolbarHighlights: readToolbarHighlights(raw.toolbarHighlights)
   };
 }
+function toolbarHighlightColor(highlight, active, dark) {
+  const themed = active ? highlight.on : highlight.off;
+  const opt = dark ? themed.dark : themed.light;
+  return opt.enabled && /^#[0-9a-fA-F]{6}$/.test(opt.color) ? opt.color : "";
+}
 function levelCssVars(levels) {
+  var _a, _b;
   const vars = {};
   let cumulativeIndent = "";
   for (let i = 0; i < levels.length; i++) {
@@ -638,6 +693,11 @@ function levelCssVars(levels) {
     const step = cssLength(level.indentStep);
     cumulativeIndent = cumulativeIndent === "" ? step : `calc(${cumulativeIndent} + ${step})`;
     vars[`--vo-l${n}-indent`] = cumulativeIndent;
+  }
+  for (let n = 1; n <= levels.length; n++) {
+    const next = (_a = levels[n]) != null ? _a : levels[n - 1];
+    const step = next ? cssLength(next.indentStep) : "0px";
+    vars[`--vo-l${n}-body-indent`] = `calc(${(_b = vars[`--vo-l${n}-indent`]) != null ? _b : "0px"} + ${step})`;
   }
   return vars;
 }
@@ -822,6 +882,11 @@ function buildOutlineDecorations(view, plan, sigilChar) {
     const line = doc.line(lineIndex + 1);
     items.push({ from: line.from, to: line.from, deco: import_view.Decoration.line({ class: `vo-indent-l${level}` }) });
   }
+  for (const [lineIndex, level] of plan.bodyIndentLevel) {
+    if (lineIndex >= lineCount) continue;
+    const line = doc.line(lineIndex + 1);
+    items.push({ from: line.from, to: line.from, deco: import_view.Decoration.line({ class: `vo-body-indent-l${level}` }) });
+  }
   for (const [lineIndex, level] of plan.entryLevel) {
     if (lineIndex >= lineCount) continue;
     const line = doc.line(lineIndex + 1);
@@ -892,58 +957,123 @@ function promote(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
   const insert = shiftSubtreeLevels(subtreeText(body, lines, node), -1, sigilChar);
   return { from, to, insert };
 }
+function rejoinChunks(body, from, to, chunks) {
+  var _a;
+  const withBreaks = chunks.filter((c) => c !== "").map((c) => c.endsWith("\n") ? c : c + "\n");
+  const last = withBreaks.length - 1;
+  const originalHadBreak = body.slice(from, to).endsWith("\n");
+  if (last >= 0 && !originalHadBreak) withBreaks[last] = ((_a = withBreaks[last]) != null ? _a : "").slice(0, -1);
+  return withBreaks;
+}
+function ownerNodeAtLine(body, line, sigilChar = DEFAULT_SIGIL_CHAR) {
+  const parsed = parseOutline(body, sigilChar);
+  let owner = null;
+  for (const node of parsed.flat) {
+    if (node.entryLine > line) break;
+    owner = node;
+  }
+  return owner;
+}
 function moveUp(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
   const lines = body.split("\n");
   const parsed = parseOutline(body, sigilChar);
   const node = nodeAtLine(parsed, entryLine);
   if (!node) return null;
-  const prev = previousSibling(parsed, node);
-  if (!prev) return null;
-  const prevRange = sliceRange(lines, prev.subtreeStart, prev.subtreeEnd);
   const nodeRange = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
-  const prevText = body.slice(prevRange.from, prevRange.to);
   const nodeText = body.slice(nodeRange.from, nodeRange.to);
-  return { from: prevRange.from, to: nodeRange.to, insert: nodeText + prevText };
+  const prev = previousSibling(parsed, node);
+  if (prev) {
+    const prevRange = sliceRange(lines, prev.subtreeStart, prev.subtreeEnd);
+    const prevText = body.slice(prevRange.from, prevRange.to);
+    const chunks2 = rejoinChunks(body, prevRange.from, nodeRange.to, [nodeText, prevText]);
+    return { from: prevRange.from, to: nodeRange.to, insert: chunks2.join(""), movedTo: prevRange.from };
+  }
+  const parent = node.parent;
+  if (!parent || !previousSibling(parsed, parent)) return null;
+  const headRange = sliceRange(lines, parent.entryLine, node.subtreeStart);
+  const headText = body.slice(headRange.from, headRange.to);
+  const chunks = rejoinChunks(body, headRange.from, nodeRange.to, [nodeText, headText]);
+  return { from: headRange.from, to: nodeRange.to, insert: chunks.join(""), movedTo: headRange.from };
 }
 function moveDown(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
+  var _a, _b;
   const lines = body.split("\n");
   const parsed = parseOutline(body, sigilChar);
   const node = nodeAtLine(parsed, entryLine);
   if (!node) return null;
-  const next = nextSibling(parsed, node);
-  if (!next) return null;
   const nodeRange = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
-  const nextRange = sliceRange(lines, next.subtreeStart, next.subtreeEnd);
   const nodeText = body.slice(nodeRange.from, nodeRange.to);
-  const nextText = body.slice(nextRange.from, nextRange.to);
-  return { from: nodeRange.from, to: nextRange.to, insert: nextText + nodeText };
+  const next = nextSibling(parsed, node);
+  if (next) {
+    const nextRange = sliceRange(lines, next.subtreeStart, next.subtreeEnd);
+    const nextText = body.slice(nextRange.from, nextRange.to);
+    const chunks2 = rejoinChunks(body, nodeRange.from, nextRange.to, [nextText, nodeText]);
+    return {
+      from: nodeRange.from,
+      to: nextRange.to,
+      insert: chunks2.join(""),
+      movedTo: nodeRange.from + ((_a = chunks2[0]) != null ? _a : "").length
+    };
+  }
+  const parent = node.parent;
+  const parentNext = parent ? nextSibling(parsed, parent) : null;
+  if (!parentNext) return null;
+  const headRange = sliceRange(lines, node.subtreeEnd, parentNext.ownBodyEnd);
+  const headText = body.slice(headRange.from, headRange.to);
+  const chunks = rejoinChunks(body, nodeRange.from, headRange.to, [headText, nodeText]);
+  return {
+    from: nodeRange.from,
+    to: headRange.to,
+    insert: chunks.join(""),
+    movedTo: nodeRange.from + ((_b = chunks[0]) != null ? _b : "").length
+  };
 }
-function addSibling(body, entryLine, cursorCol, sigilChar = DEFAULT_SIGIL_CHAR) {
+function addSibling(body, entryLine, cursorCol, sigilChar = DEFAULT_SIGIL_CHAR, behavior = "section") {
   var _a, _b, _c, _d, _e;
   const lines = body.split("\n");
-  const line = (_a = lines[entryLine]) != null ? _a : "";
-  const idMatch = ID_SUFFIX_RE.exec(line);
-  const visibleEnd = idMatch ? idMatch.index : line.length;
-  if (cursorCol !== line.length && cursorCol !== visibleEnd) return null;
+  const line = lines[entryLine];
+  if (line === void 0) return null;
   const match = outlineLineRegex(sigilChar).exec(line);
   if (!match) return null;
-  const level = ((_b = match[1]) != null ? _b : "").length;
-  const rest = (_c = match[2]) != null ? _c : "";
+  const sigils = (_a = match[1]) != null ? _a : "";
+  const rest = (_b = match[2]) != null ? _b : "";
   const { text } = splitEntryId(rest);
+  const prefixEnd = line.length - rest.length;
+  const idMatch = ID_SUFFIX_RE.exec(line);
+  const visibleEnd = idMatch ? idMatch.index : line.length;
+  const newEntry = sigils + " ";
   const offsets = lineStartOffsets(lines);
+  const lineStart = (_c = offsets[entryLine]) != null ? _c : 0;
+  const lineEnd = lineStart + line.length;
   if (text.trim() === "") {
-    const from = (_d = offsets[entryLine]) != null ? _d : 0;
-    const to = from + line.length;
-    return { from, to, insert: "" };
+    return { from: lineStart, to: lineEnd, insert: "", cursor: lineStart };
+  }
+  const col = Math.max(cursorCol, prefixEnd);
+  const atVisibleEnd = col >= visibleEnd || line.slice(col, visibleEnd).trim() === "";
+  if (!atVisibleEnd) {
+    if (line.slice(prefixEnd, col).trim() === "") {
+      const insert3 = newEntry + "\n";
+      return { from: lineStart, to: lineStart, insert: insert3, cursor: lineStart + insert3.length + prefixEnd };
+    }
+    const head = line.slice(0, col).trimEnd() + line.slice(visibleEnd);
+    const insert2 = head + "\n" + newEntry + line.slice(col, visibleEnd).trimStart();
+    return { from: lineStart, to: lineEnd, insert: insert2, cursor: lineStart + head.length + 1 + newEntry.length };
+  }
+  if (behavior === "line") {
+    const insert2 = "\n" + newEntry;
+    return { from: lineEnd, to: lineEnd, insert: insert2, cursor: lineEnd + insert2.length };
   }
   const parsed = parseOutline(body, sigilChar);
   const node = nodeAtLine(parsed, entryLine);
   if (!node) return null;
-  const insertAt = (_e = offsets[node.subtreeEnd]) != null ? _e : body.length;
-  const atEof = node.subtreeEnd >= parsed.lineCount;
-  const newEntry = sigilChar.repeat(level) + " ";
-  const insert = atEof ? "\n" + newEntry : newEntry + "\n";
-  return { from: insertAt, to: insertAt, insert };
+  let lastLine = node.subtreeEnd - 1;
+  while (lastLine > entryLine && ((_d = lines[lastLine]) != null ? _d : "").trim() === "") lastLine--;
+  if (lastLine + 1 < lines.length) {
+    const insertAt = (_e = offsets[lastLine + 1]) != null ? _e : body.length;
+    return { from: insertAt, to: insertAt, insert: newEntry + "\n", cursor: insertAt + newEntry.length };
+  }
+  const insert = "\n" + newEntry;
+  return { from: body.length, to: body.length, insert, cursor: body.length + insert.length };
 }
 function addBodyLine(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
   var _a;
@@ -997,11 +1127,33 @@ function enterBinding(host) {
     if (!line) return false;
     const sigil = host.sigilChar(view);
     if (!isOutlineLine(line.lineText, sigil)) return false;
-    const splice = addSibling(bodyOf(view), line.lineIndex, line.col, sigil);
+    const splice = addSibling(bodyOf(view), line.lineIndex, line.col, sigil, host.enterBehavior());
     if (!splice) return false;
-    const trailingNewline = splice.insert.endsWith("\n") ? 1 : 0;
-    const cursor = splice.from + splice.insert.length - trailingNewline;
-    return dispatchSplice(view, host, splice, cursor);
+    return dispatchSplice(view, host, splice, splice.cursor);
+  };
+}
+function moveBlock(view, host, direction) {
+  const line = activeLine(view);
+  if (!line) return false;
+  const sigil = host.sigilChar(view);
+  const body = bodyOf(view);
+  const node = ownerNodeAtLine(body, line.lineIndex, sigil);
+  if (!node) return false;
+  const splice = (direction === "up" ? moveUp : moveDown)(body, node.entryLine, sigil);
+  if (!splice) return true;
+  const blockStart = view.state.doc.line(node.subtreeStart + 1).from;
+  const offsetInBlock = view.state.selection.main.head - blockStart;
+  const cursor = splice.movedTo !== void 0 ? splice.movedTo + offsetInBlock : void 0;
+  return dispatchSplice(view, host, splice, cursor);
+}
+function moveBinding(host, direction) {
+  return (view) => {
+    const line = activeLine(view);
+    if (!line) return false;
+    const sigil = host.sigilChar(view);
+    if (!isOutlineLine(line.lineText, sigil)) return false;
+    if (isEntryLine(line.lineText, sigil)) moveBlock(view, host, direction);
+    return true;
   };
 }
 function bodyLineBinding(host) {
@@ -1034,8 +1186,8 @@ function buildOutlineKeymap(host) {
     { key: "Mod-Enter", run: bodyLineBinding(host) },
     { key: "Tab", run: structuralBinding(host, demote) },
     { key: "Shift-Tab", run: structuralBinding(host, promote) },
-    { key: "Alt-ArrowUp", run: structuralBinding(host, moveUp) },
-    { key: "Alt-ArrowDown", run: structuralBinding(host, moveDown) }
+    { key: "Alt-ArrowUp", run: moveBinding(host, "up") },
+    { key: "Alt-ArrowDown", run: moveBinding(host, "down") }
   ];
   return import_state2.Prec.highest(import_view2.keymap.of(bindings));
 }
@@ -1143,9 +1295,13 @@ function blockWrapSegment(segment, classes, doc) {
   (_b = segment.br) == null ? void 0 : _b.remove();
   return wrapper;
 }
-function levelClasses(indentLevel, entryLevel2) {
+function levelClasses(plan, line) {
+  const indentLevel = plan.indentLevel.get(line);
+  const entryLevel2 = plan.entryLevel.get(line);
+  const bodyIndentLevel = plan.bodyIndentLevel.get(line);
   const classes = [];
   if (indentLevel !== void 0) classes.push(`vo-indent-l${indentLevel}`);
+  if (bodyIndentLevel !== void 0) classes.push(`vo-body-indent-l${bodyIndentLevel}`);
   if (entryLevel2 !== void 0) classes.push(`vo-entry-l${entryLevel2}`);
   return classes;
 }
@@ -1173,7 +1329,7 @@ function createReadingPostProcessor(host) {
         el.addClass("vo-hidden");
         return;
       }
-      for (const cls of levelClasses(plan.indentLevel.get(lineStart), plan.entryLevel.get(lineStart))) {
+      for (const cls of levelClasses(plan, lineStart)) {
         el.addClass(cls);
       }
       const label = plan.labels.get(lineStart);
@@ -1201,10 +1357,9 @@ function createReadingPostProcessor(host) {
     if (segments.length !== lineEnd - lineStart + 1) {
       for (let line = lineStart; line <= lineEnd; line++) {
         if (isLineHidden(plan.hiddenLineRanges, line)) continue;
-        const indent = plan.indentLevel.get(line);
-        const entryLvl = plan.entryLevel.get(line);
-        if (indent === void 0 && entryLvl === void 0) continue;
-        for (const cls of levelClasses(indent, entryLvl)) el.addClass(cls);
+        const classes = levelClasses(plan, line);
+        if (classes.length === 0) continue;
+        for (const cls of classes) el.addClass(cls);
         break;
       }
       return;
@@ -1219,7 +1374,7 @@ function createReadingPostProcessor(host) {
         if (hidden) (_b = segment.br) == null ? void 0 : _b.remove();
         continue;
       }
-      const classes = hidden ? ["vo-hidden"] : ["vo-line", ...levelClasses(plan.indentLevel.get(line), plan.entryLevel.get(line))];
+      const classes = hidden ? ["vo-hidden"] : ["vo-line", ...levelClasses(plan, line)];
       const wrapper = blockWrapSegment(segment, classes, doc);
       if (!wrapper || hidden) continue;
       const label = plan.labels.get(line);
@@ -1234,6 +1389,121 @@ function createReadingPostProcessor(host) {
 
 // src/settingsTab.ts
 var import_obsidian2 = require("obsidian");
+
+// src/ui/toolbarHighlight.ts
+var SKIP_ITEM_TYPES = /* @__PURE__ */ new Set(["separator", "break", "spreader", "group"]);
+var HIGHLIGHT_CLASS = "vo-toolbar-highlight";
+function getNoteToolbarPlugin(app) {
+  var _a, _b;
+  const registry = app.plugins;
+  if (!((_a = registry == null ? void 0 : registry.enabledPlugins) == null ? void 0 : _a.has("note-toolbar"))) return null;
+  const plugin = (_b = registry.plugins) == null ? void 0 : _b["note-toolbar"];
+  return plugin !== null && typeof plugin === "object" ? plugin : null;
+}
+function rawToolbars(app) {
+  var _a, _b;
+  const toolbars = (_b = (_a = getNoteToolbarPlugin(app)) == null ? void 0 : _a.settings) == null ? void 0 : _b.toolbars;
+  return Array.isArray(toolbars) ? toolbars : [];
+}
+function rawItems(toolbar) {
+  return Array.isArray(toolbar.items) ? toolbar.items : [];
+}
+function isNoteToolbarAvailable(app) {
+  return getNoteToolbarPlugin(app) !== null;
+}
+function listToolbars(app) {
+  return rawToolbars(app).filter((t) => typeof t.uuid === "string").map((t) => ({
+    uuid: t.uuid,
+    name: typeof t.name === "string" && t.name !== "" ? t.name : "(untitled toolbar)"
+  }));
+}
+function listHighlightableItems(app, toolbarUuid) {
+  const toolbar = rawToolbars(app).find((t) => t.uuid === toolbarUuid);
+  if (!toolbar) return [];
+  return rawItems(toolbar).filter((i) => typeof i.uuid === "string").filter((i) => {
+    var _a;
+    const type = (_a = i.linkAttr) == null ? void 0 : _a.type;
+    return typeof type === "string" && !SKIP_ITEM_TYPES.has(type);
+  }).filter(
+    (i) => typeof i.label === "string" && i.label !== "" || typeof i.icon === "string" && i.icon !== ""
+  ).map((i) => ({
+    uuid: i.uuid,
+    label: typeof i.label === "string" ? i.label : "",
+    tooltip: typeof i.tooltip === "string" ? i.tooltip : "",
+    icon: typeof i.icon === "string" ? i.icon : ""
+  }));
+}
+function itemDisplayName(item) {
+  return item.label || item.tooltip || item.icon || "(untitled item)";
+}
+var ToolbarHighlighter = class {
+  constructor(app, getTargets) {
+    this.app = app;
+    this.getTargets = getTargets;
+  }
+  // Re-applies every target for the current toggle states. Cheap and
+  // idempotent, so it is safe to call on any workspace event.
+  refresh() {
+    var _a;
+    this.clear();
+    const targets = this.getTargets().filter(
+      (t) => t.highlight.toolbarUuid !== "" && t.highlight.itemUuid !== ""
+    );
+    if (targets.length === 0) return;
+    const containers = this.toolbarContainers();
+    if (containers.length === 0) return;
+    for (const { highlight, active } of targets) {
+      const toolbar = rawToolbars(this.app).find((t) => t.uuid === highlight.toolbarUuid);
+      if (!toolbar) continue;
+      const index = rawItems(toolbar).findIndex((i) => i.uuid === highlight.itemUuid);
+      if (index === -1) continue;
+      for (const container of containers) {
+        if (container.id !== highlight.toolbarUuid) continue;
+        const target = (_a = container.querySelector(`li[data-index="${index}"]`)) == null ? void 0 : _a.firstElementChild;
+        if (!(target instanceof HTMLElement)) continue;
+        const dark = target.ownerDocument.body.classList.contains("theme-dark");
+        const bg = toolbarHighlightColor(highlight, active, dark);
+        if (bg === "") continue;
+        target.addClass(HIGHLIGHT_CLASS);
+        target.style.setProperty("background-color", bg);
+      }
+    }
+  }
+  // Removes every colour this plugin applied, wherever it currently lives.
+  clear() {
+    for (const container of this.toolbarContainers()) {
+      for (const el of Array.from(
+        container.querySelectorAll(`.${HIGHLIGHT_CLASS}`)
+      )) {
+        el.removeClass(HIGHLIGHT_CLASS);
+        el.style.removeProperty("background-color");
+        el.style.removeProperty("color");
+      }
+    }
+  }
+  // Every rendered Note Toolbar container across the workspace. Walking the
+  // leaves rather than one document means popout windows are covered too.
+  toolbarContainers() {
+    const containers = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      containers.push(
+        ...Array.from(
+          leaf.view.containerEl.querySelectorAll(".cg-note-toolbar-container")
+        )
+      );
+    });
+    return containers;
+  }
+};
+
+// src/settingsTab.ts
+function isValidHex(v) {
+  return /^#[0-9a-fA-F]{6}$/.test(v);
+}
+var ENTER_BEHAVIOR_OPTIONS = {
+  section: "After the whole section",
+  line: "On the next line"
+};
 var LABEL_STYLE_OPTIONS = {
   "1": "1, 2, 3",
   "1.0": "N.0 (1.0, 2.0, 3.0)",
@@ -1289,6 +1559,15 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
         await this.plugin.saveSettings();
       });
     });
+    new import_obsidian2.Setting(containerEl).setName("Enter at the end of an entry").setDesc(
+      "Where the new same-level entry goes. After the whole section keeps the current entry's body and sub-entries with it; on the next line puts the new entry directly below, so that body and those sub-entries move under the new entry. Pressing return in the middle of an entry always splits it in place."
+    ).addDropdown((dropdown) => {
+      for (const [value, label] of Object.entries(ENTER_BEHAVIOR_OPTIONS)) dropdown.addOption(value, label);
+      dropdown.setValue(this.plugin.settings.enterBehavior).onChange(async (value) => {
+        this.plugin.settings.enterBehavior = value === "line" ? "line" : "section";
+        await this.plugin.saveSettings();
+      });
+    });
     new import_obsidian2.Setting(containerEl).setName("Level format").setHeading();
     containerEl.createEl("p", {
       cls: "vo-fixture-note",
@@ -1301,6 +1580,138 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
       text: "Per-node fields (status, note, \u2026) exposed to Dataview/Datacore and stored in the end-of-file %%md-outline block."
     });
     this.renderMetaFields(containerEl);
+    this.renderToolbarSection(containerEl);
+  }
+  // ── Note Toolbar buttons (ported from md-annotation's Note Toolbar tab) ──
+  renderToolbarSection(containerEl) {
+    new import_obsidian2.Setting(containerEl).setName("Note Toolbar buttons").setHeading();
+    if (!isNoteToolbarAvailable(this.app)) {
+      containerEl.createEl("p", {
+        cls: "vo-fixture-note",
+        // eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name
+        text: "Install and enable the Note Toolbar plugin to have one of its buttons change colour while the toggle it runs is on."
+      });
+      return;
+    }
+    containerEl.createEl("p", {
+      cls: "vo-fixture-note",
+      // eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name; On/Off name the grid columns
+      text: `Pick the toolbar button that runs each toggle command below and it takes the On colour while that toggle is on, so the toolbar reads as pressed, and the Off colour while it is off. A colour left unticked leaves the button to Note Toolbar for that state \u2014 Off is unticked by default, so only "on" stands out. Backgrounds only: the icon and label colour stay Note Toolbar's.`
+    });
+    const highlights = this.plugin.settings.toolbarHighlights;
+    const rows = [
+      { name: "Outline sidebar button", short: "Sidebar", highlight: highlights.sidebar },
+      { name: "Indent body button", short: "Indent body", highlight: highlights.indentBody },
+      { name: "Enter on next line button", short: "Enter: next line", highlight: highlights.enterBehavior }
+    ];
+    for (const row of rows) this.renderToolbarItemPicker(containerEl, row.name, row.highlight);
+    const wrap = containerEl.createDiv("vo-grid-wrap");
+    const table = wrap.createEl("table", { cls: "vo-grid-table" });
+    const thead = table.createEl("thead");
+    const r1 = thead.createEl("tr");
+    r1.createEl("th", { text: "Button", attr: { rowspan: "2" }, cls: "vo-grid-name-h" });
+    r1.createEl("th", { text: "Light", attr: { colspan: "2" }, cls: "vo-grid-sep" });
+    r1.createEl("th", { text: "Dark", attr: { colspan: "2" }, cls: "vo-grid-sep" });
+    r1.createEl("th", { text: "Example", attr: { rowspan: "2" }, cls: "vo-grid-sep" });
+    const r2 = thead.createEl("tr");
+    for (let i = 0; i < 4; i++) {
+      r2.createEl("th", { text: i % 2 === 0 ? "On" : "Off", cls: i % 2 === 0 ? "vo-grid-sep" : "" });
+    }
+    const tbody = table.createEl("tbody");
+    for (const row of rows) this.renderToolbarHighlightRow(tbody, row.short, row.highlight);
+  }
+  // Toolbar + item dropdowns. Changing the toolbar clears the item, since
+  // item uuids belong to a single toolbar.
+  renderToolbarItemPicker(containerEl, name, highlight) {
+    new import_obsidian2.Setting(containerEl).setName(name).setDesc("Toolbar, then the button within it").addDropdown((dropdown) => {
+      dropdown.addOption("", "None");
+      for (const toolbar of listToolbars(this.app)) dropdown.addOption(toolbar.uuid, toolbar.name);
+      dropdown.setValue(highlight.toolbarUuid).onChange(async (value) => {
+        highlight.toolbarUuid = value;
+        highlight.itemUuid = "";
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    }).addDropdown((dropdown) => {
+      const items = highlight.toolbarUuid ? listHighlightableItems(this.app, highlight.toolbarUuid) : [];
+      dropdown.addOption("", items.length === 0 ? "No buttons" : "None");
+      for (const item of items) dropdown.addOption(item.uuid, itemDisplayName(item));
+      dropdown.setDisabled(items.length === 0);
+      dropdown.setValue(highlight.itemUuid).onChange(async (value) => {
+        highlight.itemUuid = value;
+        await this.plugin.saveSettings();
+      });
+    });
+  }
+  renderToolbarHighlightRow(tbody, label, highlight) {
+    const tr = tbody.createEl("tr");
+    tr.createEl("td", { text: label, cls: "vo-grid-name" });
+    let exampleTd = null;
+    const refreshExample = () => {
+      if (!exampleTd) return;
+      exampleTd.empty();
+      const theme = this.containerEl.ownerDocument.body.classList.contains("theme-dark") ? "dark" : "light";
+      for (const [text, opt] of [
+        ["On", highlight.on[theme]],
+        ["Off", highlight.off[theme]]
+      ]) {
+        const span = exampleTd.createEl("span", { text });
+        span.setCssStyles({ backgroundColor: opt.enabled && isValidHex(opt.color) ? opt.color : "" });
+        exampleTd.appendText(" ");
+      }
+    };
+    for (const theme of ["light", "dark"]) {
+      for (const state of ["on", "off"]) {
+        const td = tr.createEl("td", { cls: state === "on" ? "vo-grid-sep" : "" });
+        this.renderColorCell(td, highlight[state][theme], refreshExample);
+      }
+    }
+    exampleTd = tr.createEl("td", { cls: "vo-grid-example vo-grid-sep" });
+    refreshExample();
+  }
+  // A checkbox, a swatch (native picker), and an editable hex field bound to
+  // one ColorOption. Setting a colour by either control ticks the checkbox;
+  // the checkbox alone decides whether the stored colour is applied.
+  renderColorCell(td, opt, onChanged) {
+    const wrap = td.createDiv("vo-grid-cell");
+    const check = wrap.createEl("input", { attr: { type: "checkbox" }, cls: "vo-grid-check" });
+    check.checked = opt.enabled;
+    const picker = wrap.createEl("input", { attr: { type: "color" }, cls: "vo-grid-color" });
+    picker.value = isValidHex(opt.color) ? opt.color : "#888888";
+    const hex = wrap.createEl("input", {
+      cls: "vo-grid-hex",
+      // eslint-disable-next-line obsidianmd/ui/sentence-case -- '#hex' is a hex-notation placeholder, not prose
+      attr: { type: "text", maxlength: "7", placeholder: "#hex", spellcheck: "false" }
+    });
+    hex.value = isValidHex(opt.color) ? opt.color : "";
+    const setColor = (value, persist) => {
+      opt.color = value;
+      picker.value = value;
+      hex.value = value;
+      if (!opt.enabled) {
+        opt.enabled = true;
+        check.checked = true;
+      }
+      if (persist) void this.plugin.saveSettings();
+      onChanged();
+    };
+    check.addEventListener("change", () => {
+      opt.enabled = check.checked;
+      if (opt.enabled && !isValidHex(opt.color)) {
+        opt.color = picker.value;
+        hex.value = picker.value;
+      }
+      void this.plugin.saveSettings();
+      onChanged();
+    });
+    picker.addEventListener("input", () => setColor(picker.value, false));
+    picker.addEventListener("change", () => setColor(picker.value, true));
+    hex.addEventListener("change", () => {
+      const raw = hex.value.trim();
+      const value = raw.startsWith("#") ? raw : `#${raw}`;
+      if (isValidHex(value)) setColor(value.toLowerCase(), true);
+      else hex.value = isValidHex(opt.color) ? opt.color : "";
+    });
   }
   // One NAMED row per property, applied to every level at once (Update003:
   // the previous layout repeated these ten controls inside a collapsible
@@ -1619,6 +2030,7 @@ function normalizeFileStateEntry(v, fallback) {
 }
 var RESOLVE_DEBOUNCE_MS = 200;
 var CSS_VAR_STYLE_ID = "virtual-outliner-level-vars";
+var TOOLBAR_HIGHLIGHT_DELAY_MS = 50;
 var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
@@ -1629,6 +2041,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     this.editorTimers = /* @__PURE__ */ new Map();
     this.diskTimers = /* @__PURE__ */ new Map();
     this.changeListeners = /* @__PURE__ */ new Set();
+    this.toolbarHighlighter = null;
+    this.toolbarTimer = null;
   }
   async onload() {
     const raw = await this.loadData();
@@ -1640,14 +2054,16 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       () => this.settings.levels
     );
     this.applyLevelCssVars();
+    this.keymapHost = {
+      sigilChar: () => this.settings.sigil,
+      enterBehavior: () => this.settings.enterBehavior,
+      resolveNow: (view) => this.resolveEditor(view)
+    };
     this.registerEditorExtension([
       buildHiddenContentGuard(() => {
         new import_obsidian4.Notice("Hidden text is not deleted from this view \u2014 switch to outline and body to edit it.");
       }),
-      buildOutlineKeymap({
-        sigilChar: () => this.settings.sigil,
-        resolveNow: (view) => this.resolveEditor(view)
-      }),
+      buildOutlineKeymap(this.keymapHost),
       buildEditorExtension({
         attachEditor: (view) => this.editors.add(view),
         detachEditor: (view) => {
@@ -1672,11 +2088,11 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     );
     this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new OutlineSidebarView(leaf, this.sidebarHost()));
     this.addSettingTab(new VirtualOutlinerSettingTab(this.app, this));
-    this.addRibbonIcon("list-tree", "Open outline sidebar", () => void this.activateSidebar());
+    this.addRibbonIcon("list-tree", "Toggle outline sidebar", () => void this.toggleSidebar());
     this.addCommand({
       id: "open-sidebar",
-      name: "Open outline sidebar",
-      callback: () => void this.activateSidebar()
+      name: "Toggle outline sidebar",
+      callback: () => void this.toggleSidebar()
     });
     const viewStateCommand = (id, name, viewState) => {
       this.addCommand({
@@ -1703,6 +2119,32 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
         new import_obsidian4.Notice(this.settings.indentBody ? "Indent body with outline: on" : "Indent body with outline: off");
       }
     });
+    this.addCommand({
+      id: "toggle-enter-behavior",
+      name: "Toggle new entry on next line vs after section",
+      callback: () => {
+        this.settings.enterBehavior = this.settings.enterBehavior === "line" ? "section" : "line";
+        void this.saveSettings();
+        new import_obsidian4.Notice(
+          this.settings.enterBehavior === "line" ? "Enter adds the new entry on the next line" : "Enter adds the new entry after the whole section"
+        );
+      }
+    });
+    const moveCommand = (id, name, direction) => {
+      this.addCommand({
+        id,
+        name,
+        checkCallback: (checking) => {
+          const view = this.activeEditorView();
+          if (!view) return false;
+          if (checking) return true;
+          moveBlock(view, this.keymapHost, direction);
+          return true;
+        }
+      });
+    };
+    moveCommand("move-block-up", "Move outline block up", "up");
+    moveCommand("move-block-down", "Move outline block down", "down");
     this.addCommand({
       id: "generate-filtered-copy",
       name: "Generate filtered copy",
@@ -1755,6 +2197,19 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
         this.notifyChange();
       })
     );
+    this.toolbarHighlighter = new ToolbarHighlighter(this.app, () => [
+      { highlight: this.settings.toolbarHighlights.sidebar, active: this.isSidebarShown() },
+      { highlight: this.settings.toolbarHighlights.indentBody, active: this.settings.indentBody },
+      {
+        highlight: this.settings.toolbarHighlights.enterBehavior,
+        active: this.settings.enterBehavior === "line"
+      }
+    ]);
+    const onWorkspaceChange = () => this.scheduleToolbarRefresh();
+    this.registerEvent(this.app.workspace.on("layout-change", onWorkspaceChange));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", onWorkspaceChange));
+    this.registerEvent(this.app.workspace.on("css-change", onWorkspaceChange));
+    this.app.workspace.onLayoutReady(onWorkspaceChange);
     this.app.workspace.onLayoutReady(() => {
       const file = this.app.workspace.getActiveFile();
       if (file && file.extension === "md") void this.ensureFileState(file.path);
@@ -1764,12 +2219,23 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     });
   }
   onunload() {
-    var _a;
+    var _a, _b;
     for (const timer of this.editorTimers.values()) window.clearTimeout(timer);
     this.editorTimers.clear();
     for (const timer of this.diskTimers.values()) window.clearTimeout(timer);
     this.diskTimers.clear();
     for (const doc of this.cssVarTargetDocuments()) (_a = doc.getElementById(CSS_VAR_STYLE_ID)) == null ? void 0 : _a.remove();
+    if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
+    this.toolbarTimer = null;
+    (_b = this.toolbarHighlighter) == null ? void 0 : _b.clear();
+  }
+  scheduleToolbarRefresh() {
+    if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
+    this.toolbarTimer = window.setTimeout(() => {
+      var _a;
+      this.toolbarTimer = null;
+      (_a = this.toolbarHighlighter) == null ? void 0 : _a.refresh();
+    }, TOOLBAR_HIGHLIGHT_DELAY_MS);
   }
   async saveSettings() {
     await this.persist();
@@ -1777,6 +2243,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     for (const view of this.editors) this.decorate(view);
     this.rerenderPreviews(null);
     this.notifyChange();
+    this.scheduleToolbarRefresh();
   }
   // Reading view is a one-shot post-processor render, so anything that
   // changes what it should draw (settings, view state, a collapse) has to
@@ -2118,6 +2585,45 @@ ${body}
     if (!leaf) return;
     await leaf.setViewState({ type: SIDEBAR_VIEW_TYPE, active: true });
     await this.app.workspace.revealLeaf(leaf);
+  }
+  // Close when the outline is on screen; otherwise open it, or bring an
+  // existing one forward (a tab behind another in its group, or a collapsed
+  // sidebar). "On screen" rather than "exists" so a press never closes an
+  // outline the user could not see — that would read as the button doing
+  // nothing.
+  async toggleSidebar() {
+    const shown = this.shownSidebarLeaves();
+    if (shown.length > 0) {
+      for (const leaf of shown) leaf.detach();
+    } else {
+      await this.activateSidebar();
+    }
+    this.scheduleToolbarRefresh();
+  }
+  shownSidebarLeaves() {
+    return this.app.workspace.getLeavesOfType(SIDEBAR_VIEW_TYPE).filter((leaf) => {
+      const root = leaf.getRoot();
+      const { leftSplit, rightSplit } = this.app.workspace;
+      if (root === rightSplit && rightSplit.collapsed || root === leftSplit && leftSplit.collapsed) {
+        return false;
+      }
+      return leaf.view.containerEl.isShown();
+    });
+  }
+  isSidebarShown() {
+    return this.shownSidebarLeaves().length > 0;
+  }
+  // The CM6 EditorView inside the active Markdown pane (not merely one open
+  // on the same file — the same note can be open in two panes). Obsidian's
+  // Editor wrapper exposes no public handle to it, so it is matched from the
+  // views the editor extension has already registered.
+  activeEditorView() {
+    const markdownView = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    if (!markdownView || markdownView.getMode() !== "source") return null;
+    for (const view of this.editors) {
+      if (markdownView.containerEl.contains(view.dom)) return view;
+    }
+    return null;
   }
   activeMarkdownFile() {
     const file = this.app.workspace.getActiveFile();

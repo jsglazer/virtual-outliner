@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { defaultSettings, levelCssVars, normalizeSettings } from '../src/core/settings';
+import {
+	defaultSettings,
+	levelCssVars,
+	makeToolbarHighlight,
+	normalizeSettings,
+	toolbarHighlightColor,
+} from '../src/core/settings';
 
 describe('normalizeSettings', () => {
 	it('returns sane defaults for garbage input', () => {
@@ -29,7 +35,52 @@ describe('normalizeSettings', () => {
 	});
 });
 
+describe('normalizeSettings — Update005 fields', () => {
+	it('defaults Enter to "after section" and reads "line" back', () => {
+		expect(normalizeSettings({}).enterBehavior).toBe('section');
+		expect(normalizeSettings({ enterBehavior: 'line' }).enterBehavior).toBe('line');
+		expect(normalizeSettings({ enterBehavior: 'nonsense' }).enterBehavior).toBe('section');
+	});
+
+	it('reads Note Toolbar highlights and falls back per entry when one is corrupt', () => {
+		const settings = normalizeSettings({
+			toolbarHighlights: {
+				sidebar: {
+					toolbarUuid: 't1',
+					itemUuid: 'i1',
+					on: { light: { enabled: true, color: '#112233' }, dark: { enabled: false, color: '' } },
+					off: { light: { enabled: true, color: '#445566' }, dark: {} },
+				},
+				indentBody: 'garbage',
+			},
+		});
+		expect(settings.toolbarHighlights.sidebar.toolbarUuid).toBe('t1');
+		expect(settings.toolbarHighlights.sidebar.on.light).toEqual({ enabled: true, color: '#112233' });
+		expect(settings.toolbarHighlights.sidebar.off.dark).toEqual({ enabled: false, color: '' });
+		expect(settings.toolbarHighlights.indentBody).toEqual(makeToolbarHighlight());
+		expect(settings.toolbarHighlights.enterBehavior).toEqual(makeToolbarHighlight());
+	});
+});
+
+describe('toolbarHighlightColor', () => {
+	it('picks the colour for the toggle state and theme, and nothing for a disabled or invalid one', () => {
+		const h = makeToolbarHighlight('#aaaaaa', '#bbbbbb');
+		expect(toolbarHighlightColor(h, true, false)).toBe('#aaaaaa');
+		expect(toolbarHighlightColor(h, true, true)).toBe('#bbbbbb');
+		expect(toolbarHighlightColor(h, false, false)).toBe(''); // Off unticked by default
+		h.on.light = { enabled: true, color: 'red' };
+		expect(toolbarHighlightColor(h, true, false)).toBe('');
+	});
+});
+
 describe('levelCssVars', () => {
+	it('indents body one step deeper than its entry, so level-1 body is not flush left', () => {
+		const vars = levelCssVars(defaultSettings().levels);
+		expect(vars['--vo-l1-body-indent']).toBe('calc(0px + 1.5em)');
+		expect(vars['--vo-l2-body-indent']).toBe('calc(calc(0px + 1.5em) + 1.5em)');
+		expect(vars['--vo-l6-body-indent']).toContain('+ 1.5em)');
+	});
+
 	it('emits a custom-property value per level', () => {
 		const levels = defaultSettings().levels;
 		const first = levels[0];

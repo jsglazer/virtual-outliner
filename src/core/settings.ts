@@ -5,12 +5,43 @@
 // decoration (Decision #12's per-level typography approach).
 
 import { DEFAULT_SIGIL_CHAR, MAX_LEVEL } from './sigil';
-import type { LabelStyle, LevelFormat, ViewState } from './types';
+import type { EnterBehavior, LabelStyle, LevelFormat, ViewState } from './types';
 
 export interface MetaFieldDef {
 	name: string;
 	type: 'text' | 'select';
 	options: string[]; // used only when type === 'select'
+}
+
+// One colour plus its enable checkbox; a disabled colour is not applied.
+export interface ColorOption {
+	enabled: boolean;
+	color: string; // '#rrggbb' or ''
+}
+
+export interface ThemedColorOption {
+	light: ColorOption;
+	dark: ColorOption;
+}
+
+// One Note Toolbar item recoloured with the state of the toggle it runs, so the
+// button reads as pressed while that toggle is on — ported from md-annotation's
+// setting of the same name, same shape, so both plugins' Note Toolbar tabs
+// behave alike. The two uuids identify the item (toolbar → item); `on`/`off`
+// are the background colours for each state. Background only: the icon and
+// label colour stay Note Toolbar's own. A colour left switched off leaves the
+// button to Note Toolbar for that state, which is what `off` defaults to.
+export interface ToolbarHighlight {
+	toolbarUuid: string;
+	itemUuid: string;
+	on: ThemedColorOption;
+	off: ThemedColorOption;
+}
+
+export interface ToolbarHighlights {
+	sidebar: ToolbarHighlight;
+	indentBody: ToolbarHighlight;
+	enterBehavior: ToolbarHighlight;
 }
 
 export interface OutlineSettings {
@@ -20,8 +51,31 @@ export interface OutlineSettings {
 	sigil: string;
 	defaultViewState: ViewState;
 	indentBody: boolean;
+	enterBehavior: EnterBehavior;
 	levels: LevelFormat[]; // always exactly MAX_LEVEL entries, index 0 = level 1
 	metaFields: MetaFieldDef[];
+	toolbarHighlights: ToolbarHighlights;
+}
+
+export function colorOption(color = ''): ColorOption {
+	return { enabled: color !== '', color };
+}
+
+export function makeToolbarHighlight(onLight = '#fff3a3', onDark = '#7a6f1f'): ToolbarHighlight {
+	return {
+		toolbarUuid: '',
+		itemUuid: '',
+		on: { light: colorOption(onLight), dark: colorOption(onDark) },
+		off: { light: colorOption(), dark: colorOption() },
+	};
+}
+
+export function defaultToolbarHighlights(): ToolbarHighlights {
+	return {
+		sidebar: makeToolbarHighlight(),
+		indentBody: makeToolbarHighlight(),
+		enterBehavior: makeToolbarHighlight(),
+	};
 }
 
 const DEFAULT_LABEL_STYLES: LabelStyle[] = ['1.0', '1', '1', '1', '1', '1'];
@@ -59,8 +113,10 @@ export function defaultSettings(): OutlineSettings {
 		sigil: DEFAULT_SIGIL_CHAR,
 		defaultViewState: 'both',
 		indentBody: true,
+		enterBehavior: 'section',
 		levels,
 		metaFields: defaultMetaFields(),
+		toolbarHighlights: defaultToolbarHighlights(),
 	};
 }
 
@@ -112,6 +168,39 @@ function normalizeMetaField(v: unknown): MetaFieldDef | null {
 	return { name: v.name, type, options };
 }
 
+function readColorOption(v: unknown): ColorOption {
+	if (!isRecord(v)) return colorOption();
+	return { enabled: v.enabled === true, color: readString(v.color, '') };
+}
+
+function readThemedColorOption(v: unknown, fallback: ThemedColorOption): ThemedColorOption {
+	if (!isRecord(v)) return fallback;
+	return { light: readColorOption(v.light), dark: readColorOption(v.dark) };
+}
+
+// An unreadable value keeps the default colours but never a half-written
+// target, so a corrupt entry leaves the highlight switched off rather than
+// pointing at an arbitrary button.
+function readToolbarHighlight(v: unknown, fallback: ToolbarHighlight): ToolbarHighlight {
+	if (!isRecord(v)) return fallback;
+	return {
+		toolbarUuid: readString(v.toolbarUuid, ''),
+		itemUuid: readString(v.itemUuid, ''),
+		on: readThemedColorOption(v.on, fallback.on),
+		off: readThemedColorOption(v.off, fallback.off),
+	};
+}
+
+function readToolbarHighlights(v: unknown): ToolbarHighlights {
+	const fallback = defaultToolbarHighlights();
+	if (!isRecord(v)) return fallback;
+	return {
+		sidebar: readToolbarHighlight(v.sidebar, fallback.sidebar),
+		indentBody: readToolbarHighlight(v.indentBody, fallback.indentBody),
+		enterBehavior: readToolbarHighlight(v.enterBehavior, fallback.enterBehavior),
+	};
+}
+
 const VIEW_STATES: ReadonlySet<string> = new Set(['outline', 'body', 'both']);
 
 export function normalizeSettings(raw: unknown): OutlineSettings {
@@ -138,9 +227,20 @@ export function normalizeSettings(raw: unknown): OutlineSettings {
 		sigil,
 		defaultViewState,
 		indentBody: readBool(raw.indentBody, fallback.indentBody),
+		enterBehavior: raw.enterBehavior === 'line' ? 'line' : 'section',
 		levels,
 		metaFields: metaFields.length > 0 ? metaFields : fallback.metaFields,
+		toolbarHighlights: readToolbarHighlights(raw.toolbarHighlights),
 	};
+}
+
+// The background a highlighted toolbar item takes for the given toggle state and
+// theme, '' when that colour is switched off or not a valid hex (the item is
+// then left to Note Toolbar).
+export function toolbarHighlightColor(highlight: ToolbarHighlight, active: boolean, dark: boolean): string {
+	const themed = active ? highlight.on : highlight.off;
+	const opt = dark ? themed.dark : themed.light;
+	return opt.enabled && /^#[0-9a-fA-F]{6}$/.test(opt.color) ? opt.color : '';
 }
 
 // Per-level typography, driven entirely by settings, as CSS custom property
@@ -168,6 +268,17 @@ export function levelCssVars(levels: readonly LevelFormat[]): Record<string, str
 		const step = cssLength(level.indentStep);
 		cumulativeIndent = cumulativeIndent === '' ? step : `calc(${cumulativeIndent} + ${step})`;
 		vars[`--vo-l${n}-indent`] = cumulativeIndent;
+	}
+	// Body prose under a level-N entry sits one step further in than the entry
+	// itself — where that entry's children start — so it visibly belongs to the
+	// entry. Using the entry's OWN indent (as before Update005) left body under
+	// every level-1 entry flush left, since level 1's indent is always 0, which
+	// made "Indent body" look like it did nothing on a typical note. The deepest
+	// level has no next step, so it reuses its own.
+	for (let n = 1; n <= levels.length; n++) {
+		const next = levels[n] ?? levels[n - 1];
+		const step = next ? cssLength(next.indentStep) : '0px';
+		vars[`--vo-l${n}-body-indent`] = `calc(${vars[`--vo-l${n}-indent`] ?? '0px'} + ${step})`;
 	}
 	return vars;
 }

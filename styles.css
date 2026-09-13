@@ -151,6 +151,42 @@
 	initial-value: 0px;
 }
 
+@property --vo-l1-body-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l2-body-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l3-body-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l4-body-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l5-body-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-l6-body-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+@property --vo-body-indent {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+
 @property --vo-l1-spacing {
 	syntax: '<length>';
 	inherits: true;
@@ -206,6 +242,25 @@
 	--vo-indent: var(--vo-l6-indent, 0px);
 }
 
+.vo-body-indent-l1 {
+	--vo-body-indent: var(--vo-l1-body-indent, 0px);
+}
+.vo-body-indent-l2 {
+	--vo-body-indent: var(--vo-l2-body-indent, 0px);
+}
+.vo-body-indent-l3 {
+	--vo-body-indent: var(--vo-l3-body-indent, 0px);
+}
+.vo-body-indent-l4 {
+	--vo-body-indent: var(--vo-l4-body-indent, 0px);
+}
+.vo-body-indent-l5 {
+	--vo-body-indent: var(--vo-l5-body-indent, 0px);
+}
+.vo-body-indent-l6 {
+	--vo-body-indent: var(--vo-l6-body-indent, 0px);
+}
+
 .vo-entry-l1 {
 	--vo-spacing: var(--vo-l1-spacing, 0px);
 }
@@ -229,6 +284,19 @@
 .markdown-rendered [class*='vo-indent-l'] {
 	padding-inline-start: var(--vo-indent, 0px);
 	box-sizing: border-box;
+}
+
+/* Body prose under an entry ("Indent body with outline"). A MARGIN rather
+   than the padding entries use: Obsidian writes its own `padding-inline-start`
+   (and a negative `text-indent`) as an inline style on list lines, and a
+   blockquote/callout/list in reading view relies on its own padding for its
+   markers — an inline style outranks any stylesheet rule, so padding silently
+   did nothing on exactly those lines, and overriding the rendered blocks'
+   padding would collapse their bullets. A margin stacks on top of whatever the
+   line already has instead. */
+.markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-body-indent-l'],
+.markdown-rendered [class*='vo-body-indent-l'] {
+	margin-inline-start: var(--vo-body-indent, 0px);
 }
 
 .markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-entry-l'],
@@ -389,4 +457,101 @@
 
 .vo-level-details .setting-item {
 	padding-left: var(--size-4-4);
+}
+
+/* Settings tab: Note Toolbar colour grid (same layout as md-annotation's) */
+
+.vo-grid-wrap {
+	overflow-x: auto;
+	margin: 8px 0 16px;
+}
+
+.vo-grid-table {
+	border-collapse: collapse;
+}
+
+.vo-grid-table th,
+.vo-grid-table td {
+	padding: 3px 7px;
+	text-align: center;
+	font-size: 0.8em;
+	color: var(--text-muted);
+}
+
+.vo-grid-table thead th {
+	font-weight: 600;
+}
+
+.vo-grid-table tbody tr {
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.vo-grid-table .vo-grid-sep {
+	border-left: 1px solid var(--background-modifier-border);
+}
+
+.vo-grid-name-h,
+.vo-grid-name {
+	text-align: left;
+}
+
+.vo-grid-name {
+	font-weight: 600;
+	color: var(--text-accent);
+	white-space: nowrap;
+}
+
+.vo-grid-cell {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 3px;
+}
+
+.vo-grid-hex {
+	width: 60px;
+	font-family: monospace;
+	font-size: 0.72em;
+	text-align: center;
+	padding: 1px 2px;
+	border-radius: 3px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-normal);
+}
+
+.vo-grid-check {
+	margin: 0;
+}
+
+.vo-grid-color {
+	appearance: none;
+	-webkit-appearance: none;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 50%;
+	background: transparent;
+	cursor: pointer;
+}
+
+.vo-grid-color::-webkit-color-swatch-wrapper {
+	padding: 0;
+	border-radius: 50%;
+}
+
+.vo-grid-color::-webkit-color-swatch {
+	border: none;
+	border-radius: 50%;
+}
+
+.vo-grid-example {
+	white-space: nowrap;
+}
+
+.vo-grid-example span {
+	border-radius: 2px;
+	padding: 0 3px;
+	color: var(--text-normal);
 }

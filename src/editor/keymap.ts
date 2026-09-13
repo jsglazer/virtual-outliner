@@ -16,12 +16,13 @@ import { keymap } from '@codemirror/view';
 
 import { ID_SUFFIX_RE } from '../core/id';
 import { parseMetaDocument } from '../core/metadata';
-import { addBodyLine, addSibling, demote, moveDown, moveUp, promote } from '../core/ops';
-import { isOutlineLine } from '../core/sigil';
-import type { EditSplice } from '../core/types';
+import { addBodyLine, addSibling, demote, moveDown, moveUp, ownerNodeAtLine, promote } from '../core/ops';
+import { isEntryLine, isOutlineLine } from '../core/sigil';
+import type { EditSplice, EnterBehavior } from '../core/types';
 
 export interface KeymapHost {
 	sigilChar(view: EditorView): string;
+	enterBehavior(): EnterBehavior;
 	// Recompute and apply outline decorations synchronously, bypassing the
 	// docChanged debounce (livePreview.ts's EDITOR_RESOLVE_DEBOUNCE_MS). Every
 	// binding below inserts or moves text right at a hidden-range boundary
@@ -79,7 +80,7 @@ function dispatchSplice(view: EditorView, host: KeymapHost, splice: EditSplice, 
 	return true;
 }
 
-// Tab / Shift-Tab / Alt-ArrowUp / Alt-ArrowDown all share the same shape:
+// Tab / Shift-Tab share the same shape (and Alt-ArrowUp/Down follow it too):
 // early-exit false off an entry line, otherwise consume the key regardless
 // of whether the op finds something legal to do (Decision #7 — an illegal
 // demote or a boundary move is a no-op, not a leak to default key handling).
@@ -99,6 +100,9 @@ function structuralBinding(
 	};
 }
 
+// Enter anywhere on an entry line: a new sibling at the end, a split mid-text
+// (the tail keeps the entry's level — see addSibling), a blank entry above at
+// the start of the text.
 function enterBinding(host: KeymapHost): (view: EditorView) => boolean {
 	return (view: EditorView): boolean => {
 		const line = activeLine(view);
@@ -106,12 +110,47 @@ function enterBinding(host: KeymapHost): (view: EditorView) => boolean {
 		const sigil = host.sigilChar(view);
 		if (!isOutlineLine(line.lineText, sigil)) return false;
 
-		const splice = addSibling(bodyOf(view), line.lineIndex, line.col, sigil);
-		if (!splice) return false; // mid-line: fall through to a normal newline
+		const splice = addSibling(bodyOf(view), line.lineIndex, line.col, sigil, host.enterBehavior());
+		if (!splice) return false;
+		return dispatchSplice(view, host, splice, splice.cursor);
+	};
+}
 
-		const trailingNewline = splice.insert.endsWith('\n') ? 1 : 0;
-		const cursor = splice.from + splice.insert.length - trailingNewline;
-		return dispatchSplice(view, host, splice, cursor);
+// Moves the whole outline block (entry, body, every descendant) containing the
+// caret one position up or down, keeping the caret on the same character. Works
+// from a body line too, acting on the entry that body belongs to — this is what
+// the "Move outline block up/down" commands call. Returns false when the caret
+// is outside any block or the selection is not empty; true when the move was
+// consumed, including a no-op at the edge of the outline.
+export function moveBlock(view: EditorView, host: KeymapHost, direction: 'up' | 'down'): boolean {
+	const line = activeLine(view);
+	if (!line) return false;
+	const sigil = host.sigilChar(view);
+	const body = bodyOf(view);
+	const node = ownerNodeAtLine(body, line.lineIndex, sigil);
+	if (!node) return false;
+
+	const splice = (direction === 'up' ? moveUp : moveDown)(body, node.entryLine, sigil);
+	if (!splice) return true;
+	const blockStart = view.state.doc.line(node.subtreeStart + 1).from;
+	const offsetInBlock = view.state.selection.main.head - blockStart;
+	const cursor = splice.movedTo !== undefined ? splice.movedTo + offsetInBlock : undefined;
+	return dispatchSplice(view, host, splice, cursor);
+}
+
+// Alt-ArrowUp / Alt-ArrowDown: only on an entry line, so body text keeps
+// whatever those keys do elsewhere — the commands cover moving from body.
+function moveBinding(host: KeymapHost, direction: 'up' | 'down'): (view: EditorView) => boolean {
+	return (view: EditorView): boolean => {
+		const line = activeLine(view);
+		if (!line) return false;
+		const sigil = host.sigilChar(view);
+		if (!isOutlineLine(line.lineText, sigil)) return false;
+		// A blank entry (`@@ ` with no text yet) is not a node of its own, so the
+		// block it sits in belongs to the entry above — moving that from here
+		// would carry off a different block than the one the caret is on.
+		if (isEntryLine(line.lineText, sigil)) moveBlock(view, host, direction);
+		return true;
 	};
 }
 
@@ -165,8 +204,8 @@ export function buildOutlineKeymap(host: KeymapHost): Extension {
 		{ key: 'Mod-Enter', run: bodyLineBinding(host) },
 		{ key: 'Tab', run: structuralBinding(host, demote) },
 		{ key: 'Shift-Tab', run: structuralBinding(host, promote) },
-		{ key: 'Alt-ArrowUp', run: structuralBinding(host, moveUp) },
-		{ key: 'Alt-ArrowDown', run: structuralBinding(host, moveDown) },
+		{ key: 'Alt-ArrowUp', run: moveBinding(host, 'up') },
+		{ key: 'Alt-ArrowDown', run: moveBinding(host, 'down') },
 	];
 
 	return Prec.highest(keymap.of(bindings));

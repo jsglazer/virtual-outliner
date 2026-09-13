@@ -8,7 +8,7 @@
 // active file." The one exception is "Generate filtered copy", which
 // creates a brand-new export file and never touches the source document.
 
-import type { TFile } from 'obsidian';
+import type { TFile, WorkspaceLeaf } from 'obsidian';
 import { MarkdownView, Notice, Plugin } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
 
@@ -30,11 +30,13 @@ import {
 	editorViewPath,
 	setOutlineDecorations,
 } from './editor/livePreview';
-import { buildOutlineKeymap } from './editor/keymap';
+import type { KeymapHost } from './editor/keymap';
+import { buildOutlineKeymap, moveBlock } from './editor/keymap';
 import { createReadingPostProcessor } from './editor/readingView';
 import { VirtualOutlinerSettingTab } from './settingsTab';
 import type { OutlineFileState } from './state';
 import { OutlineSidebarView, SIDEBAR_VIEW_TYPE } from './ui/sidebar';
+import { ToolbarHighlighter } from './ui/toolbarHighlight';
 
 interface PersistedFileState {
 	viewState: ViewState;
@@ -56,6 +58,9 @@ function normalizeFileStateEntry(v: unknown, fallback: ViewState): PersistedFile
 
 const RESOLVE_DEBOUNCE_MS = 200;
 const CSS_VAR_STYLE_ID = 'virtual-outliner-level-vars';
+// Note Toolbar renders its own DOM per leaf/file/mode; a short delay lets that
+// land before the toggle colours are re-applied (same value as md-annotation).
+const TOOLBAR_HIGHLIGHT_DELAY_MS = 50;
 
 export default class VirtualOutlinerPlugin extends Plugin {
 	settings: OutlineSettings = normalizeSettings(null);
@@ -67,6 +72,9 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private editorTimers = new Map<EditorView, number>();
 	private diskTimers = new Map<string, number>();
 	private changeListeners = new Set<() => void>();
+	private toolbarHighlighter: ToolbarHighlighter | null = null;
+	private toolbarTimer: number | null = null;
+	private keymapHost!: KeymapHost;
 
 	async onload(): Promise<void> {
 		const raw: unknown = await this.loadData();
@@ -80,14 +88,17 @@ export default class VirtualOutlinerPlugin extends Plugin {
 
 		this.applyLevelCssVars();
 
+		this.keymapHost = {
+			sigilChar: () => this.settings.sigil,
+			enterBehavior: () => this.settings.enterBehavior,
+			resolveNow: (view) => this.resolveEditor(view),
+		};
+
 		this.registerEditorExtension([
 			buildHiddenContentGuard(() => {
 				new Notice('Hidden text is not deleted from this view — switch to outline and body to edit it.');
 			}),
-			buildOutlineKeymap({
-				sigilChar: () => this.settings.sigil,
-				resolveNow: (view) => this.resolveEditor(view),
-			}),
+			buildOutlineKeymap(this.keymapHost),
 			buildEditorExtension({
 				attachEditor: (view) => this.editors.add(view),
 				detachEditor: (view) => {
@@ -114,12 +125,14 @@ export default class VirtualOutlinerPlugin extends Plugin {
 
 		this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new OutlineSidebarView(leaf, this.sidebarHost()));
 		this.addSettingTab(new VirtualOutlinerSettingTab(this.app, this));
-		this.addRibbonIcon('list-tree', 'Open outline sidebar', () => void this.activateSidebar());
+		this.addRibbonIcon('list-tree', 'Toggle outline sidebar', () => void this.toggleSidebar());
 
+		// The id stays `open-sidebar` so hotkeys and Note Toolbar buttons already
+		// bound to the old "Open outline sidebar" command keep working.
 		this.addCommand({
 			id: 'open-sidebar',
-			name: 'Open outline sidebar',
-			callback: () => void this.activateSidebar(),
+			name: 'Toggle outline sidebar',
+			callback: () => void this.toggleSidebar(),
 		});
 
 		const viewStateCommand = (id: string, name: string, viewState: ViewState): void => {
@@ -148,6 +161,36 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				new Notice(this.settings.indentBody ? 'Indent body with outline: on' : 'Indent body with outline: off');
 			},
 		});
+
+		this.addCommand({
+			id: 'toggle-enter-behavior',
+			name: 'Toggle new entry on next line vs after section',
+			callback: () => {
+				this.settings.enterBehavior = this.settings.enterBehavior === 'line' ? 'section' : 'line';
+				void this.saveSettings();
+				new Notice(
+					this.settings.enterBehavior === 'line'
+						? 'Enter adds the new entry on the next line'
+						: 'Enter adds the new entry after the whole section',
+				);
+			},
+		});
+
+		const moveCommand = (id: string, name: string, direction: 'up' | 'down'): void => {
+			this.addCommand({
+				id,
+				name,
+				checkCallback: (checking) => {
+					const view = this.activeEditorView();
+					if (!view) return false;
+					if (checking) return true;
+					moveBlock(view, this.keymapHost, direction);
+					return true;
+				},
+			});
+		};
+		moveCommand('move-block-up', 'Move outline block up', 'up');
+		moveCommand('move-block-down', 'Move outline block down', 'down');
 
 		this.addCommand({
 			id: 'generate-filtered-copy',
@@ -225,6 +268,20 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		// and reopening the vault). onLayoutReady runs immediately when the
 		// layout is already settled — the common case for a hot re-enable —
 		// so this reaches both the cold-start and the re-enable path.
+		this.toolbarHighlighter = new ToolbarHighlighter(this.app, () => [
+			{ highlight: this.settings.toolbarHighlights.sidebar, active: this.isSidebarShown() },
+			{ highlight: this.settings.toolbarHighlights.indentBody, active: this.settings.indentBody },
+			{
+				highlight: this.settings.toolbarHighlights.enterBehavior,
+				active: this.settings.enterBehavior === 'line',
+			},
+		]);
+		const onWorkspaceChange = (): void => this.scheduleToolbarRefresh();
+		this.registerEvent(this.app.workspace.on('layout-change', onWorkspaceChange));
+		this.registerEvent(this.app.workspace.on('active-leaf-change', onWorkspaceChange));
+		this.registerEvent(this.app.workspace.on('css-change', onWorkspaceChange));
+		this.app.workspace.onLayoutReady(onWorkspaceChange);
+
 		this.app.workspace.onLayoutReady(() => {
 			const file = this.app.workspace.getActiveFile();
 			if (file && file.extension === 'md') void this.ensureFileState(file.path);
@@ -240,6 +297,17 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		for (const timer of this.diskTimers.values()) window.clearTimeout(timer);
 		this.diskTimers.clear();
 		for (const doc of this.cssVarTargetDocuments()) doc.getElementById(CSS_VAR_STYLE_ID)?.remove();
+		if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
+		this.toolbarTimer = null;
+		this.toolbarHighlighter?.clear();
+	}
+
+	scheduleToolbarRefresh(): void {
+		if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
+		this.toolbarTimer = window.setTimeout(() => {
+			this.toolbarTimer = null;
+			this.toolbarHighlighter?.refresh();
+		}, TOOLBAR_HIGHLIGHT_DELAY_MS);
 	}
 
 	async saveSettings(): Promise<void> {
@@ -248,6 +316,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		for (const view of this.editors) this.decorate(view);
 		this.rerenderPreviews(null);
 		this.notifyChange();
+		this.scheduleToolbarRefresh();
 	}
 
 	// Reading view is a one-shot post-processor render, so anything that
@@ -635,6 +704,53 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		if (!leaf) return;
 		await leaf.setViewState({ type: SIDEBAR_VIEW_TYPE, active: true });
 		await this.app.workspace.revealLeaf(leaf);
+	}
+
+	// Close when the outline is on screen; otherwise open it, or bring an
+	// existing one forward (a tab behind another in its group, or a collapsed
+	// sidebar). "On screen" rather than "exists" so a press never closes an
+	// outline the user could not see — that would read as the button doing
+	// nothing.
+	async toggleSidebar(): Promise<void> {
+		const shown = this.shownSidebarLeaves();
+		if (shown.length > 0) {
+			for (const leaf of shown) leaf.detach();
+		} else {
+			await this.activateSidebar();
+		}
+		this.scheduleToolbarRefresh();
+	}
+
+	private shownSidebarLeaves(): WorkspaceLeaf[] {
+		return this.app.workspace
+			.getLeavesOfType(SIDEBAR_VIEW_TYPE)
+			.filter((leaf) => {
+				// A collapsed side dock can keep its tabs laid out at zero width,
+				// so it is checked explicitly rather than trusted to isShown().
+				const root = leaf.getRoot();
+				const { leftSplit, rightSplit } = this.app.workspace;
+				if ((root === rightSplit && rightSplit.collapsed) || (root === leftSplit && leftSplit.collapsed)) {
+					return false;
+				}
+				return leaf.view.containerEl.isShown();
+			});
+	}
+
+	private isSidebarShown(): boolean {
+		return this.shownSidebarLeaves().length > 0;
+	}
+
+	// The CM6 EditorView inside the active Markdown pane (not merely one open
+	// on the same file — the same note can be open in two panes). Obsidian's
+	// Editor wrapper exposes no public handle to it, so it is matched from the
+	// views the editor extension has already registered.
+	private activeEditorView(): EditorView | null {
+		const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!markdownView || markdownView.getMode() !== 'source') return null;
+		for (const view of this.editors) {
+			if (markdownView.containerEl.contains(view.dom)) return view;
+		}
+		return null;
 	}
 
 	activeMarkdownFile(): TFile | null {

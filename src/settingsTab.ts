@@ -1,9 +1,25 @@
 import type { App } from 'obsidian';
 import { PluginSettingTab, Setting } from 'obsidian';
 
+import type { ColorOption, ToolbarHighlight } from './core/settings';
 import { isRiskySigil } from './core/sigil';
-import type { LabelStyle, LevelFormat, ViewState } from './core/types';
+import type { EnterBehavior, LabelStyle, LevelFormat, ViewState } from './core/types';
 import type VirtualOutlinerPlugin from './main';
+import {
+	isNoteToolbarAvailable,
+	itemDisplayName,
+	listHighlightableItems,
+	listToolbars,
+} from './ui/toolbarHighlight';
+
+function isValidHex(v: string): boolean {
+	return /^#[0-9a-fA-F]{6}$/.test(v);
+}
+
+const ENTER_BEHAVIOR_OPTIONS: Record<EnterBehavior, string> = {
+	section: 'After the whole section',
+	line: 'On the next line',
+};
 
 const LABEL_STYLE_OPTIONS: Record<LabelStyle, string> = {
 	'1': '1, 2, 3',
@@ -79,6 +95,19 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 				});
 			});
 
+		new Setting(containerEl)
+			.setName('Enter at the end of an entry')
+			.setDesc(
+				'Where the new same-level entry goes. After the whole section keeps the current entry\'s body and sub-entries with it; on the next line puts the new entry directly below, so that body and those sub-entries move under the new entry. Pressing return in the middle of an entry always splits it in place.',
+			)
+			.addDropdown((dropdown) => {
+				for (const [value, label] of Object.entries(ENTER_BEHAVIOR_OPTIONS)) dropdown.addOption(value, label);
+				dropdown.setValue(this.plugin.settings.enterBehavior).onChange(async (value) => {
+					this.plugin.settings.enterBehavior = value === 'line' ? 'line' : 'section';
+					await this.plugin.saveSettings();
+				});
+			});
+
 		new Setting(containerEl).setName('Level format').setHeading();
 		containerEl.createEl('p', {
 			cls: 'vo-fixture-note',
@@ -93,6 +122,160 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 			text: 'Per-node fields (status, note, …) exposed to Dataview/Datacore and stored in the end-of-file %%md-outline block.',
 		});
 		this.renderMetaFields(containerEl);
+
+		this.renderToolbarSection(containerEl);
+	}
+
+	// ── Note Toolbar buttons (ported from md-annotation's Note Toolbar tab) ──
+
+	private renderToolbarSection(containerEl: HTMLElement): void {
+		// eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name
+		new Setting(containerEl).setName('Note Toolbar buttons').setHeading();
+
+		if (!isNoteToolbarAvailable(this.app)) {
+			containerEl.createEl('p', {
+				cls: 'vo-fixture-note',
+				// eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name
+				text: 'Install and enable the Note Toolbar plugin to have one of its buttons change colour while the toggle it runs is on.',
+			});
+			return;
+		}
+
+		containerEl.createEl('p', {
+			cls: 'vo-fixture-note',
+			// eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name; On/Off name the grid columns
+			text: 'Pick the toolbar button that runs each toggle command below and it takes the On colour while that toggle is on, so the toolbar reads as pressed, and the Off colour while it is off. A colour left unticked leaves the button to Note Toolbar for that state — Off is unticked by default, so only "on" stands out. Backgrounds only: the icon and label colour stay Note Toolbar\'s.',
+		});
+
+		const highlights = this.plugin.settings.toolbarHighlights;
+		const rows: { name: string; short: string; highlight: ToolbarHighlight }[] = [
+			{ name: 'Outline sidebar button', short: 'Sidebar', highlight: highlights.sidebar },
+			{ name: 'Indent body button', short: 'Indent body', highlight: highlights.indentBody },
+			{ name: 'Enter on next line button', short: 'Enter: next line', highlight: highlights.enterBehavior },
+		];
+		for (const row of rows) this.renderToolbarItemPicker(containerEl, row.name, row.highlight);
+
+		const wrap = containerEl.createDiv('vo-grid-wrap');
+		const table = wrap.createEl('table', { cls: 'vo-grid-table' });
+		const thead = table.createEl('thead');
+		const r1 = thead.createEl('tr');
+		r1.createEl('th', { text: 'Button', attr: { rowspan: '2' }, cls: 'vo-grid-name-h' });
+		r1.createEl('th', { text: 'Light', attr: { colspan: '2' }, cls: 'vo-grid-sep' });
+		r1.createEl('th', { text: 'Dark', attr: { colspan: '2' }, cls: 'vo-grid-sep' });
+		r1.createEl('th', { text: 'Example', attr: { rowspan: '2' }, cls: 'vo-grid-sep' });
+		const r2 = thead.createEl('tr');
+		for (let i = 0; i < 4; i++) {
+			r2.createEl('th', { text: i % 2 === 0 ? 'On' : 'Off', cls: i % 2 === 0 ? 'vo-grid-sep' : '' });
+		}
+		const tbody = table.createEl('tbody');
+		for (const row of rows) this.renderToolbarHighlightRow(tbody, row.short, row.highlight);
+	}
+
+	// Toolbar + item dropdowns. Changing the toolbar clears the item, since
+	// item uuids belong to a single toolbar.
+	private renderToolbarItemPicker(containerEl: HTMLElement, name: string, highlight: ToolbarHighlight): void {
+		new Setting(containerEl)
+			.setName(name)
+			.setDesc('Toolbar, then the button within it')
+			.addDropdown((dropdown) => {
+				dropdown.addOption('', 'None');
+				for (const toolbar of listToolbars(this.app)) dropdown.addOption(toolbar.uuid, toolbar.name);
+				dropdown.setValue(highlight.toolbarUuid).onChange(async (value) => {
+					highlight.toolbarUuid = value;
+					highlight.itemUuid = '';
+					await this.plugin.saveSettings();
+					this.display();
+				});
+			})
+			.addDropdown((dropdown) => {
+				const items = highlight.toolbarUuid ? listHighlightableItems(this.app, highlight.toolbarUuid) : [];
+				dropdown.addOption('', items.length === 0 ? 'No buttons' : 'None');
+				for (const item of items) dropdown.addOption(item.uuid, itemDisplayName(item));
+				dropdown.setDisabled(items.length === 0);
+				dropdown.setValue(highlight.itemUuid).onChange(async (value) => {
+					highlight.itemUuid = value;
+					await this.plugin.saveSettings();
+				});
+			});
+	}
+
+	private renderToolbarHighlightRow(tbody: HTMLElement, label: string, highlight: ToolbarHighlight): void {
+		const tr = tbody.createEl('tr');
+		tr.createEl('td', { text: label, cls: 'vo-grid-name' });
+
+		let exampleTd: HTMLElement | null = null;
+		const refreshExample = (): void => {
+			if (!exampleTd) return;
+			exampleTd.empty();
+			const theme = this.containerEl.ownerDocument.body.classList.contains('theme-dark') ? 'dark' : 'light';
+			for (const [text, opt] of [
+				['On', highlight.on[theme]],
+				['Off', highlight.off[theme]],
+			] as const) {
+				const span = exampleTd.createEl('span', { text });
+				span.setCssStyles({ backgroundColor: opt.enabled && isValidHex(opt.color) ? opt.color : '' });
+				exampleTd.appendText(' ');
+			}
+		};
+
+		for (const theme of ['light', 'dark'] as const) {
+			for (const state of ['on', 'off'] as const) {
+				const td = tr.createEl('td', { cls: state === 'on' ? 'vo-grid-sep' : '' });
+				this.renderColorCell(td, highlight[state][theme], refreshExample);
+			}
+		}
+
+		exampleTd = tr.createEl('td', { cls: 'vo-grid-example vo-grid-sep' });
+		refreshExample();
+	}
+
+	// A checkbox, a swatch (native picker), and an editable hex field bound to
+	// one ColorOption. Setting a colour by either control ticks the checkbox;
+	// the checkbox alone decides whether the stored colour is applied.
+	private renderColorCell(td: HTMLElement, opt: ColorOption, onChanged: () => void): void {
+		const wrap = td.createDiv('vo-grid-cell');
+		const check = wrap.createEl('input', { attr: { type: 'checkbox' }, cls: 'vo-grid-check' });
+		check.checked = opt.enabled;
+		const picker = wrap.createEl('input', { attr: { type: 'color' }, cls: 'vo-grid-color' });
+		picker.value = isValidHex(opt.color) ? opt.color : '#888888';
+		const hex = wrap.createEl('input', {
+			cls: 'vo-grid-hex',
+			// eslint-disable-next-line obsidianmd/ui/sentence-case -- '#hex' is a hex-notation placeholder, not prose
+			attr: { type: 'text', maxlength: '7', placeholder: '#hex', spellcheck: 'false' },
+		});
+		hex.value = isValidHex(opt.color) ? opt.color : '';
+
+		const setColor = (value: string, persist: boolean): void => {
+			opt.color = value;
+			picker.value = value;
+			hex.value = value;
+			if (!opt.enabled) {
+				opt.enabled = true;
+				check.checked = true;
+			}
+			if (persist) void this.plugin.saveSettings();
+			onChanged();
+		};
+
+		check.addEventListener('change', () => {
+			opt.enabled = check.checked;
+			if (opt.enabled && !isValidHex(opt.color)) {
+				opt.color = picker.value;
+				hex.value = picker.value;
+			}
+			void this.plugin.saveSettings();
+			onChanged();
+		});
+		// 'input' fires continuously while dragging in the colour dialog — update
+		// the example live, persist only on 'change'.
+		picker.addEventListener('input', () => setColor(picker.value, false));
+		picker.addEventListener('change', () => setColor(picker.value, true));
+		hex.addEventListener('change', () => {
+			const raw = hex.value.trim();
+			const value = raw.startsWith('#') ? raw : `#${raw}`;
+			if (isValidHex(value)) setColor(value.toLowerCase(), true);
+			else hex.value = isValidHex(opt.color) ? opt.color : '';
+		});
 	}
 
 	// One NAMED row per property, applied to every level at once (Update003:

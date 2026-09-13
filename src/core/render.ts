@@ -27,9 +27,13 @@ export interface RenderPlan {
 	// Entry line index -> computed label text, for entries that are visible
 	// AND the view state shows labels for (outline/both).
 	labels: Map<number, string>;
-	// Line index (entry or body) -> its owning node's 1-based level, for
-	// lines that should receive indentation.
+	// Entry line index -> its own 1-based level, for visible entry lines.
 	indentLevel: Map<number, number>;
+	// Body line index -> its owning node's 1-based level, for body lines that
+	// should be indented under their entry (only when "Indent body" is on).
+	// Kept apart from indentLevel because body sits one step deeper than its
+	// entry (see levelCssVars' --vo-lN-body-indent).
+	bodyIndentLevel: Map<number, number>;
 	// Entry line index -> its own level, for lines that are visible entries
 	// (used for per-level spacing above the entry).
 	entryLevel: Map<number, number>;
@@ -122,6 +126,7 @@ export function computeRenderPlan(
 	const labels = new Map<number, string>();
 	const entryLevel = new Map<number, number>();
 	const indentLevel = new Map<number, number>();
+	const bodyIndentLevel = new Map<number, number>();
 
 	const showLabels = viewState === 'outline' || viewState === 'both';
 	for (const node of parsed.flat) {
@@ -135,12 +140,12 @@ export function computeRenderPlan(
 		for (const node of parsed.flat) {
 			for (let line = node.ownBodyStart; line < node.ownBodyEnd; line++) {
 				if (isLineHidden(hiddenLineRanges, line)) continue;
-				indentLevel.set(line, node.level);
+				bodyIndentLevel.set(line, node.level);
 			}
 		}
 	}
 
-	return { parsed, labels, indentLevel, entryLevel, hiddenLineRanges };
+	return { parsed, labels, indentLevel, bodyIndentLevel, entryLevel, hiddenLineRanges };
 }
 
 export function collapsibleAncestorIds(node: OutlineNode): string[] {

@@ -339,6 +339,11 @@ export function buildOutlineDecorations(
 		const line = doc.line(lineIndex + 1);
 		items.push({ from: line.from, to: line.from, deco: Decoration.line({ class: `vo-indent-l${level}` }) });
 	}
+	for (const [lineIndex, level] of plan.bodyIndentLevel) {
+		if (lineIndex >= lineCount) continue;
+		const line = doc.line(lineIndex + 1);
+		items.push({ from: line.from, to: line.from, deco: Decoration.line({ class: `vo-body-indent-l${level}` }) });
+	}
 	for (const [lineIndex, level] of plan.entryLevel) {
 		if (lineIndex >= lineCount) continue;
 		const line = doc.line(lineIndex + 1);

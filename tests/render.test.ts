@@ -74,15 +74,16 @@ describe('computeRenderPlan', () => {
 
 	it('indents body lines to their owning node\'s level', () => {
 		const plan = computeRenderPlan(DOC, '@', levels(), 'both', new Set());
-		expect(plan.indentLevel.get(2)).toBe(1); // "A body" under level-1 "A"
-		expect(plan.indentLevel.get(4)).toBe(2); // "A.1 body" under level-2 "A.1"
-		expect(plan.indentLevel.get(0)).toBeUndefined(); // preamble has no owning node
+		expect(plan.bodyIndentLevel.get(2)).toBe(1); // "A body" under level-1 "A"
+		expect(plan.bodyIndentLevel.get(4)).toBe(2); // "A.1 body" under level-2 "A.1"
+		expect(plan.bodyIndentLevel.get(0)).toBeUndefined(); // preamble has no owning node
+		expect(plan.indentLevel.get(2)).toBeUndefined(); // body never takes the entry's own indent class
 	});
 
 	it('leaves body lines flush when "indent body" is off, but still indents entries', () => {
 		const plan = computeRenderPlan(DOC, '@', levels(), 'both', new Set(), false);
-		expect(plan.indentLevel.get(2)).toBeUndefined(); // "A body"
-		expect(plan.indentLevel.get(4)).toBeUndefined(); // "A.1 body"
+		expect(plan.bodyIndentLevel.get(2)).toBeUndefined(); // "A body"
+		expect(plan.bodyIndentLevel.get(4)).toBeUndefined(); // "A.1 body"
 		expect(plan.indentLevel.get(1)).toBe(1); // "@ A" entry line still indents
 		expect(plan.indentLevel.get(3)).toBe(2); // "@@ A.1" entry line still indents
 	});

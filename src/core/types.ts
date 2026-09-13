@@ -68,4 +68,18 @@ export interface EditSplice {
 	from: number;
 	to: number;
 	insert: string;
+	// Where the caret belongs once the splice is applied (post-edit document
+	// offset). Set by Enter, which always knows exactly where typing resumes.
+	cursor?: number;
+	// Post-edit offset where a MOVED subtree now begins. A move replaces a
+	// whole multi-line range, so CM6's own selection mapping would drop the
+	// caret at one end of it; the shell adds the caret's offset within the
+	// subtree to this to keep it on the same character it was on.
+	movedTo?: number;
 }
+
+// What Enter at the end of an entry does: open the new sibling after the
+// entry's whole section (its body and children — the default), or directly on
+// the next line, which hands the current entry's body and children to the new
+// entry.
+export type EnterBehavior = 'section' | 'line';

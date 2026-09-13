@@ -26,6 +26,7 @@ import type { MarkdownPostProcessorContext } from 'obsidian';
 
 import { parseMetaDocument } from '../core/metadata';
 import { computeRenderPlan, isLineHidden } from '../core/render';
+import type { RenderPlan } from '../core/render';
 import { entrySegments } from '../core/sigil';
 import type { LevelFormat, ViewState } from '../core/types';
 
@@ -187,9 +188,13 @@ function blockWrapSegment(segment: LineSegment, classes: readonly string[], doc:
 	return wrapper;
 }
 
-function levelClasses(indentLevel: number | undefined, entryLevel: number | undefined): string[] {
+function levelClasses(plan: RenderPlan, line: number): string[] {
+	const indentLevel = plan.indentLevel.get(line);
+	const entryLevel = plan.entryLevel.get(line);
+	const bodyIndentLevel = plan.bodyIndentLevel.get(line);
 	const classes: string[] = [];
 	if (indentLevel !== undefined) classes.push(`vo-indent-l${indentLevel}`);
+	if (bodyIndentLevel !== undefined) classes.push(`vo-body-indent-l${bodyIndentLevel}`);
 	if (entryLevel !== undefined) classes.push(`vo-entry-l${entryLevel}`);
 	return classes;
 }
@@ -227,7 +232,7 @@ export function createReadingPostProcessor(host: ReadingHost) {
 				el.addClass('vo-hidden');
 				return;
 			}
-			for (const cls of levelClasses(plan.indentLevel.get(lineStart), plan.entryLevel.get(lineStart))) {
+			for (const cls of levelClasses(plan, lineStart)) {
 				el.addClass(cls);
 			}
 			const label = plan.labels.get(lineStart);
@@ -261,10 +266,9 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			// back to indenting the whole block by its first visible line.
 			for (let line = lineStart; line <= lineEnd; line++) {
 				if (isLineHidden(plan.hiddenLineRanges, line)) continue;
-				const indent = plan.indentLevel.get(line);
-				const entryLvl = plan.entryLevel.get(line);
-				if (indent === undefined && entryLvl === undefined) continue;
-				for (const cls of levelClasses(indent, entryLvl)) el.addClass(cls);
+				const classes = levelClasses(plan, line);
+				if (classes.length === 0) continue;
+				for (const cls of classes) el.addClass(cls);
 				break;
 			}
 			return;
@@ -286,7 +290,7 @@ export function createReadingPostProcessor(host: ReadingHost) {
 
 			const classes = hidden
 				? ['vo-hidden']
-				: ['vo-line', ...levelClasses(plan.indentLevel.get(line), plan.entryLevel.get(line))];
+				: ['vo-line', ...levelClasses(plan, line)];
 			const wrapper = blockWrapSegment(segment, classes, doc);
 			if (!wrapper || hidden) continue;
 
