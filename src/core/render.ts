@@ -34,6 +34,11 @@ export interface RenderPlan {
 	// Kept apart from indentLevel because body sits one step deeper than its
 	// entry (see levelCssVars' --vo-lN-body-indent).
 	bodyIndentLevel: Map<number, number>;
+	// Body line index -> the line index of the entry it belongs to, for the same
+	// lines as bodyIndentLevel. The shells use it to line body prose up with
+	// where that entry's TEXT starts (after its label), which is only known once
+	// the entry has been laid out and measured.
+	bodyOwnerLine: Map<number, number>;
 	// Entry line index -> its own level, for lines that are visible entries
 	// (used for per-level spacing above the entry).
 	entryLevel: Map<number, number>;
@@ -133,6 +138,7 @@ export function computeRenderPlan(
 	const entryLevel = new Map<number, number>();
 	const indentLevel = new Map<number, number>();
 	const bodyIndentLevel = new Map<number, number>();
+	const bodyOwnerLine = new Map<number, number>();
 	const foldable = new Map<number, boolean>();
 
 	const showLabels = viewState === 'outline' || viewState === 'both';
@@ -151,11 +157,12 @@ export function computeRenderPlan(
 			for (let line = node.ownBodyStart; line < node.ownBodyEnd; line++) {
 				if (isLineHidden(hiddenLineRanges, line)) continue;
 				bodyIndentLevel.set(line, node.level);
+				bodyOwnerLine.set(line, node.entryLine);
 			}
 		}
 	}
 
-	return { parsed, labels, indentLevel, bodyIndentLevel, entryLevel, foldable, hiddenLineRanges };
+	return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel, foldable, hiddenLineRanges };
 }
 
 export function hasFoldableContent(lines: readonly string[], node: OutlineNode): boolean {

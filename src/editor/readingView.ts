@@ -231,6 +231,82 @@ function blockWrapSegment(segment: LineSegment, classes: readonly string[], doc:
 	return wrapper;
 }
 
+// Body alignment (Update006 follow-up): body prose lines up with where its
+// entry's TEXT starts, past the label. That is a rendered width, so it is
+// measured once the section is in the document: every entry block is tagged
+// with its source line and every body block with its owner's line, and after
+// render a body block copies the offset from its entry's block if that is on
+// screen. Reading view renders sections lazily and drops off-screen ones, so
+// the last offset measured for each level is remembered per preview and used
+// when the entry itself isn't rendered; with nothing measured yet the CSS
+// level-based indent applies.
+const ENTRY_ATTR = 'data-vo-entry-line';
+const OWNER_ATTR = 'data-vo-owner-line';
+const OWNER_LEVEL_ATTR = 'data-vo-owner-level';
+const levelOffsetCache = new WeakMap<HTMLElement, Map<number, number>>();
+
+function tagForAlignment(el: HTMLElement, plan: RenderPlan, line: number): void {
+	const entryLevel = plan.entryLevel.get(line);
+	if (entryLevel !== undefined) {
+		el.setAttribute(ENTRY_ATTR, String(line));
+		el.setAttribute(OWNER_LEVEL_ATTR, String(entryLevel));
+	}
+	const owner = plan.bodyOwnerLine.get(line);
+	const level = plan.bodyIndentLevel.get(line);
+	if (owner !== undefined && level !== undefined) {
+		el.setAttribute(OWNER_ATTR, String(owner));
+		el.setAttribute(OWNER_LEVEL_ATTR, String(level));
+	}
+}
+
+function entryTextOffset(entry: HTMLElement): number | null {
+	const text = entry.querySelector<HTMLElement>('.vo-text');
+	const rect = text?.getClientRects()[0];
+	if (!rect) return null;
+	return Math.round((rect.left - entry.getBoundingClientRect().left) * 10) / 10;
+}
+
+function blocksIn(root: HTMLElement, selector: string): HTMLElement[] {
+	const found = Array.from(root.querySelectorAll<HTMLElement>(selector));
+	return root.matches(selector) ? [root, ...found] : found;
+}
+
+function alignBodyIn(root: HTMLElement): void {
+	const preview = root.closest<HTMLElement>('.markdown-rendered');
+	if (!preview) return;
+	let cache = levelOffsetCache.get(preview);
+	if (!cache) {
+		cache = new Map();
+		levelOffsetCache.set(preview, cache);
+	}
+	// An entry that just rendered can also own body blocks rendered before it,
+	// so those are re-aligned too.
+	const bodies = new Set(blocksIn(root, `[${OWNER_ATTR}]`));
+	for (const entry of blocksIn(root, `[${ENTRY_ATTR}]`)) {
+		const offset = entryTextOffset(entry);
+		const line = entry.getAttribute(ENTRY_ATTR);
+		if (offset === null || line === null) continue;
+		cache.set(Number(entry.getAttribute(OWNER_LEVEL_ATTR)), offset);
+		for (const body of blocksIn(preview, `[${OWNER_ATTR}="${line}"]`)) bodies.add(body);
+	}
+	for (const body of bodies) {
+		const owner = body.getAttribute(OWNER_ATTR);
+		const entry = owner !== null ? preview.querySelector<HTMLElement>(`[${ENTRY_ATTR}="${owner}"]`) : null;
+		const offset = (entry ? entryTextOffset(entry) : null) ?? cache.get(Number(body.getAttribute(OWNER_LEVEL_ATTR)));
+		if (offset !== null && offset !== undefined) body.setCssProps({ '--vo-body-text-offset': `${offset}px` });
+	}
+}
+
+// The post-processor runs before its element is attached, so measuring waits
+// for the next frame, and retries once in case Obsidian attaches it later.
+function scheduleAlignment(el: HTMLElement): void {
+	const win = el.win ?? window;
+	win.requestAnimationFrame(() => {
+		if (el.isConnected) alignBodyIn(el);
+		else win.setTimeout(() => el.isConnected && alignBodyIn(el), 100);
+	});
+}
+
 function levelClasses(plan: RenderPlan, line: number): string[] {
 	const indentLevel = plan.indentLevel.get(line);
 	const entryLevel = plan.entryLevel.get(line);
@@ -283,6 +359,8 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			for (const cls of levelClasses(plan, lineStart)) {
 				el.addClass(cls);
 			}
+			tagForAlignment(el, plan, lineStart);
+			scheduleAlignment(el);
 			const label = plan.labels.get(lineStart);
 			if (label === undefined) return;
 			const level = plan.entryLevel.get(lineStart) ?? 1;
@@ -317,6 +395,8 @@ export function createReadingPostProcessor(host: ReadingHost) {
 				const classes = levelClasses(plan, line);
 				if (classes.length === 0) continue;
 				for (const cls of classes) el.addClass(cls);
+				tagForAlignment(el, plan, line);
+				scheduleAlignment(el);
 				break;
 			}
 			return;
@@ -341,6 +421,7 @@ export function createReadingPostProcessor(host: ReadingHost) {
 				: ['vo-line', ...levelClasses(plan, line)];
 			const wrapper = blockWrapSegment(segment, classes, doc);
 			if (!wrapper || hidden) continue;
+			tagForAlignment(wrapper, plan, line);
 
 			const label = plan.labels.get(line);
 			if (label === undefined) continue;
@@ -349,5 +430,6 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			const level = plan.entryLevel.get(line) ?? 1;
 			materializeLabelIn(Array.from(wrapper.childNodes), lineText, sigilChar, label, level, doc, foldFor(line));
 		}
+		scheduleAlignment(el);
 	};
 }

@@ -304,8 +304,17 @@
    classes/attributes) outranks that one (three). */
 .markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-body-indent-l'],
 .markdown-rendered [class*='vo-body-indent-l'] {
-	margin-inline-start: var(--vo-body-indent, 0px) !important;
+	margin-inline-start: var(--vo-body-text-offset, var(--vo-body-indent, 0px)) !important;
 }
+
+/* `--vo-body-text-offset` is the MEASURED distance to where the owning entry's
+   text starts (past its label), set per line by the editor/reading shells so
+   body prose lines up under the entry text rather than under its number. It
+   is deliberately NOT registered with @property: a registered property always
+   has a value (its initial one), which would stop the level-based
+   `--vo-body-indent` fallback from ever applying to a line that has not been
+   measured yet. Its value is always px, so the em-resolution problem the
+   registered properties above exist for does not arise. */
 
 /* Per-entry fold control (Update006): a chevron in the gutter to the left of
    an entry's label that folds its child entries and body, shown on hover like

@@ -29,6 +29,8 @@ import {
 	buildHiddenContentGuard,
 	buildOutlineDecorations,
 	editorViewPath,
+	measureEntryTextOffsets,
+	sameTextOffsets,
 	setOutlineDecorations,
 } from './editor/livePreview';
 import type { KeymapHost } from './editor/keymap';
@@ -71,6 +73,8 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private fileState = new Map<string, { viewState: ViewState; collapsedIds: Set<string> }>();
 	private editors = new Set<EditorView>();
 	private editorTimers = new Map<EditorView, number>();
+	// Per editor: entry line -> measured text start, for aligning body under it.
+	private textOffsets = new Map<EditorView, Map<number, number>>();
 	private diskTimers = new Map<string, number>();
 	private changeListeners = new Set<() => void>();
 	private toolbarHighlighter: ToolbarHighlighter | null = null;
@@ -104,6 +108,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				attachEditor: (view) => this.editors.add(view),
 				detachEditor: (view) => {
 					this.editors.delete(view);
+					this.textOffsets.delete(view);
 					const timer = this.editorTimers.get(view);
 					if (timer !== undefined) {
 						window.clearTimeout(timer);
@@ -111,6 +116,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 					}
 				},
 				scheduleEditorResolve: (view, delayMs) => this.scheduleEditorResolve(view, delayMs),
+				layoutChanged: (view) => this.scheduleTextMeasure(view),
 			}),
 		]);
 
@@ -676,7 +682,13 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			state.collapsedIds,
 			this.settings.indentBody,
 		);
-		const decorations = buildOutlineDecorations(view, plan, this.settings.sigil, this.onFoldClick);
+		const decorations = buildOutlineDecorations(
+			view,
+			plan,
+			this.settings.sigil,
+			this.onFoldClick,
+			this.textOffsets.get(view),
+		);
 		// Reasserting the (unchanged) selection alongside the decoration effect
 		// makes CM6 rewrite the DOM selection after the update, rather than
 		// trusting whatever contentEditable left behind. This was originally
@@ -691,6 +703,32 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		view.dispatch({
 			effects: setOutlineDecorations.of(decorations),
 			selection: view.composing ? undefined : view.state.selection,
+		});
+		if (this.settings.indentBody) this.scheduleTextMeasure(view);
+	}
+
+	// Measures where each rendered entry's text starts and, only when that moved,
+	// redraws so body lines pick up the new offsets. The redraw schedules one
+	// more measure, which finds nothing changed and stops — so this settles in
+	// at most two passes instead of looping. Runs in CM6's measure phase, which
+	// batches the DOM reads away from its own writes.
+	private scheduleTextMeasure(view: EditorView): void {
+		if (!this.settings.indentBody || !this.editors.has(view)) return;
+		view.requestMeasure({
+			key: 'vo-entry-text-offsets',
+			read: () => measureEntryTextOffsets(view),
+			write: (measured) => {
+				const previous = this.textOffsets.get(view) ?? new Map<number, number>();
+				if (sameTextOffsets(previous, measured)) return;
+				this.textOffsets.set(view, measured);
+				// Not inline: CM6 refuses a dispatch during its measure phase
+				// ("Calls to EditorView.update are not allowed while an update is
+				// in progress"), so decorating from here silently did nothing and
+				// body kept the level fallback (caught live).
+				window.setTimeout(() => {
+					if (this.editors.has(view)) this.decorate(view);
+				}, 0);
+			},
 		});
 	}
 

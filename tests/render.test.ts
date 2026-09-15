@@ -110,3 +110,20 @@ describe('computeRenderPlan: per-entry fold state (Update006)', () => {
 		expect(plan.foldable.has(4)).toBe(false);
 	});
 });
+
+describe('computeRenderPlan: body owner lines (Update006 follow-up)', () => {
+	it('maps each indented body line to its own entry line', () => {
+		const doc = ['@ A', 'A body', '@@ A.1', 'A.1 body', 'more A.1'].join('\n');
+		const plan = computeRenderPlan(doc, '@', levels(), 'both', new Set(), true);
+		expect([...plan.bodyOwnerLine]).toEqual([
+			[1, 0],
+			[3, 2],
+			[4, 2],
+		]);
+	});
+
+	it('is empty when Indent body is off', () => {
+		const plan = computeRenderPlan(DOC, '@', levels(), 'both', new Set(), false);
+		expect(plan.bodyOwnerLine.size).toBe(0);
+	});
+});

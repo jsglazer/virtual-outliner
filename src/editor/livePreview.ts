@@ -122,6 +122,10 @@ export interface EditorHost {
 	attachEditor(view: EditorView): void;
 	detachEditor(view: EditorView): void;
 	scheduleEditorResolve(view: EditorView, delayMs: number): void;
+	// The rendered lines or their geometry changed (scrolling new lines into
+	// the viewport, a resize, fonts loading), so entry text positions need
+	// measuring again — see measureEntryTextOffsets.
+	layoutChanged(view: EditorView): void;
 }
 
 export const EDITOR_RESOLVE_DEBOUNCE_MS = 200;
@@ -134,8 +138,14 @@ export function buildEditorExtension(host: EditorHost): Extension {
 				host.scheduleEditorResolve(view, 0);
 			}
 
-			update(update: { docChanged: boolean; view: EditorView }): void {
+			update(update: {
+				docChanged: boolean;
+				viewportChanged: boolean;
+				geometryChanged: boolean;
+				view: EditorView;
+			}): void {
 				if (update.docChanged) host.scheduleEditorResolve(update.view, EDITOR_RESOLVE_DEBOUNCE_MS);
+				if (update.viewportChanged || update.geometryChanged) host.layoutChanged(update.view);
 			}
 
 			destroy(): void {
@@ -290,6 +300,9 @@ export function buildOutlineDecorations(
 	// Omitted (as in the headless geometry tests), entries render without a
 	// fold chevron or placeholder.
 	onToggleFold: FoldToggleHandler | null = null,
+	// Entry line index -> measured distance (CSS px) from the line's left edge to
+	// where its text starts; see measureEntryTextOffsets.
+	textOffsets: ReadonlyMap<number, number> = new Map(),
 ): DecorationSet {
 	const doc = view.state.doc;
 	const lineCount = doc.lines;
@@ -427,10 +440,20 @@ export function buildOutlineDecorations(
 		const line = doc.line(lineIndex + 1);
 		items.push({ from: line.from, to: line.from, deco: Decoration.line({ class: `vo-indent-l${level}` }) });
 	}
+	const offsetByLevel = levelTextOffsets(plan, textOffsets);
 	for (const [lineIndex, level] of plan.bodyIndentLevel) {
 		if (lineIndex >= lineCount) continue;
 		const line = doc.line(lineIndex + 1);
-		items.push({ from: line.from, to: line.from, deco: Decoration.line({ class: `vo-body-indent-l${level}` }) });
+		const owner = plan.bodyOwnerLine.get(lineIndex);
+		const offset = (owner !== undefined ? textOffsets.get(owner) : undefined) ?? offsetByLevel.get(level);
+		items.push({
+			from: line.from,
+			to: line.from,
+			deco: Decoration.line({
+				class: `vo-body-indent-l${level}`,
+				attributes: offset !== undefined ? { style: `--vo-body-text-offset: ${offset}px` } : undefined,
+			}),
+		});
 	}
 	for (const [lineIndex, level] of plan.entryLevel) {
 		if (lineIndex >= lineCount) continue;
@@ -445,4 +468,57 @@ export function buildOutlineDecorations(
 	items.sort((a, b) => a.from - b.from || (a.deco.startSide ?? 0) - (b.deco.startSide ?? 0));
 	for (const item of items) builder.add(item.from, item.to, item.deco);
 	return builder.finish();
+}
+
+// Body prose lines up with the start of its entry's TEXT — past the label and
+// its gap — not merely with the entry's indent (Update006 follow-up). That
+// position depends on how wide the rendered label is ("3.1" vs "3.1.10", the
+// level's font), which no stylesheet can know, so it is measured from the DOM
+// after decorations are drawn and fed back in as a per-line custom property
+// (a CSS variable, the one thing set inline; every real style still lives in
+// styles.css). Only rendered lines can be measured, so the result covers the
+// viewport; lines outside it use what a measured entry of the same level got,
+// and failing that the level-based `--vo-body-indent` in CSS.
+//
+// Offsets are in CSS pixels relative to the entry line's own left edge, which
+// is also a body line's left edge before its margin — both are children of
+// `.cm-content` — and divided by CM6's scale so a zoomed or transformed editor
+// still gets the right margin.
+export function measureEntryTextOffsets(view: EditorView): Map<number, number> {
+	const out = new Map<number, number>();
+	const scale = view.scaleX || 1;
+	for (const text of Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-line .vo-text'))) {
+		const line = text.closest<HTMLElement>('.cm-line');
+		if (!line) continue;
+		let lineIndex: number;
+		try {
+			lineIndex = view.state.doc.lineAt(view.posAtDOM(line)).number - 1;
+		} catch {
+			continue;
+		}
+		if (out.has(lineIndex)) continue; // the first text span is where the text starts
+		const rect = text.getClientRects()[0];
+		if (!rect) continue;
+		const offset = (rect.left - line.getBoundingClientRect().left) / scale;
+		out.set(lineIndex, Math.round(offset * 10) / 10);
+	}
+	return out;
+}
+
+export function sameTextOffsets(a: ReadonlyMap<number, number>, b: ReadonlyMap<number, number>): boolean {
+	if (a.size !== b.size) return false;
+	for (const [line, offset] of a) {
+		const other = b.get(line);
+		if (other === undefined || Math.abs(other - offset) > 0.5) return false;
+	}
+	return true;
+}
+
+function levelTextOffsets(plan: RenderPlan, textOffsets: ReadonlyMap<number, number>): Map<number, number> {
+	const byLevel = new Map<number, number>();
+	for (const [line, offset] of textOffsets) {
+		const level = plan.entryLevel.get(line);
+		if (level !== undefined && !byLevel.has(level)) byLevel.set(level, offset);
+	}
+	return byLevel;
 }

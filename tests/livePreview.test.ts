@@ -25,6 +25,7 @@ import {
 	buildHiddenContentGuard,
 	buildOutlineDecorations,
 	outlineDecoField,
+	sameTextOffsets,
 	setOutlineDecorations,
 } from '../src/editor/livePreview';
 
@@ -306,5 +307,44 @@ describe('fold decorations (Update006)', () => {
 		expect(widgets(state, new Set(['^o-aaaaaaaa']), false).some((w) => w.startsWith('FoldPlaceholderWidget'))).toBe(
 			false,
 		);
+	});
+});
+
+describe('body text alignment (Update006 follow-up)', () => {
+	const ALIGN_DOC = ['@ One', 'one body', '@@ Two', 'two body', '@@ Three', 'three body'].join('\n');
+
+	function bodyStyles(offsets: Map<number, number>): (string | undefined)[] {
+		const state = EditorState.create({ doc: ALIGN_DOC });
+		const plan = computeRenderPlan(ALIGN_DOC, SIGIL, LEVELS, 'both', new Set(), true);
+		const deco = buildOutlineDecorations(fakeView(state), plan, SIGIL, null, offsets);
+		const out: (string | undefined)[] = [];
+		for (const iter = deco.iter(); iter.value !== null; iter.next()) {
+			const spec = iter.value.spec as { class?: string; attributes?: { style?: string } };
+			if (spec.class?.startsWith('vo-body-indent-l')) out.push(spec.attributes?.style);
+		}
+		return out;
+	}
+
+	it("gives each body line its own entry's measured text offset", () => {
+		expect(bodyStyles(new Map([[0, 30], [2, 44.5], [4, 50]]))).toEqual([
+			'--vo-body-text-offset: 30px',
+			'--vo-body-text-offset: 44.5px',
+			'--vo-body-text-offset: 50px',
+		]);
+	});
+
+	it('falls back to a measured entry of the same level, then to no inline offset', () => {
+		// Entry "Three" (line 4) is unmeasured, as if outside the viewport.
+		expect(bodyStyles(new Map([[2, 44.5]]))).toEqual([
+			undefined,
+			'--vo-body-text-offset: 44.5px',
+			'--vo-body-text-offset: 44.5px',
+		]);
+	});
+
+	it('treats sub-pixel measurement jitter as unchanged', () => {
+		expect(sameTextOffsets(new Map([[0, 30]]), new Map([[0, 30.4]]))).toBe(true);
+		expect(sameTextOffsets(new Map([[0, 30]]), new Map([[0, 31]]))).toBe(false);
+		expect(sameTextOffsets(new Map([[0, 30]]), new Map())).toBe(false);
 	});
 });

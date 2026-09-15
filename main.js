@@ -663,6 +663,7 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
   const entryLevel2 = /* @__PURE__ */ new Map();
   const indentLevel = /* @__PURE__ */ new Map();
   const bodyIndentLevel = /* @__PURE__ */ new Map();
+  const bodyOwnerLine = /* @__PURE__ */ new Map();
   const foldable = /* @__PURE__ */ new Map();
   const showLabels = viewState === "outline" || viewState === "both";
   for (const node of parsed.flat) {
@@ -679,10 +680,11 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
       for (let line = node.ownBodyStart; line < node.ownBodyEnd; line++) {
         if (isLineHidden(hiddenLineRanges, line)) continue;
         bodyIndentLevel.set(line, node.level);
+        bodyOwnerLine.set(line, node.entryLine);
       }
     }
   }
-  return { parsed, labels, indentLevel, bodyIndentLevel, entryLevel: entryLevel2, foldable, hiddenLineRanges };
+  return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel: entryLevel2, foldable, hiddenLineRanges };
 }
 function hasFoldableContent(lines, node) {
   var _a;
@@ -972,6 +974,7 @@ function buildEditorExtension(host) {
       }
       update(update) {
         if (update.docChanged) host.scheduleEditorResolve(update.view, EDITOR_RESOLVE_DEBOUNCE_MS);
+        if (update.viewportChanged || update.geometryChanged) host.layoutChanged(update.view);
       }
       destroy() {
         host.detachEditor(this.view);
@@ -1071,8 +1074,8 @@ var FoldPlaceholderWidget = class extends import_view.WidgetType {
     return true;
   }
 };
-function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null) {
-  var _a, _b;
+function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null, textOffsets = /* @__PURE__ */ new Map()) {
+  var _a, _b, _c;
   const doc = view.state.doc;
   const lineCount = doc.lines;
   const builder = new import_state.RangeSetBuilder();
@@ -1130,10 +1133,20 @@ function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null) {
     const line = doc.line(lineIndex + 1);
     items.push({ from: line.from, to: line.from, deco: import_view.Decoration.line({ class: `vo-indent-l${level}` }) });
   }
+  const offsetByLevel = levelTextOffsets(plan, textOffsets);
   for (const [lineIndex, level] of plan.bodyIndentLevel) {
     if (lineIndex >= lineCount) continue;
     const line = doc.line(lineIndex + 1);
-    items.push({ from: line.from, to: line.from, deco: import_view.Decoration.line({ class: `vo-body-indent-l${level}` }) });
+    const owner = plan.bodyOwnerLine.get(lineIndex);
+    const offset = (_c = owner !== void 0 ? textOffsets.get(owner) : void 0) != null ? _c : offsetByLevel.get(level);
+    items.push({
+      from: line.from,
+      to: line.from,
+      deco: import_view.Decoration.line({
+        class: `vo-body-indent-l${level}`,
+        attributes: offset !== void 0 ? { style: `--vo-body-text-offset: ${offset}px` } : void 0
+      })
+    });
   }
   for (const [lineIndex, level] of plan.entryLevel) {
     if (lineIndex >= lineCount) continue;
@@ -1150,6 +1163,42 @@ function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null) {
   });
   for (const item of items) builder.add(item.from, item.to, item.deco);
   return builder.finish();
+}
+function measureEntryTextOffsets(view) {
+  const out = /* @__PURE__ */ new Map();
+  const scale = view.scaleX || 1;
+  for (const text of Array.from(view.contentDOM.querySelectorAll(".cm-line .vo-text"))) {
+    const line = text.closest(".cm-line");
+    if (!line) continue;
+    let lineIndex;
+    try {
+      lineIndex = view.state.doc.lineAt(view.posAtDOM(line)).number - 1;
+    } catch (e) {
+      continue;
+    }
+    if (out.has(lineIndex)) continue;
+    const rect = text.getClientRects()[0];
+    if (!rect) continue;
+    const offset = (rect.left - line.getBoundingClientRect().left) / scale;
+    out.set(lineIndex, Math.round(offset * 10) / 10);
+  }
+  return out;
+}
+function sameTextOffsets(a, b) {
+  if (a.size !== b.size) return false;
+  for (const [line, offset] of a) {
+    const other = b.get(line);
+    if (other === void 0 || Math.abs(other - offset) > 0.5) return false;
+  }
+  return true;
+}
+function levelTextOffsets(plan, textOffsets) {
+  const byLevel = /* @__PURE__ */ new Map();
+  for (const [line, offset] of textOffsets) {
+    const level = plan.entryLevel.get(line);
+    if (level !== void 0 && !byLevel.has(level)) byLevel.set(level, offset);
+  }
+  return byLevel;
 }
 
 // src/editor/keymap.ts
@@ -1388,6 +1437,65 @@ function blockWrapSegment(segment, classes, doc) {
   (_b = segment.br) == null ? void 0 : _b.remove();
   return wrapper;
 }
+var ENTRY_ATTR = "data-vo-entry-line";
+var OWNER_ATTR = "data-vo-owner-line";
+var OWNER_LEVEL_ATTR = "data-vo-owner-level";
+var levelOffsetCache = /* @__PURE__ */ new WeakMap();
+function tagForAlignment(el, plan, line) {
+  const entryLevel2 = plan.entryLevel.get(line);
+  if (entryLevel2 !== void 0) {
+    el.setAttribute(ENTRY_ATTR, String(line));
+    el.setAttribute(OWNER_LEVEL_ATTR, String(entryLevel2));
+  }
+  const owner = plan.bodyOwnerLine.get(line);
+  const level = plan.bodyIndentLevel.get(line);
+  if (owner !== void 0 && level !== void 0) {
+    el.setAttribute(OWNER_ATTR, String(owner));
+    el.setAttribute(OWNER_LEVEL_ATTR, String(level));
+  }
+}
+function entryTextOffset(entry) {
+  const text = entry.querySelector(".vo-text");
+  const rect = text == null ? void 0 : text.getClientRects()[0];
+  if (!rect) return null;
+  return Math.round((rect.left - entry.getBoundingClientRect().left) * 10) / 10;
+}
+function blocksIn(root, selector) {
+  const found = Array.from(root.querySelectorAll(selector));
+  return root.matches(selector) ? [root, ...found] : found;
+}
+function alignBodyIn(root) {
+  var _a;
+  const preview = root.closest(".markdown-rendered");
+  if (!preview) return;
+  let cache = levelOffsetCache.get(preview);
+  if (!cache) {
+    cache = /* @__PURE__ */ new Map();
+    levelOffsetCache.set(preview, cache);
+  }
+  const bodies = new Set(blocksIn(root, `[${OWNER_ATTR}]`));
+  for (const entry of blocksIn(root, `[${ENTRY_ATTR}]`)) {
+    const offset = entryTextOffset(entry);
+    const line = entry.getAttribute(ENTRY_ATTR);
+    if (offset === null || line === null) continue;
+    cache.set(Number(entry.getAttribute(OWNER_LEVEL_ATTR)), offset);
+    for (const body of blocksIn(preview, `[${OWNER_ATTR}="${line}"]`)) bodies.add(body);
+  }
+  for (const body of bodies) {
+    const owner = body.getAttribute(OWNER_ATTR);
+    const entry = owner !== null ? preview.querySelector(`[${ENTRY_ATTR}="${owner}"]`) : null;
+    const offset = (_a = entry ? entryTextOffset(entry) : null) != null ? _a : cache.get(Number(body.getAttribute(OWNER_LEVEL_ATTR)));
+    if (offset !== null && offset !== void 0) body.setCssProps({ "--vo-body-text-offset": `${offset}px` });
+  }
+}
+function scheduleAlignment(el) {
+  var _a;
+  const win = (_a = el.win) != null ? _a : window;
+  win.requestAnimationFrame(() => {
+    if (el.isConnected) alignBodyIn(el);
+    else win.setTimeout(() => el.isConnected && alignBodyIn(el), 100);
+  });
+}
 function levelClasses(plan, line) {
   const indentLevel = plan.indentLevel.get(line);
   const entryLevel2 = plan.entryLevel.get(line);
@@ -1430,6 +1538,8 @@ function createReadingPostProcessor(host) {
       for (const cls of levelClasses(plan, lineStart)) {
         el.addClass(cls);
       }
+      tagForAlignment(el, plan, lineStart);
+      scheduleAlignment(el);
       const label = plan.labels.get(lineStart);
       if (label === void 0) return;
       const level = (_a = plan.entryLevel.get(lineStart)) != null ? _a : 1;
@@ -1458,6 +1568,8 @@ function createReadingPostProcessor(host) {
         const classes = levelClasses(plan, line);
         if (classes.length === 0) continue;
         for (const cls of classes) el.addClass(cls);
+        tagForAlignment(el, plan, line);
+        scheduleAlignment(el);
         break;
       }
       return;
@@ -1475,6 +1587,7 @@ function createReadingPostProcessor(host) {
       const classes = hidden ? ["vo-hidden"] : ["vo-line", ...levelClasses(plan, line)];
       const wrapper = blockWrapSegment(segment, classes, doc);
       if (!wrapper || hidden) continue;
+      tagForAlignment(wrapper, plan, line);
       const label = plan.labels.get(line);
       if (label === void 0) continue;
       const lineText = lines[line];
@@ -1482,6 +1595,7 @@ function createReadingPostProcessor(host) {
       const level = (_c = plan.entryLevel.get(line)) != null ? _c : 1;
       materializeLabelIn(Array.from(wrapper.childNodes), lineText, sigilChar, label, level, doc, foldFor(line));
     }
+    scheduleAlignment(el);
   };
 }
 
@@ -2137,6 +2251,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian5.Plugin {
     this.fileState = /* @__PURE__ */ new Map();
     this.editors = /* @__PURE__ */ new Set();
     this.editorTimers = /* @__PURE__ */ new Map();
+    // Per editor: entry line -> measured text start, for aligning body under it.
+    this.textOffsets = /* @__PURE__ */ new Map();
     this.diskTimers = /* @__PURE__ */ new Map();
     this.changeListeners = /* @__PURE__ */ new Set();
     this.toolbarHighlighter = null;
@@ -2172,13 +2288,15 @@ var VirtualOutlinerPlugin = class extends import_obsidian5.Plugin {
         attachEditor: (view) => this.editors.add(view),
         detachEditor: (view) => {
           this.editors.delete(view);
+          this.textOffsets.delete(view);
           const timer = this.editorTimers.get(view);
           if (timer !== void 0) {
             window.clearTimeout(timer);
             this.editorTimers.delete(view);
           }
         },
-        scheduleEditorResolve: (view, delayMs) => this.scheduleEditorResolve(view, delayMs)
+        scheduleEditorResolve: (view, delayMs) => this.scheduleEditorResolve(view, delayMs),
+        layoutChanged: (view) => this.scheduleTextMeasure(view)
       })
     ]);
     this.registerMarkdownPostProcessor(
@@ -2665,10 +2783,38 @@ ${body}
       state.collapsedIds,
       this.settings.indentBody
     );
-    const decorations = buildOutlineDecorations(view, plan, this.settings.sigil, this.onFoldClick);
+    const decorations = buildOutlineDecorations(
+      view,
+      plan,
+      this.settings.sigil,
+      this.onFoldClick,
+      this.textOffsets.get(view)
+    );
     view.dispatch({
       effects: setOutlineDecorations.of(decorations),
       selection: view.composing ? void 0 : view.state.selection
+    });
+    if (this.settings.indentBody) this.scheduleTextMeasure(view);
+  }
+  // Measures where each rendered entry's text starts and, only when that moved,
+  // redraws so body lines pick up the new offsets. The redraw schedules one
+  // more measure, which finds nothing changed and stops — so this settles in
+  // at most two passes instead of looping. Runs in CM6's measure phase, which
+  // batches the DOM reads away from its own writes.
+  scheduleTextMeasure(view) {
+    if (!this.settings.indentBody || !this.editors.has(view)) return;
+    view.requestMeasure({
+      key: "vo-entry-text-offsets",
+      read: () => measureEntryTextOffsets(view),
+      write: (measured) => {
+        var _a;
+        const previous = (_a = this.textOffsets.get(view)) != null ? _a : /* @__PURE__ */ new Map();
+        if (sameTextOffsets(previous, measured)) return;
+        this.textOffsets.set(view, measured);
+        window.setTimeout(() => {
+          if (this.editors.has(view)) this.decorate(view);
+        }, 0);
+      }
     });
   }
   decorateAllFor(path) {
