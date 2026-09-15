@@ -29,7 +29,7 @@ export default tseslint.config(
 				{
 					// "Virtual Outliner" is the plugin's proper name; Dataview and
 					// Datacore are third-party plugin names, not generic nouns.
-					brands: ['Virtual Outliner', 'Dataview', 'Datacore'],
+					brands: ['Virtual Outliner', 'Dataview', 'Datacore', 'Zotero Manager', 'Zotero', 'Markdown', 'PDF'],
 				},
 			],
 		},

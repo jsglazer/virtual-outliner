@@ -27,6 +27,7 @@ Outline-first authoring for Obsidian: lay down a full multi-level outline, then 
 - **One format, every level.** Number style, separator, italic, colour, font size, font weight, font family, indent step, space above, and label gap are set once in Settings and applied uniformly across all levels — no more editing the same ten fields six times. A level's font size sizes the whole line, so setting it below 1em tightens the leading to match rather than leaving full-size gaps around shrunken text. Indentation is cumulative: level 1 always stays flush left, and the shared indent step is how much further right each deeper level sits than the one above it. With **Indent body under its outline level** on (in Settings, or via the **Indent body with outline** command), body prose lines up exactly under its entry's text — past the number label, however wide that label renders (`3.1` or `3.1.10`, in any font) — in both Live Preview and Reading View, so body under a top-level entry is indented too. The position is measured from the rendered entry, and until an entry has been measured its body falls back to one indent step deeper than the entry. It is applied as a margin (one that overrides Obsidian's own reset of editor-line margins), so list items, quotes, and callouts indent along with plain paragraphs.
 - **Per-node metadata** (Status, Note, or any fields you configure) stored out-of-band in a single `%%md-outline` block at the end of the file, exposed read-only to Dataview/Datacore.
 - **Generate filtered copy** — a command that produces a new file containing only what the current view state shows, with labels materialized into literal text.
+- **Export to PDF** (desktop) — typesets the note's **body text only** into a PDF via pandoc and LaTeX: every outline entry, label, hidden id, and the metadata block are left out, whatever is folded or showing. See [Export to PDF](#export-to-pdf).
 - Full desktop **and** mobile/iPad support.
 
 ## Syntax
@@ -71,6 +72,30 @@ const nodes = await api.getOutline(dv.current().file.path);
 dv.table(['Label', 'Text', 'Status'], nodes.map(n => [n.label, n.text, n.meta?.Status ?? '']));
 ```
 
+## Export to PDF
+
+**Export to PDF** turns an outlined draft into a clean final document: only the prose is typeset. Each removed outline entry becomes a paragraph break, and every other line break in the body stays a line break, so the PDF reads the way Obsidian displays the note. The body's own Markdown headings (`#`, `##`, …) become the PDF's sections, bookmarks, and optional table of contents.
+
+The command opens a dialog for the font size (8–20 pt), the options below, and shows where the PDF will go and anything written *on* an outline entry line (a footnote, citation, or link) that the export will drop. Set per-note options in the frontmatter; anything left out uses the defaults in **Settings → PDF export**:
+
+```yaml
+---
+pdf-output: "~/Dev/TEMP/Puzzle"   # folder (or a path ending in .pdf); default: beside the note
+headnum: n                        # number headings (y/n)
+TOC: n                            # table of contents (y/n)
+cite: MLA                         # MLA, APA, Chicago, Chicago-notes, or a path to a .csl
+notes: e                          # e = endnotes at the end, f = footnotes at the page bottom
+---
+```
+
+- **Notes** use the normal syntax — `[^1]` in the text and `[^1]: text` below.
+- **Citations** use pandoc syntax (`[@smith2020, p. 12]`, `@smith2020`). Their data comes from Zotero through the [Zotero Manager](https://github.com/jsglazer/zotero-manager) plugin, so Zotero (with Better BibTeX) must be running; the export stops and says so if it isn't. A `bibliography:` file in the frontmatter is used instead when present.
+- **The LaTeX preamble** is stored in the plugin's settings and edited in **Settings → PDF export** (with *Import from file…* and *Reset to default*). A `Pre*.tex` beside a note, or `latex-preamble:` in its frontmatter, overrides it for that note.
+- **An existing PDF is only overwritten if Virtual Outliner made it**, so an unrelated `Note.pdf` beside `Note.md` is never clobbered.
+- **Requirements:** macOS with [pandoc](https://pandoc.org), [MacTeX](https://tug.org/mactex/) (`lualatex`, `latexmk`), and `python3`. Settings shows which are found.
+
+The renderer (shell and Python scripts, citation styles, default preamble) is bundled inside `main.js`, so it syncs with the plugin; on load it is written to `~/Library/Application Support/virtual-outliner/`. **Install quick action** in Settings adds a Finder Quick Action, *Convert Md to PDF (Virtual Outliner)*, that uses the same renderer for ordinary Markdown files and refuses notes that contain an outline.
+
 ## Commands
 
 - **Toggle outline sidebar** (formerly *Open outline sidebar* — same command id, so existing hotkeys and toolbar buttons keep working)
@@ -81,6 +106,7 @@ dv.table(['Label', 'Text', 'Status'], nodes.map(n => [n.label, n.text, n.meta?.S
 - **Toggle new entry on next line vs after section** — toggles the same setting as **Enter at the end of an entry**
 - **Move outline block up** / **Move outline block down** — the `Alt-↑` / `Alt-↓` moves, usable with the cursor anywhere in the block, including its body text
 - **Generate filtered copy** — writes a new `.md` file with the current view honored and labels materialized
+- **Export to PDF** — typesets the body text only (desktop)
 - **Prune orphaned outline metadata** — removes metadata records whose node no longer exists, after reporting what it's about to remove
 
 ## Development
@@ -92,6 +118,8 @@ npm run build   # typecheck + production bundle
 npm test        # vitest, headless — src/core/ plus decoration geometry
 npm run lint    # eslint
 ```
+
+`renderer/` holds the PDF renderer (zsh + Python, CSL styles, default preamble); esbuild bundles each file into `main.js` as text.
 
 `src/core/` is a pure TypeScript engine (no `obsidian`, no CodeMirror, no DOM) covering parsing, structural operations, label computation, metadata serialization, and render planning — fully covered by headless tests. `src/editor/` and `src/ui/` are the CodeMirror 6 / Obsidian shell around it.
 

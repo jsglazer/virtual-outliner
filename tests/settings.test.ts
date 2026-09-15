@@ -122,3 +122,18 @@ describe('levelCssVars', () => {
 		expect(vars['--vo-l1-color']).not.toContain(';');
 	});
 });
+
+describe('normalizeSettings — PDF export', () => {
+	it('defaults the export settings and keeps valid stored values', () => {
+		expect(normalizeSettings({}).pdfExport.notes).toBe('f');
+		const s = normalizeSettings({
+			pdfExport: { preamble: '\\usepackage{x}', notes: 'e', lastFontSize: '17', cite: 'APA', toc: true },
+		}).pdfExport;
+		expect([s.preamble, s.notes, s.lastFontSize, s.cite, s.toc]).toEqual(['\\usepackage{x}', 'e', '17', 'APA', true]);
+	});
+
+	it('repairs an impossible font size and a blank style', () => {
+		const s = normalizeSettings({ pdfExport: { lastFontSize: '13', cite: ' ', notes: 'x' } }).pdfExport;
+		expect([s.lastFontSize, s.cite, s.notes]).toEqual(['12', 'MLA', 'f']);
+	});
+});

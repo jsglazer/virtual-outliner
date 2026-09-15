@@ -630,3 +630,55 @@
 	padding: 0 3px;
 	color: var(--text-normal);
 }
+
+/* ── PDF export ── */
+
+.vo-preamble-editor {
+	width: 100%;
+	min-height: 18em;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	resize: vertical;
+	white-space: pre;
+	tab-size: 4;
+}
+
+.vo-preamble-warnings {
+	color: var(--text-error);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: 1em;
+}
+
+.vo-export-where,
+.vo-export-warnings {
+	margin: 0.75em 0;
+}
+
+.vo-export-label {
+	font-weight: var(--font-semibold);
+}
+
+.vo-export-path {
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	word-break: break-all;
+}
+
+.vo-export-warnings {
+	color: var(--text-warning);
+}
+
+.vo-export-warnings ul {
+	margin: 0.25em 0 0;
+	padding-left: 1.25em;
+}
+
+.vo-export-error {
+	white-space: pre-wrap;
+	max-height: 20em;
+	overflow: auto;
+	font-size: var(--font-ui-smaller);
+	background: var(--background-secondary);
+	padding: 0.5em;
+	border-radius: var(--radius-s);
+}

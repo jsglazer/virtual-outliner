@@ -29,6 +29,9 @@ const context = await esbuild.context({
 	sourcemap: prod ? false : 'inline',
 	treeShaking: true,
 	outfile: 'main.js',
+	// The PDF renderer (renderer/) ships inside main.js as strings, so it
+	// travels wherever the plugin syncs; src/export/installer.ts writes it out.
+	loader: { '.sh': 'text', '.py': 'text', '.tex': 'text', '.csl': 'text', '.wflow': 'text', '.plist': 'text' },
 	minify: false,
 });
 

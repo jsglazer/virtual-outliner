@@ -1,0 +1,36 @@
+\usepackage[top=.75in, bottom=.75in, left=.75in, right=.75in, includehead, includefoot, marginparwidth=.75in, marginparsep=.125in]{geometry}
+\setlength{\parskip}{.15in}
+\usepackage{hyperref}
+
+\RequirePackage{datetime}
+\settimeformat{ampmtime}
+\newdateformat{dashdate}{\THEYEAR-\twodigit{\THEMONTH}-\twodigit{\THEDAY}}
+\newtimeformat{dottime}{\twodigit{\THEHOUR}:\twodigit{\THEMINUTE}:\twodigit{\THESECOND}}
+
+\RequirePackage{lastpage}    %% Required for pages of page number
+\RequirePackage{fancyhdr}   %must come after geometry
+\RequirePackage{etoolbox}
+\pagestyle{fancy}
+\renewcommand{\sectionmark}[1]{\markright{Sec.\thesection:\ #1}{}}
+% \DocTitle and \DocAuthor are set per export (the note's title: frontmatter or
+% its file name, and the Author setting) in a small include that Virtual
+% Outliner loads BEFORE this preamble, so these \providecommand lines only
+% apply when this preamble is used on its own. An empty \DocTitle falls back
+% to \jobname.
+\providecommand{\DocTitle}{}
+\providecommand{\DocAuthor}{}
+\newcommand{\HeaderTitle}{\ifdefempty{\DocTitle}{\jobname}{\DocTitle}}
+\fancyhead{} % clear all header fields
+\fancyhead[L]{\small{\textbf{\HeaderTitle}}}
+\fancyhead[R]{\small{\DocAuthor}}
+\fancyfoot{}
+\fancyfoot[L]{\scriptsize{\thepage\ of \pageref{LastPage}}}
+\fancyfoot[R]{\scriptsize{\dashdate{\today} at \dottime}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% Light grey rule between table rows. Just the colour lives here — the actual
+% \hline after each row is inserted into the generated .tex by rowlines.py,
+% since longtable's row-end machinery resists doing it from a preamble hook.
+\usepackage{colortbl}
+\definecolor{rowline}{gray}{0.75}

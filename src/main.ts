@@ -9,7 +9,7 @@
 // creates a brand-new export file and never touches the source document.
 
 import type { TFile, WorkspaceLeaf } from 'obsidian';
-import { MarkdownView, Notice, Plugin } from 'obsidian';
+import { MarkdownView, Notice, Platform, Plugin } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
 
 import type { VirtualOutlinerAPI } from './api';
@@ -36,7 +36,12 @@ import {
 import type { KeymapHost } from './editor/keymap';
 import { buildOutlineKeymap, moveBlock } from './editor/keymap';
 import { createReadingPostProcessor } from './editor/readingView';
+import { PdfExporter, vaultBasePath } from './export/exporter';
+import { ensureRenderer, installQuickAction, missingTools, pruneBuildDirs, REQUIRED_TOOLS, supportDir, writeVaultConfig } from './export/installer';
+import { electronShell } from './export/node';
+import { DEFAULT_PREAMBLE } from './export/rendererFiles';
 import { VirtualOutlinerSettingTab } from './settingsTab';
+import { ExportErrorModal, ExportPdfModal } from './ui/exportModal';
 import type { OutlineFileState } from './state';
 import { OutlineSidebarView, SIDEBAR_VIEW_TYPE } from './ui/sidebar';
 import { ToolbarHighlighter } from './ui/toolbarHighlight';
@@ -80,11 +85,19 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private toolbarHighlighter: ToolbarHighlighter | null = null;
 	private toolbarTimer: number | null = null;
 	private keymapHost!: KeymapHost;
+	private pdfExporter: PdfExporter | null = null;
+	private exportRunning = false;
 
 	async onload(): Promise<void> {
 		const raw: unknown = await this.loadData();
 		this.settings = normalizeSettings(raw);
 		this.loadFileState(raw);
+		// The preamble lives in settings so it syncs and is editable there;
+		// the first load seeds it with the bundled default.
+		if (this.settings.pdfExport.preamble.trim() === '') {
+			this.settings.pdfExport.preamble = DEFAULT_PREAMBLE;
+			await this.persist();
+		}
 		this.api = createApi(
 			this.app.vault,
 			() => this.settings.sigil,
@@ -245,6 +258,27 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			},
 		});
 
+		if (Platform.isDesktopApp) {
+			this.pdfExporter = new PdfExporter({
+				app: this.app,
+				pluginVersion: this.manifest.version,
+				sigilChar: () => this.settings.sigil,
+				settings: () => this.settings.pdfExport,
+			});
+			this.addCommand({
+				id: 'export-pdf',
+				name: 'Export to PDF',
+				checkCallback: (checking) => {
+					const file = this.activeMarkdownFile();
+					if (!file) return false;
+					if (checking) return true;
+					void this.exportPdf(file);
+					return true;
+				},
+			});
+			this.app.workspace.onLayoutReady(() => void this.setupPdfRenderer());
+		}
+
 		this.addCommand({
 			id: 'prune-orphaned-metadata',
 			name: 'Prune orphaned outline metadata',
@@ -353,11 +387,118 @@ export default class VirtualOutlinerPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.persist();
+		if (Platform.isDesktopApp) void this.syncVaultConfig();
 		this.applyLevelCssVars();
 		for (const view of this.editors) this.decorate(view);
 		this.rerenderPreviews(null);
 		this.notifyChange();
 		this.scheduleToolbarRefresh();
+	}
+
+	// ── PDF export ──
+
+	defaultPreamble(): string {
+		return DEFAULT_PREAMBLE;
+	}
+
+	private async setupPdfRenderer(): Promise<void> {
+		try {
+			await ensureRenderer(this.manifest.version);
+			await this.syncVaultConfig();
+			await pruneBuildDirs();
+		} catch (e) {
+			console.error('Virtual Outliner: could not install the PDF renderer', e);
+		}
+	}
+
+	private async syncVaultConfig(): Promise<void> {
+		try {
+			await writeVaultConfig(this.app.vault.getName(), {
+				sigil: this.settings.sigil,
+				export: this.settings.pdfExport,
+				defaultPreamble: DEFAULT_PREAMBLE,
+			});
+		} catch (e) {
+			console.error('Virtual Outliner: could not write the vault config for the quick action', e);
+		}
+	}
+
+	pdfToolStatus(): string {
+		const missing = new Set(missingTools());
+		const tools = REQUIRED_TOOLS.map((t) => `${t} ${missing.has(t) ? '✗ missing' : '✓'}`).join(' · ');
+		return `${tools}. Installed in ${supportDir()}/renderer. The Finder quick action "Convert Md to PDF" uses the same renderer and refuses notes that have an outline.`;
+	}
+
+	async installQuickActionFromSettings(): Promise<void> {
+		try {
+			await ensureRenderer(this.manifest.version);
+			await this.syncVaultConfig();
+			const path = await installQuickAction();
+			new Notice(`Quick action installed: ${path}`);
+		} catch (e) {
+			new Notice(`Could not install the quick action: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+
+	private openPath(path: string): void {
+		const shell = electronShell();
+		if (shell) void shell.openPath(path);
+	}
+
+	private async exportPdf(file: TFile): Promise<void> {
+		const exporter = this.pdfExporter;
+		if (!exporter) return;
+		if (vaultBasePath(this.app) === null) {
+			new Notice('PDF export needs a vault stored on this computer.');
+			return;
+		}
+		if (this.exportRunning) {
+			new Notice('A PDF export is already running.');
+			return;
+		}
+		const view = this.editorFor(file.path);
+		const doc = view ? view.state.doc.toString() : await this.app.vault.read(file);
+		const plan = await exporter.plan(file, doc);
+		if (typeof plan === 'string') {
+			new Notice(plan);
+			return;
+		}
+		new ExportPdfModal(this.app, plan, (finalPlan) => void this.runExport(exporter, finalPlan)).open();
+	}
+
+	private async runExport(exporter: PdfExporter, plan: Parameters<PdfExporter['run']>[0]): Promise<void> {
+		this.exportRunning = true;
+		const progress = new Notice('Exporting PDF…', 0);
+		try {
+			if (plan.fontsize !== this.settings.pdfExport.lastFontSize) {
+				this.settings.pdfExport.lastFontSize = plan.fontsize;
+				await this.persist();
+			}
+			const outcome = await exporter.run(plan, (msg) => progress.setMessage(msg));
+			progress.hide();
+			if (!outcome.ok) {
+				new ExportErrorModal(this.app, outcome.stage, outcome.message, outcome.buildDir, outcome.logPath, (p) =>
+					this.openPath(p),
+				).open();
+				return;
+			}
+			new Notice(`PDF saved to ${outcome.output}`, 8000);
+			if (outcome.unknownKeys.length > 0) {
+				new Notice(`Zotero doesn't know these cite keys: ${outcome.unknownKeys.join(', ')}`, 12000);
+			}
+			if (outcome.issues.length > 0) {
+				const targets = outcome.issues.map((i) => `${i.target} (${i.kind})`).join(', ');
+				new Notice(`Left out of the PDF: ${targets}`, 12000);
+			}
+			if (this.settings.pdfExport.openAfterExport) this.openPath(outcome.output);
+		} catch (e) {
+			progress.hide();
+			new ExportErrorModal(this.app, 'plugin', e instanceof Error ? (e.stack ?? e.message) : String(e), null, null, (p) =>
+				this.openPath(p),
+			).open();
+		} finally {
+			this.exportRunning = false;
+		}
 	}
 
 	// Reading view is a one-shot post-processor render, so anything that

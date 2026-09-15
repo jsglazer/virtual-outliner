@@ -4,6 +4,8 @@
 // regenerated <style> element by the shell rather than duplicated per
 // decoration (Decision #12's per-level typography approach).
 
+import type { NotesMode } from './exportOptions';
+import { CITE_STYLES, FONT_SIZES } from './exportOptions';
 import { DEFAULT_SIGIL_CHAR, MAX_LEVEL } from './sigil';
 import type { EnterBehavior, LabelStyle, LevelFormat, ViewState } from './types';
 
@@ -44,6 +46,22 @@ export interface ToolbarHighlights {
 	enterBehavior: ToolbarHighlight;
 }
 
+// PDF export. The LaTeX preamble lives here (so it syncs with the plugin's
+// settings and is edited in the settings panel); '' means "use the bundled
+// default", which the shell seeds on first load. headnum/toc/notes/cite are
+// the defaults a note's own frontmatter overrides.
+export interface PdfExportSettings {
+	preamble: string;
+	author: string;
+	headnum: boolean;
+	toc: boolean;
+	notes: NotesMode;
+	cite: string;
+	lastFontSize: string;
+	keepBuildFiles: boolean;
+	openAfterExport: boolean;
+}
+
 export interface OutlineSettings {
 	// The configurable depth sigil (Decision #1 — "keep as configurable").
 	// Exactly one character; anything else is coerced back to the default by
@@ -55,6 +73,21 @@ export interface OutlineSettings {
 	levels: LevelFormat[]; // always exactly MAX_LEVEL entries, index 0 = level 1
 	metaFields: MetaFieldDef[];
 	toolbarHighlights: ToolbarHighlights;
+	pdfExport: PdfExportSettings;
+}
+
+export function defaultPdfExportSettings(): PdfExportSettings {
+	return {
+		preamble: '',
+		author: 'Joshua S. Glazer',
+		headnum: false,
+		toc: false,
+		notes: 'f',
+		cite: 'MLA',
+		lastFontSize: '12',
+		keepBuildFiles: false,
+		openAfterExport: false,
+	};
 }
 
 export function colorOption(color = ''): ColorOption {
@@ -117,6 +150,7 @@ export function defaultSettings(): OutlineSettings {
 		levels,
 		metaFields: defaultMetaFields(),
 		toolbarHighlights: defaultToolbarHighlights(),
+		pdfExport: defaultPdfExportSettings(),
 	};
 }
 
@@ -201,6 +235,24 @@ function readToolbarHighlights(v: unknown): ToolbarHighlights {
 	};
 }
 
+function readPdfExport(v: unknown): PdfExportSettings {
+	const fallback = defaultPdfExportSettings();
+	if (!isRecord(v)) return fallback;
+	const cite = readString(v.cite, fallback.cite).trim();
+	const size = readString(v.lastFontSize, fallback.lastFontSize);
+	return {
+		preamble: readString(v.preamble, fallback.preamble),
+		author: readString(v.author, fallback.author),
+		headnum: readBool(v.headnum, fallback.headnum),
+		toc: readBool(v.toc, fallback.toc),
+		notes: v.notes === 'e' ? 'e' : 'f',
+		cite: cite !== '' ? cite : CITE_STYLES[0] ?? 'MLA',
+		lastFontSize: FONT_SIZES.includes(size) ? size : fallback.lastFontSize,
+		keepBuildFiles: readBool(v.keepBuildFiles, fallback.keepBuildFiles),
+		openAfterExport: readBool(v.openAfterExport, fallback.openAfterExport),
+	};
+}
+
 const VIEW_STATES: ReadonlySet<string> = new Set(['outline', 'body', 'both']);
 
 export function normalizeSettings(raw: unknown): OutlineSettings {
@@ -231,6 +283,7 @@ export function normalizeSettings(raw: unknown): OutlineSettings {
 		levels,
 		metaFields: metaFields.length > 0 ? metaFields : fallback.metaFields,
 		toolbarHighlights: readToolbarHighlights(raw.toolbarHighlights),
+		pdfExport: readPdfExport(raw.pdfExport),
 	};
 }
 

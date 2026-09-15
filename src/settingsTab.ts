@@ -1,5 +1,7 @@
 import type { App } from 'obsidian';
-import { PluginSettingTab, Setting } from 'obsidian';
+import { Notice, Platform, PluginSettingTab, Setting } from 'obsidian';
+
+import { checkPreamble, CITE_STYLES } from './core/exportOptions';
 
 import type { ColorOption, ToolbarHighlight } from './core/settings';
 import { isRiskySigil } from './core/sigil';
@@ -124,6 +126,143 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 		this.renderMetaFields(containerEl);
 
 		this.renderToolbarSection(containerEl);
+		this.renderPdfExportSection(containerEl);
+	}
+
+	// ── PDF export ──
+
+	private renderPdfExportSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('PDF export').setHeading();
+		if (!Platform.isDesktopApp) {
+			containerEl.createEl('p', { cls: 'vo-fixture-note', text: 'PDF export runs on desktop only.' });
+			return;
+		}
+		const pdf = this.plugin.settings.pdfExport;
+		containerEl.createEl('p', {
+			cls: 'vo-fixture-note',
+			// eslint-disable-next-line obsidianmd/ui/sentence-case -- headnum, TOC, notes, cite, pdf-output are literal frontmatter keys
+			text: 'Export to PDF typesets only the body text, never the outline. These are the defaults; a note\'s frontmatter (headnum, TOC, notes, cite, pdf-output) overrides them.',
+		});
+
+		new Setting(containerEl)
+			.setName('Author')
+			.setDesc('Shown in the running header. Frontmatter: author.')
+			.addText((text) =>
+				text.setValue(pdf.author).onChange(async (value) => {
+					pdf.author = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+		new Setting(containerEl)
+			.setName('Number headings')
+			.addToggle((t) =>
+				t.setValue(pdf.headnum).onChange(async (v) => {
+					pdf.headnum = v;
+					await this.plugin.saveSettings();
+				}),
+			);
+		new Setting(containerEl)
+			.setName('Table of contents')
+			.addToggle((t) =>
+				t.setValue(pdf.toc).onChange(async (v) => {
+					pdf.toc = v;
+					await this.plugin.saveSettings();
+				}),
+			);
+		new Setting(containerEl).setName('Notes').addDropdown((dd) =>
+			dd
+				.addOption('f', 'Footnotes at the bottom of the page')
+				.addOption('e', 'Endnotes at the end of the document')
+				.setValue(pdf.notes)
+				.onChange(async (v) => {
+					pdf.notes = v === 'e' ? 'e' : 'f';
+					await this.plugin.saveSettings();
+				}),
+		);
+		new Setting(containerEl)
+			.setName('Citation style')
+			.setDesc('Citation data comes from Zotero through the Zotero Manager plugin; Zotero must be running.')
+			.addDropdown((dd) => {
+				for (const style of CITE_STYLES) dd.addOption(style, style.replace('-', ' '));
+				dd.setValue(CITE_STYLES.includes(pdf.cite) ? pdf.cite : 'MLA').onChange(async (v) => {
+					pdf.cite = v;
+					await this.plugin.saveSettings();
+				});
+			});
+		new Setting(containerEl)
+			.setName('Open PDF after export')
+			.addToggle((t) =>
+				t.setValue(pdf.openAfterExport).onChange(async (v) => {
+					pdf.openAfterExport = v;
+					await this.plugin.saveSettings();
+				}),
+			);
+		new Setting(containerEl)
+			.setName('Keep build files')
+			.setDesc('Keep the generated .tex, log and converted Markdown after a successful export. They are always kept after a failure.')
+			.addToggle((t) =>
+				t.setValue(pdf.keepBuildFiles).onChange(async (v) => {
+					pdf.keepBuildFiles = v;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('LaTeX preamble')
+			.setDesc('Included in every export, after pandoc\'s own setup. A Pre*.tex beside a note, or latex-preamble: in its frontmatter, takes precedence.')
+			.addButton((b) =>
+				b.setButtonText('Import from file…').onClick(() => {
+					const input = activeDocument.createElement('input');
+					input.type = 'file';
+					input.accept = '.tex,text/plain';
+					input.onchange = async () => {
+						const file = input.files?.[0];
+						if (!file) return;
+						pdf.preamble = await file.text();
+						await this.plugin.saveSettings();
+						new Notice(`Preamble imported from ${file.name}`);
+						this.display();
+					};
+					input.click();
+				}),
+			)
+			.addButton((b) =>
+				b.setButtonText('Reset to default').onClick(async () => {
+					pdf.preamble = this.plugin.defaultPreamble();
+					await this.plugin.saveSettings();
+					this.display();
+				}),
+			);
+		const area = containerEl.createEl('textarea', { cls: 'vo-preamble-editor' });
+		area.value = pdf.preamble;
+		area.spellcheck = false;
+		area.rows = 25;
+		const warnings = containerEl.createDiv({ cls: 'vo-preamble-warnings' });
+		const showWarnings = (): void => {
+			warnings.empty();
+			for (const w of checkPreamble(area.value)) warnings.createDiv({ text: w });
+		};
+		showWarnings();
+		let timer: number | null = null;
+		area.addEventListener('input', () => {
+			showWarnings();
+			if (timer !== null) window.clearTimeout(timer);
+			timer = window.setTimeout(() => {
+				timer = null;
+				pdf.preamble = area.value;
+				void this.plugin.saveSettings();
+			}, 600);
+		});
+
+		const status = this.plugin.pdfToolStatus();
+		new Setting(containerEl)
+			.setName('Renderer')
+			.setDesc(status)
+			.addButton((b) =>
+				b.setButtonText('Install quick action').onClick(async () => {
+					await this.plugin.installQuickActionFromSettings();
+				}),
+			);
 	}
 
 	// ── Note Toolbar buttons (ported from md-annotation's Note Toolbar tab) ──
