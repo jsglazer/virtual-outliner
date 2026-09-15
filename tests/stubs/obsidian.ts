@@ -3,3 +3,4 @@
 // actually pulls from 'obsidian' need to exist; `editorInfoField` is used
 // solely by editorViewPath(), which these tests never call.
 export const editorInfoField = {} as never;
+export function setIcon(): void {}

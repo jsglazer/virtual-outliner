@@ -17,7 +17,7 @@ import { EditorState, RangeSetBuilder, StateEffect, StateField } from '@codemirr
 import type { Extension, TransactionSpec } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
-import { editorInfoField } from 'obsidian';
+import { editorInfoField, setIcon } from 'obsidian';
 
 import { entrySegments } from '../core/sigil';
 import type { RenderPlan } from '../core/render';
@@ -181,22 +181,92 @@ class HiddenBlockWidget extends WidgetType {
 
 const hiddenBlockWidget = new HiddenBlockWidget();
 
+// Called with the 0-based line index of the entry whose fold control was
+// clicked. Resolving the line from the widget's DOM position at click time
+// (rather than baking a line number into the widget) keeps it right after
+// edits above the entry have mapped the widget to a new line.
+export type FoldToggleHandler = (view: EditorView, lineIndex: number) => void;
+
+function lineIndexAt(view: EditorView, el: HTMLElement): number | null {
+	try {
+		return view.state.doc.lineAt(view.posAtDOM(el)).number - 1;
+	} catch {
+		return null;
+	}
+}
+
+// A click target that must not move the caret: mousedown is swallowed so the
+// editor never places a selection there, and the toggle runs on click.
+function bindFoldClick(el: HTMLElement, view: EditorView, onToggle: FoldToggleHandler): void {
+	el.addEventListener('mousedown', (evt) => {
+		evt.preventDefault();
+		evt.stopPropagation();
+	});
+	el.addEventListener('click', (evt) => {
+		evt.preventDefault();
+		evt.stopPropagation();
+		const line = lineIndexAt(view, el);
+		if (line !== null) onToggle(view, line);
+	});
+}
+
+// `fold` is null for an entry with nothing beneath it (no chevron), otherwise
+// whether the entry is currently collapsed. The chevron lives inside the label
+// widget, which already replaces the sigil prefix at the very start of the
+// line, so it needs no decoration of its own; styles.css pulls it out to the
+// left of the label the way Obsidian's own heading fold indicator sits.
 class LabelWidget extends WidgetType {
 	constructor(
 		private label: string,
 		private levelClass: string,
+		private fold: boolean | null,
+		private onToggle: FoldToggleHandler | null,
 	) {
 		super();
 	}
 
 	eq(other: LabelWidget): boolean {
-		return other.label === this.label && other.levelClass === this.levelClass;
+		return other.label === this.label && other.levelClass === this.levelClass && other.fold === this.fold;
+	}
+
+	toDOM(view: EditorView): HTMLElement {
+		const doc = view.dom.ownerDocument;
+		const span = doc.createElement('span');
+		span.className = `vo-label ${this.levelClass}`;
+		if (this.fold !== null && this.onToggle) {
+			const toggle = doc.createElement('span');
+			toggle.className = `vo-fold collapse-icon${this.fold ? ' is-collapsed' : ''}`;
+			toggle.setAttribute('aria-label', this.fold ? 'Expand' : 'Collapse');
+			setIcon(toggle, 'right-triangle');
+			bindFoldClick(toggle, view, this.onToggle);
+			span.appendChild(toggle);
+		}
+		span.appendChild(doc.createTextNode(this.label));
+		return span;
+	}
+
+	ignoreEvent(): boolean {
+		return true;
+	}
+}
+
+// The "…" shown after a collapsed entry's text, like Obsidian's own fold
+// placeholder; clicking it expands the entry again.
+class FoldPlaceholderWidget extends WidgetType {
+	constructor(private onToggle: FoldToggleHandler) {
+		super();
+	}
+
+	eq(): boolean {
+		return true;
 	}
 
 	toDOM(view: EditorView): HTMLElement {
 		const span = view.dom.ownerDocument.createElement('span');
-		span.className = `vo-label ${this.levelClass}`;
-		span.textContent = this.label;
+		span.className = 'vo-fold-placeholder cm-foldPlaceholder';
+		span.setAttribute('aria-label', 'Expand');
+		span.textContent = '…';
+		bindFoldClick(span, view, this.onToggle);
 		return span;
 	}
 
@@ -212,6 +282,9 @@ export function buildOutlineDecorations(
 	view: EditorView,
 	plan: RenderPlan,
 	sigilChar: string,
+	// Omitted (as in the headless geometry tests), entries render without a
+	// fold chevron or placeholder.
+	onToggleFold: FoldToggleHandler | null = null,
 ): DecorationSet {
 	const doc = view.state.doc;
 	const lineCount = doc.lines;
@@ -315,11 +388,12 @@ export function buildOutlineDecorations(
 		const segs = entrySegments(line.text, sigilChar);
 		if (!segs) continue;
 		const level = plan.entryLevel.get(lineIndex) ?? segs.level;
+		const fold = onToggleFold ? (plan.foldable.get(lineIndex) ?? null) : null;
 		if (segs.prefixEnd > 0) {
 			items.push({
 				from: line.from,
 				to: line.from + segs.prefixEnd,
-				deco: Decoration.replace({ widget: new LabelWidget(label, `vo-l${level}`) }),
+				deco: Decoration.replace({ widget: new LabelWidget(label, `vo-l${level}`, fold, onToggleFold) }),
 			});
 		}
 		if (segs.textEnd > segs.prefixEnd) {
@@ -327,6 +401,15 @@ export function buildOutlineDecorations(
 				from: line.from + segs.prefixEnd,
 				to: line.from + segs.textEnd,
 				deco: Decoration.mark({ class: `vo-text vo-l${level}` }),
+			});
+		}
+		if (fold === true && onToggleFold) {
+			// `side: 1` keeps the caret at the visible end of the entry text in
+			// front of the placeholder, so typing there extends the entry.
+			items.push({
+				from: line.from + segs.textEnd,
+				to: line.from + segs.textEnd,
+				deco: Decoration.widget({ widget: new FoldPlaceholderWidget(onToggleFold), side: 1 }),
 			});
 		}
 		if (segs.textEnd < line.text.length) {

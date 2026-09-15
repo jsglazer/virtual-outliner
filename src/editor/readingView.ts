@@ -23,6 +23,7 @@
 // pass, not a persistent decoration that could leak across re-renders.
 
 import type { MarkdownPostProcessorContext } from 'obsidian';
+import { setIcon } from 'obsidian';
 
 import { parseMetaDocument } from '../core/metadata';
 import { computeRenderPlan, isLineHidden } from '../core/render';
@@ -36,6 +37,23 @@ export interface ReadingHost {
 	viewState(path: string): ViewState;
 	collapsedIds(path: string): ReadonlySet<string>;
 	indentBody(path: string): boolean;
+	// Fold or unfold the entry on this 0-based source line (its whole subtree).
+	toggleFold(path: string, lineIndex: number): void;
+}
+
+// What the fold control on one entry line needs: whether the entry is folded
+// right now, and what to call when it is clicked.
+interface FoldControl {
+	collapsed: boolean;
+	toggle: () => void;
+}
+
+function foldClickTarget(el: HTMLElement, fold: FoldControl): void {
+	el.addEventListener('click', (evt) => {
+		evt.preventDefault();
+		evt.stopPropagation();
+		fold.toggle();
+	});
 }
 
 function collectFirstAndLastTextNode(nodes: Iterable<Node>): { first: Text | null; last: Text | null } {
@@ -63,7 +81,7 @@ function collectFirstAndLastTextNode(nodes: Iterable<Node>): { first: Text | nul
 // into a new wrapper span so the entry's visible TEXT — not just its number
 // label — carries the level's typography classes (font size/weight/family/
 // color/italic all key off `vo-lN`, same as the label span).
-function wrapEntryText(first: Text, last: Text | null, level: number, doc: Document): void {
+function wrapEntryText(first: Text, last: Text | null, level: number, doc: Document): HTMLElement {
 	const wrapper = doc.createElement('span');
 	wrapper.className = `vo-text vo-l${level}`;
 	first.parentNode?.insertBefore(wrapper, first);
@@ -74,6 +92,7 @@ function wrapEntryText(first: Text, last: Text | null, level: number, doc: Docum
 		if (node === last) break;
 		node = next;
 	}
+	return wrapper;
 }
 
 // Obsidian emits a multi-line paragraph as `…<br>\n@ Thesis<br>\n…`, so the
@@ -108,6 +127,7 @@ function materializeLabelIn(
 	label: string,
 	level: number,
 	doc: Document,
+	fold: FoldControl | null,
 ): void {
 	const segs = entrySegments(line, sigilChar);
 	if (!segs) return;
@@ -121,13 +141,36 @@ function materializeLabelIn(
 
 	const labelSpan = doc.createElement('span');
 	labelSpan.className = `vo-label vo-l${level}`;
-	labelSpan.textContent = label;
+	if (fold) {
+		const toggle = doc.createElement('span');
+		toggle.className = `vo-fold collapse-icon${fold.collapsed ? ' is-collapsed' : ''}`;
+		toggle.setAttribute('aria-label', fold.collapsed ? 'Expand' : 'Collapse');
+		setIcon(toggle, 'right-triangle');
+		foldClickTarget(toggle, fold);
+		labelSpan.appendChild(toggle);
+	}
+	labelSpan.appendChild(doc.createTextNode(label));
 	first.parentNode?.insertBefore(labelSpan, first);
-	wrapEntryText(first, last, level, doc);
+	const wrapper = wrapEntryText(first, last, level, doc);
+	if (fold?.collapsed) {
+		const placeholder = doc.createElement('span');
+		placeholder.className = 'vo-fold-placeholder';
+		placeholder.setAttribute('aria-label', 'Expand');
+		placeholder.textContent = '…';
+		foldClickTarget(placeholder, fold);
+		wrapper.after(placeholder);
+	}
 }
 
-function materializeLabel(el: HTMLElement, line: string, sigilChar: string, label: string, level: number): void {
-	materializeLabelIn(el.childNodes, line, sigilChar, label, level, el.ownerDocument);
+function materializeLabel(
+	el: HTMLElement,
+	line: string,
+	sigilChar: string,
+	label: string,
+	level: number,
+	fold: FoldControl | null,
+): void {
+	materializeLabelIn(el.childNodes, line, sigilChar, label, level, el.ownerDocument, fold);
 }
 
 // A section spanning multiple source lines (entries with no blank line
@@ -226,6 +269,11 @@ export function createReadingPostProcessor(host: ReadingHost) {
 		);
 
 		const { lineStart, lineEnd } = section;
+		const foldFor = (line: number): FoldControl | null => {
+			const collapsed = plan.foldable.get(line);
+			if (collapsed === undefined) return null;
+			return { collapsed, toggle: () => host.toggleFold(ctx.sourcePath, line) };
+		};
 
 		if (lineStart === lineEnd) {
 			if (isLineHidden(plan.hiddenLineRanges, lineStart)) {
@@ -241,7 +289,7 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			const lines = body.split('\n');
 			const lineText = lines[lineStart];
 			if (lineText === undefined) return;
-			materializeLabel(el, lineText, sigilChar, label, level);
+			materializeLabel(el, lineText, sigilChar, label, level, foldFor(lineStart));
 			return;
 		}
 
@@ -299,7 +347,7 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			const lineText = lines[line];
 			if (lineText === undefined) continue;
 			const level = plan.entryLevel.get(line) ?? 1;
-			materializeLabelIn(Array.from(wrapper.childNodes), lineText, sigilChar, label, level, doc);
+			materializeLabelIn(Array.from(wrapper.childNodes), lineText, sigilChar, label, level, doc, foldFor(line));
 		}
 	};
 }

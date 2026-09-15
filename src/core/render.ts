@@ -37,6 +37,12 @@ export interface RenderPlan {
 	// Entry line index -> its own level, for lines that are visible entries
 	// (used for per-level spacing above the entry).
 	entryLevel: Map<number, number>;
+	// Entry line index -> whether it is currently collapsed, for visible entries
+	// that have something to fold: at least one non-blank line (child entry or
+	// body prose) inside their subtree. Drives the per-entry fold chevron; an
+	// entry with nothing beneath it gets no chevron at all, since folding it
+	// would visibly do nothing.
+	foldable: Map<number, boolean>;
 	// Merged, sorted, non-overlapping 0-based LINE ranges to hide entirely.
 	hiddenLineRanges: LineRange[];
 }
@@ -127,6 +133,7 @@ export function computeRenderPlan(
 	const entryLevel = new Map<number, number>();
 	const indentLevel = new Map<number, number>();
 	const bodyIndentLevel = new Map<number, number>();
+	const foldable = new Map<number, boolean>();
 
 	const showLabels = viewState === 'outline' || viewState === 'both';
 	for (const node of parsed.flat) {
@@ -134,6 +141,9 @@ export function computeRenderPlan(
 		entryLevel.set(node.entryLine, node.level);
 		if (showLabels) labels.set(node.entryLine, computeLabel(levels, node));
 		indentLevel.set(node.entryLine, node.level);
+		if (hasFoldableContent(lines, node)) {
+			foldable.set(node.entryLine, node.id !== null && collapsedIds.has(node.id));
+		}
 	}
 
 	if (indentBody) {
@@ -145,7 +155,14 @@ export function computeRenderPlan(
 		}
 	}
 
-	return { parsed, labels, indentLevel, bodyIndentLevel, entryLevel, hiddenLineRanges };
+	return { parsed, labels, indentLevel, bodyIndentLevel, entryLevel, foldable, hiddenLineRanges };
+}
+
+export function hasFoldableContent(lines: readonly string[], node: OutlineNode): boolean {
+	for (let i = node.entryLine + 1; i < node.subtreeEnd; i++) {
+		if ((lines[i] ?? '').trim() !== '') return true;
+	}
+	return false;
 }
 
 export function collapsibleAncestorIds(node: OutlineNode): string[] {

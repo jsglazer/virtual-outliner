@@ -23,7 +23,7 @@ __export(main_exports, {
   default: () => VirtualOutlinerPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 
 // src/core/label.ts
 var ROMAN_TABLE = [
@@ -432,6 +432,184 @@ function lineRangeToOffsets(offsets, startLine, endLine) {
   return { from, to };
 }
 
+// src/core/ops.ts
+function sliceRange(lines, start, end) {
+  return lineRangeToOffsets(lineStartOffsets(lines), start, end);
+}
+function subtreeText(body, lines, node) {
+  const { from, to } = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
+  return body.slice(from, to);
+}
+function deepestLevelInSubtree(lines, node, sigilChar) {
+  var _a;
+  let max = node.level;
+  for (let i = node.subtreeStart; i < node.subtreeEnd; i++) {
+    const level = entryLevel((_a = lines[i]) != null ? _a : "", sigilChar);
+    if (level !== null && level > max) max = level;
+  }
+  return max;
+}
+function shiftSubtreeLevels(text, delta, sigilChar) {
+  const lines = text.split("\n");
+  const shifted = lines.map((line) => {
+    if (!isEntryLine(line, sigilChar)) return line;
+    return delta === 1 ? sigilChar + line : line.slice(sigilChar.length);
+  });
+  return shifted.join("\n");
+}
+function demote(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
+  const lines = body.split("\n");
+  const parsed = parseOutline(body, sigilChar);
+  const node = nodeAtLine(parsed, entryLine);
+  if (!node) return null;
+  if (node.level >= MAX_LEVEL) return null;
+  if (deepestLevelInSubtree(lines, node, sigilChar) >= MAX_LEVEL) return null;
+  const idx = parsed.flat.indexOf(node);
+  const prev = idx > 0 ? parsed.flat[idx - 1] : null;
+  if (!prev || prev.level < node.level) return null;
+  const { from, to } = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
+  const insert = shiftSubtreeLevels(subtreeText(body, lines, node), 1, sigilChar);
+  return { from, to, insert };
+}
+function promote(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
+  const lines = body.split("\n");
+  const parsed = parseOutline(body, sigilChar);
+  const node = nodeAtLine(parsed, entryLine);
+  if (!node) return null;
+  if (node.level <= 1) return null;
+  const { from, to } = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
+  const insert = shiftSubtreeLevels(subtreeText(body, lines, node), -1, sigilChar);
+  return { from, to, insert };
+}
+function rejoinChunks(body, from, to, chunks) {
+  var _a;
+  const withBreaks = chunks.filter((c) => c !== "").map((c) => c.endsWith("\n") ? c : c + "\n");
+  const last = withBreaks.length - 1;
+  const originalHadBreak = body.slice(from, to).endsWith("\n");
+  if (last >= 0 && !originalHadBreak) withBreaks[last] = ((_a = withBreaks[last]) != null ? _a : "").slice(0, -1);
+  return withBreaks;
+}
+function ownerNodeAtLine(body, line, sigilChar = DEFAULT_SIGIL_CHAR) {
+  const parsed = parseOutline(body, sigilChar);
+  let owner = null;
+  for (const node of parsed.flat) {
+    if (node.entryLine > line) break;
+    owner = node;
+  }
+  return owner;
+}
+function moveUp(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
+  const lines = body.split("\n");
+  const parsed = parseOutline(body, sigilChar);
+  const node = nodeAtLine(parsed, entryLine);
+  if (!node) return null;
+  const nodeRange = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
+  const nodeText = body.slice(nodeRange.from, nodeRange.to);
+  const prev = previousSibling(parsed, node);
+  if (prev) {
+    const prevRange = sliceRange(lines, prev.subtreeStart, prev.subtreeEnd);
+    const prevText = body.slice(prevRange.from, prevRange.to);
+    const chunks2 = rejoinChunks(body, prevRange.from, nodeRange.to, [nodeText, prevText]);
+    return { from: prevRange.from, to: nodeRange.to, insert: chunks2.join(""), movedTo: prevRange.from };
+  }
+  const parent = node.parent;
+  if (!parent || !previousSibling(parsed, parent)) return null;
+  const headRange = sliceRange(lines, parent.entryLine, node.subtreeStart);
+  const headText = body.slice(headRange.from, headRange.to);
+  const chunks = rejoinChunks(body, headRange.from, nodeRange.to, [nodeText, headText]);
+  return { from: headRange.from, to: nodeRange.to, insert: chunks.join(""), movedTo: headRange.from };
+}
+function moveDown(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
+  var _a, _b;
+  const lines = body.split("\n");
+  const parsed = parseOutline(body, sigilChar);
+  const node = nodeAtLine(parsed, entryLine);
+  if (!node) return null;
+  const nodeRange = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
+  const nodeText = body.slice(nodeRange.from, nodeRange.to);
+  const next = nextSibling(parsed, node);
+  if (next) {
+    const nextRange = sliceRange(lines, next.subtreeStart, next.subtreeEnd);
+    const nextText = body.slice(nextRange.from, nextRange.to);
+    const chunks2 = rejoinChunks(body, nodeRange.from, nextRange.to, [nextText, nodeText]);
+    return {
+      from: nodeRange.from,
+      to: nextRange.to,
+      insert: chunks2.join(""),
+      movedTo: nodeRange.from + ((_a = chunks2[0]) != null ? _a : "").length
+    };
+  }
+  const parent = node.parent;
+  const parentNext = parent ? nextSibling(parsed, parent) : null;
+  if (!parentNext) return null;
+  const headRange = sliceRange(lines, node.subtreeEnd, parentNext.ownBodyEnd);
+  const headText = body.slice(headRange.from, headRange.to);
+  const chunks = rejoinChunks(body, nodeRange.from, headRange.to, [headText, nodeText]);
+  return {
+    from: nodeRange.from,
+    to: headRange.to,
+    insert: chunks.join(""),
+    movedTo: nodeRange.from + ((_b = chunks[0]) != null ? _b : "").length
+  };
+}
+function addSibling(body, entryLine, cursorCol, sigilChar = DEFAULT_SIGIL_CHAR, behavior = "section") {
+  var _a, _b, _c, _d, _e;
+  const lines = body.split("\n");
+  const line = lines[entryLine];
+  if (line === void 0) return null;
+  const match = outlineLineRegex(sigilChar).exec(line);
+  if (!match) return null;
+  const sigils = (_a = match[1]) != null ? _a : "";
+  const rest = (_b = match[2]) != null ? _b : "";
+  const { text } = splitEntryId(rest);
+  const prefixEnd = line.length - rest.length;
+  const idMatch = ID_SUFFIX_RE.exec(line);
+  const visibleEnd = idMatch ? idMatch.index : line.length;
+  const newEntry = sigils + " ";
+  const offsets = lineStartOffsets(lines);
+  const lineStart = (_c = offsets[entryLine]) != null ? _c : 0;
+  const lineEnd = lineStart + line.length;
+  if (text.trim() === "") {
+    return { from: lineStart, to: lineEnd, insert: "", cursor: lineStart };
+  }
+  const col = Math.max(cursorCol, prefixEnd);
+  const atVisibleEnd = col >= visibleEnd || line.slice(col, visibleEnd).trim() === "";
+  if (!atVisibleEnd) {
+    if (line.slice(prefixEnd, col).trim() === "") {
+      const insert3 = newEntry + "\n";
+      return { from: lineStart, to: lineStart, insert: insert3, cursor: lineStart + insert3.length + prefixEnd };
+    }
+    const head = line.slice(0, col).trimEnd() + line.slice(visibleEnd);
+    const insert2 = head + "\n" + newEntry + line.slice(col, visibleEnd).trimStart();
+    return { from: lineStart, to: lineEnd, insert: insert2, cursor: lineStart + head.length + 1 + newEntry.length };
+  }
+  if (behavior === "line") {
+    const insert2 = "\n" + newEntry;
+    return { from: lineEnd, to: lineEnd, insert: insert2, cursor: lineEnd + insert2.length };
+  }
+  const parsed = parseOutline(body, sigilChar);
+  const node = nodeAtLine(parsed, entryLine);
+  if (!node) return null;
+  let lastLine = node.subtreeEnd - 1;
+  while (lastLine > entryLine && ((_d = lines[lastLine]) != null ? _d : "").trim() === "") lastLine--;
+  if (lastLine + 1 < lines.length) {
+    const insertAt = (_e = offsets[lastLine + 1]) != null ? _e : body.length;
+    return { from: insertAt, to: insertAt, insert: newEntry + "\n", cursor: insertAt + newEntry.length };
+  }
+  const insert = "\n" + newEntry;
+  return { from: body.length, to: body.length, insert, cursor: body.length + insert.length };
+}
+function addBodyLine(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
+  var _a;
+  const lines = body.split("\n");
+  const line = lines[entryLine];
+  if (line === void 0) return null;
+  if (!isOutlineLine(line, sigilChar)) return null;
+  const offsets = lineStartOffsets(lines);
+  const insertAt = ((_a = offsets[entryLine]) != null ? _a : 0) + line.length;
+  return { from: insertAt, to: insertAt, insert: "\n" };
+}
+
 // src/core/render.ts
 function mergeRanges(ranges) {
   if (ranges.length === 0) return [];
@@ -485,12 +663,16 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
   const entryLevel2 = /* @__PURE__ */ new Map();
   const indentLevel = /* @__PURE__ */ new Map();
   const bodyIndentLevel = /* @__PURE__ */ new Map();
+  const foldable = /* @__PURE__ */ new Map();
   const showLabels = viewState === "outline" || viewState === "both";
   for (const node of parsed.flat) {
     if (isLineHidden(hiddenLineRanges, node.entryLine)) continue;
     entryLevel2.set(node.entryLine, node.level);
     if (showLabels) labels.set(node.entryLine, computeLabel(levels, node));
     indentLevel.set(node.entryLine, node.level);
+    if (hasFoldableContent(lines, node)) {
+      foldable.set(node.entryLine, node.id !== null && collapsedIds.has(node.id));
+    }
   }
   if (indentBody) {
     for (const node of parsed.flat) {
@@ -500,7 +682,14 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
       }
     }
   }
-  return { parsed, labels, indentLevel, bodyIndentLevel, entryLevel: entryLevel2, hiddenLineRanges };
+  return { parsed, labels, indentLevel, bodyIndentLevel, entryLevel: entryLevel2, foldable, hiddenLineRanges };
+}
+function hasFoldableContent(lines, node) {
+  var _a;
+  for (let i = node.entryLine + 1; i < node.subtreeEnd; i++) {
+    if (((_a = lines[i]) != null ? _a : "").trim() !== "") return true;
+  }
+  return false;
 }
 
 // src/core/exportFilter.ts
@@ -812,27 +1001,77 @@ var HiddenBlockWidget = class extends import_view.WidgetType {
   }
 };
 var hiddenBlockWidget = new HiddenBlockWidget();
+function lineIndexAt(view, el) {
+  try {
+    return view.state.doc.lineAt(view.posAtDOM(el)).number - 1;
+  } catch (e) {
+    return null;
+  }
+}
+function bindFoldClick(el, view, onToggle) {
+  el.addEventListener("mousedown", (evt) => {
+    evt.preventDefault();
+    evt.stopPropagation();
+  });
+  el.addEventListener("click", (evt) => {
+    evt.preventDefault();
+    evt.stopPropagation();
+    const line = lineIndexAt(view, el);
+    if (line !== null) onToggle(view, line);
+  });
+}
 var LabelWidget = class extends import_view.WidgetType {
-  constructor(label, levelClass) {
+  constructor(label, levelClass, fold, onToggle) {
     super();
     this.label = label;
     this.levelClass = levelClass;
+    this.fold = fold;
+    this.onToggle = onToggle;
   }
   eq(other) {
-    return other.label === this.label && other.levelClass === this.levelClass;
+    return other.label === this.label && other.levelClass === this.levelClass && other.fold === this.fold;
   }
   toDOM(view) {
-    const span = view.dom.ownerDocument.createElement("span");
+    const doc = view.dom.ownerDocument;
+    const span = doc.createElement("span");
     span.className = `vo-label ${this.levelClass}`;
-    span.textContent = this.label;
+    if (this.fold !== null && this.onToggle) {
+      const toggle = doc.createElement("span");
+      toggle.className = `vo-fold collapse-icon${this.fold ? " is-collapsed" : ""}`;
+      toggle.setAttribute("aria-label", this.fold ? "Expand" : "Collapse");
+      (0, import_obsidian.setIcon)(toggle, "right-triangle");
+      bindFoldClick(toggle, view, this.onToggle);
+      span.appendChild(toggle);
+    }
+    span.appendChild(doc.createTextNode(this.label));
     return span;
   }
   ignoreEvent() {
     return true;
   }
 };
-function buildOutlineDecorations(view, plan, sigilChar) {
-  var _a;
+var FoldPlaceholderWidget = class extends import_view.WidgetType {
+  constructor(onToggle) {
+    super();
+    this.onToggle = onToggle;
+  }
+  eq() {
+    return true;
+  }
+  toDOM(view) {
+    const span = view.dom.ownerDocument.createElement("span");
+    span.className = "vo-fold-placeholder cm-foldPlaceholder";
+    span.setAttribute("aria-label", "Expand");
+    span.textContent = "\u2026";
+    bindFoldClick(span, view, this.onToggle);
+    return span;
+  }
+  ignoreEvent() {
+    return true;
+  }
+};
+function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null) {
+  var _a, _b;
   const doc = view.state.doc;
   const lineCount = doc.lines;
   const builder = new import_state.RangeSetBuilder();
@@ -859,11 +1098,12 @@ function buildOutlineDecorations(view, plan, sigilChar) {
     const segs = entrySegments(line.text, sigilChar);
     if (!segs) continue;
     const level = (_a = plan.entryLevel.get(lineIndex)) != null ? _a : segs.level;
+    const fold = onToggleFold ? (_b = plan.foldable.get(lineIndex)) != null ? _b : null : null;
     if (segs.prefixEnd > 0) {
       items.push({
         from: line.from,
         to: line.from + segs.prefixEnd,
-        deco: import_view.Decoration.replace({ widget: new LabelWidget(label, `vo-l${level}`) })
+        deco: import_view.Decoration.replace({ widget: new LabelWidget(label, `vo-l${level}`, fold, onToggleFold) })
       });
     }
     if (segs.textEnd > segs.prefixEnd) {
@@ -871,6 +1111,13 @@ function buildOutlineDecorations(view, plan, sigilChar) {
         from: line.from + segs.prefixEnd,
         to: line.from + segs.textEnd,
         deco: import_view.Decoration.mark({ class: `vo-text vo-l${level}` })
+      });
+    }
+    if (fold === true && onToggleFold) {
+      items.push({
+        from: line.from + segs.textEnd,
+        to: line.from + segs.textEnd,
+        deco: import_view.Decoration.widget({ widget: new FoldPlaceholderWidget(onToggleFold), side: 1 })
       });
     }
     if (segs.textEnd < line.text.length) {
@@ -897,8 +1144,8 @@ function buildOutlineDecorations(view, plan, sigilChar) {
     });
   }
   items.sort((a, b) => {
-    var _a2, _b;
-    return a.from - b.from || ((_a2 = a.deco.startSide) != null ? _a2 : 0) - ((_b = b.deco.startSide) != null ? _b : 0);
+    var _a2, _b2;
+    return a.from - b.from || ((_a2 = a.deco.startSide) != null ? _a2 : 0) - ((_b2 = b.deco.startSide) != null ? _b2 : 0);
   });
   for (const item of items) builder.add(item.from, item.to, item.deco);
   return builder.finish();
@@ -907,186 +1154,6 @@ function buildOutlineDecorations(view, plan, sigilChar) {
 // src/editor/keymap.ts
 var import_state2 = require("@codemirror/state");
 var import_view2 = require("@codemirror/view");
-
-// src/core/ops.ts
-function sliceRange(lines, start, end) {
-  return lineRangeToOffsets(lineStartOffsets(lines), start, end);
-}
-function subtreeText(body, lines, node) {
-  const { from, to } = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
-  return body.slice(from, to);
-}
-function deepestLevelInSubtree(lines, node, sigilChar) {
-  var _a;
-  let max = node.level;
-  for (let i = node.subtreeStart; i < node.subtreeEnd; i++) {
-    const level = entryLevel((_a = lines[i]) != null ? _a : "", sigilChar);
-    if (level !== null && level > max) max = level;
-  }
-  return max;
-}
-function shiftSubtreeLevels(text, delta, sigilChar) {
-  const lines = text.split("\n");
-  const shifted = lines.map((line) => {
-    if (!isEntryLine(line, sigilChar)) return line;
-    return delta === 1 ? sigilChar + line : line.slice(sigilChar.length);
-  });
-  return shifted.join("\n");
-}
-function demote(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
-  const lines = body.split("\n");
-  const parsed = parseOutline(body, sigilChar);
-  const node = nodeAtLine(parsed, entryLine);
-  if (!node) return null;
-  if (node.level >= MAX_LEVEL) return null;
-  if (deepestLevelInSubtree(lines, node, sigilChar) >= MAX_LEVEL) return null;
-  const idx = parsed.flat.indexOf(node);
-  const prev = idx > 0 ? parsed.flat[idx - 1] : null;
-  if (!prev || prev.level < node.level) return null;
-  const { from, to } = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
-  const insert = shiftSubtreeLevels(subtreeText(body, lines, node), 1, sigilChar);
-  return { from, to, insert };
-}
-function promote(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
-  const lines = body.split("\n");
-  const parsed = parseOutline(body, sigilChar);
-  const node = nodeAtLine(parsed, entryLine);
-  if (!node) return null;
-  if (node.level <= 1) return null;
-  const { from, to } = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
-  const insert = shiftSubtreeLevels(subtreeText(body, lines, node), -1, sigilChar);
-  return { from, to, insert };
-}
-function rejoinChunks(body, from, to, chunks) {
-  var _a;
-  const withBreaks = chunks.filter((c) => c !== "").map((c) => c.endsWith("\n") ? c : c + "\n");
-  const last = withBreaks.length - 1;
-  const originalHadBreak = body.slice(from, to).endsWith("\n");
-  if (last >= 0 && !originalHadBreak) withBreaks[last] = ((_a = withBreaks[last]) != null ? _a : "").slice(0, -1);
-  return withBreaks;
-}
-function ownerNodeAtLine(body, line, sigilChar = DEFAULT_SIGIL_CHAR) {
-  const parsed = parseOutline(body, sigilChar);
-  let owner = null;
-  for (const node of parsed.flat) {
-    if (node.entryLine > line) break;
-    owner = node;
-  }
-  return owner;
-}
-function moveUp(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
-  const lines = body.split("\n");
-  const parsed = parseOutline(body, sigilChar);
-  const node = nodeAtLine(parsed, entryLine);
-  if (!node) return null;
-  const nodeRange = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
-  const nodeText = body.slice(nodeRange.from, nodeRange.to);
-  const prev = previousSibling(parsed, node);
-  if (prev) {
-    const prevRange = sliceRange(lines, prev.subtreeStart, prev.subtreeEnd);
-    const prevText = body.slice(prevRange.from, prevRange.to);
-    const chunks2 = rejoinChunks(body, prevRange.from, nodeRange.to, [nodeText, prevText]);
-    return { from: prevRange.from, to: nodeRange.to, insert: chunks2.join(""), movedTo: prevRange.from };
-  }
-  const parent = node.parent;
-  if (!parent || !previousSibling(parsed, parent)) return null;
-  const headRange = sliceRange(lines, parent.entryLine, node.subtreeStart);
-  const headText = body.slice(headRange.from, headRange.to);
-  const chunks = rejoinChunks(body, headRange.from, nodeRange.to, [nodeText, headText]);
-  return { from: headRange.from, to: nodeRange.to, insert: chunks.join(""), movedTo: headRange.from };
-}
-function moveDown(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
-  var _a, _b;
-  const lines = body.split("\n");
-  const parsed = parseOutline(body, sigilChar);
-  const node = nodeAtLine(parsed, entryLine);
-  if (!node) return null;
-  const nodeRange = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
-  const nodeText = body.slice(nodeRange.from, nodeRange.to);
-  const next = nextSibling(parsed, node);
-  if (next) {
-    const nextRange = sliceRange(lines, next.subtreeStart, next.subtreeEnd);
-    const nextText = body.slice(nextRange.from, nextRange.to);
-    const chunks2 = rejoinChunks(body, nodeRange.from, nextRange.to, [nextText, nodeText]);
-    return {
-      from: nodeRange.from,
-      to: nextRange.to,
-      insert: chunks2.join(""),
-      movedTo: nodeRange.from + ((_a = chunks2[0]) != null ? _a : "").length
-    };
-  }
-  const parent = node.parent;
-  const parentNext = parent ? nextSibling(parsed, parent) : null;
-  if (!parentNext) return null;
-  const headRange = sliceRange(lines, node.subtreeEnd, parentNext.ownBodyEnd);
-  const headText = body.slice(headRange.from, headRange.to);
-  const chunks = rejoinChunks(body, nodeRange.from, headRange.to, [headText, nodeText]);
-  return {
-    from: nodeRange.from,
-    to: headRange.to,
-    insert: chunks.join(""),
-    movedTo: nodeRange.from + ((_b = chunks[0]) != null ? _b : "").length
-  };
-}
-function addSibling(body, entryLine, cursorCol, sigilChar = DEFAULT_SIGIL_CHAR, behavior = "section") {
-  var _a, _b, _c, _d, _e;
-  const lines = body.split("\n");
-  const line = lines[entryLine];
-  if (line === void 0) return null;
-  const match = outlineLineRegex(sigilChar).exec(line);
-  if (!match) return null;
-  const sigils = (_a = match[1]) != null ? _a : "";
-  const rest = (_b = match[2]) != null ? _b : "";
-  const { text } = splitEntryId(rest);
-  const prefixEnd = line.length - rest.length;
-  const idMatch = ID_SUFFIX_RE.exec(line);
-  const visibleEnd = idMatch ? idMatch.index : line.length;
-  const newEntry = sigils + " ";
-  const offsets = lineStartOffsets(lines);
-  const lineStart = (_c = offsets[entryLine]) != null ? _c : 0;
-  const lineEnd = lineStart + line.length;
-  if (text.trim() === "") {
-    return { from: lineStart, to: lineEnd, insert: "", cursor: lineStart };
-  }
-  const col = Math.max(cursorCol, prefixEnd);
-  const atVisibleEnd = col >= visibleEnd || line.slice(col, visibleEnd).trim() === "";
-  if (!atVisibleEnd) {
-    if (line.slice(prefixEnd, col).trim() === "") {
-      const insert3 = newEntry + "\n";
-      return { from: lineStart, to: lineStart, insert: insert3, cursor: lineStart + insert3.length + prefixEnd };
-    }
-    const head = line.slice(0, col).trimEnd() + line.slice(visibleEnd);
-    const insert2 = head + "\n" + newEntry + line.slice(col, visibleEnd).trimStart();
-    return { from: lineStart, to: lineEnd, insert: insert2, cursor: lineStart + head.length + 1 + newEntry.length };
-  }
-  if (behavior === "line") {
-    const insert2 = "\n" + newEntry;
-    return { from: lineEnd, to: lineEnd, insert: insert2, cursor: lineEnd + insert2.length };
-  }
-  const parsed = parseOutline(body, sigilChar);
-  const node = nodeAtLine(parsed, entryLine);
-  if (!node) return null;
-  let lastLine = node.subtreeEnd - 1;
-  while (lastLine > entryLine && ((_d = lines[lastLine]) != null ? _d : "").trim() === "") lastLine--;
-  if (lastLine + 1 < lines.length) {
-    const insertAt = (_e = offsets[lastLine + 1]) != null ? _e : body.length;
-    return { from: insertAt, to: insertAt, insert: newEntry + "\n", cursor: insertAt + newEntry.length };
-  }
-  const insert = "\n" + newEntry;
-  return { from: body.length, to: body.length, insert, cursor: body.length + insert.length };
-}
-function addBodyLine(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
-  var _a;
-  const lines = body.split("\n");
-  const line = lines[entryLine];
-  if (line === void 0) return null;
-  if (!isOutlineLine(line, sigilChar)) return null;
-  const offsets = lineStartOffsets(lines);
-  const insertAt = ((_a = offsets[entryLine]) != null ? _a : 0) + line.length;
-  return { from: insertAt, to: insertAt, insert: "\n" };
-}
-
-// src/editor/keymap.ts
 function bodyOf(view) {
   return parseMetaDocument(view.state.doc.toString()).body;
 }
@@ -1193,6 +1260,14 @@ function buildOutlineKeymap(host) {
 }
 
 // src/editor/readingView.ts
+var import_obsidian2 = require("obsidian");
+function foldClickTarget(el, fold) {
+  el.addEventListener("click", (evt) => {
+    evt.preventDefault();
+    evt.stopPropagation();
+    fold.toggle();
+  });
+}
 function collectFirstAndLastTextNode(nodes) {
   let first = null;
   let last = null;
@@ -1225,6 +1300,7 @@ function wrapEntryText(first, last, level, doc) {
     if (node === last) break;
     node = next;
   }
+  return wrapper;
 }
 function stripLinePrefix(node, prefix) {
   var _a;
@@ -1242,7 +1318,7 @@ function stripIdSuffix(node, suffix) {
   node.nodeValue = trimmed.slice(0, -suffix.length);
   return true;
 }
-function materializeLabelIn(nodes, line, sigilChar, label, level, doc) {
+function materializeLabelIn(nodes, line, sigilChar, label, level, doc, fold) {
   var _a;
   const segs = entrySegments(line, sigilChar);
   if (!segs) return;
@@ -1254,12 +1330,28 @@ function materializeLabelIn(nodes, line, sigilChar, label, level, doc) {
   if (!stripLinePrefix(first, prefixStr)) return;
   const labelSpan = doc.createElement("span");
   labelSpan.className = `vo-label vo-l${level}`;
-  labelSpan.textContent = label;
+  if (fold) {
+    const toggle = doc.createElement("span");
+    toggle.className = `vo-fold collapse-icon${fold.collapsed ? " is-collapsed" : ""}`;
+    toggle.setAttribute("aria-label", fold.collapsed ? "Expand" : "Collapse");
+    (0, import_obsidian2.setIcon)(toggle, "right-triangle");
+    foldClickTarget(toggle, fold);
+    labelSpan.appendChild(toggle);
+  }
+  labelSpan.appendChild(doc.createTextNode(label));
   (_a = first.parentNode) == null ? void 0 : _a.insertBefore(labelSpan, first);
-  wrapEntryText(first, last, level, doc);
+  const wrapper = wrapEntryText(first, last, level, doc);
+  if (fold == null ? void 0 : fold.collapsed) {
+    const placeholder = doc.createElement("span");
+    placeholder.className = "vo-fold-placeholder";
+    placeholder.setAttribute("aria-label", "Expand");
+    placeholder.textContent = "\u2026";
+    foldClickTarget(placeholder, fold);
+    wrapper.after(placeholder);
+  }
 }
-function materializeLabel(el, line, sigilChar, label, level) {
-  materializeLabelIn(el.childNodes, line, sigilChar, label, level, el.ownerDocument);
+function materializeLabel(el, line, sigilChar, label, level, fold) {
+  materializeLabelIn(el.childNodes, line, sigilChar, label, level, el.ownerDocument, fold);
 }
 function inlineHost(el) {
   let host = el;
@@ -1324,6 +1416,11 @@ function createReadingPostProcessor(host) {
       host.indentBody(ctx.sourcePath)
     );
     const { lineStart, lineEnd } = section;
+    const foldFor = (line) => {
+      const collapsed = plan.foldable.get(line);
+      if (collapsed === void 0) return null;
+      return { collapsed, toggle: () => host.toggleFold(ctx.sourcePath, line) };
+    };
     if (lineStart === lineEnd) {
       if (isLineHidden(plan.hiddenLineRanges, lineStart)) {
         el.addClass("vo-hidden");
@@ -1338,7 +1435,7 @@ function createReadingPostProcessor(host) {
       const lines2 = body.split("\n");
       const lineText = lines2[lineStart];
       if (lineText === void 0) return;
-      materializeLabel(el, lineText, sigilChar, label, level);
+      materializeLabel(el, lineText, sigilChar, label, level, foldFor(lineStart));
       return;
     }
     let allHidden = true;
@@ -1382,13 +1479,13 @@ function createReadingPostProcessor(host) {
       const lineText = lines[line];
       if (lineText === void 0) continue;
       const level = (_c = plan.entryLevel.get(line)) != null ? _c : 1;
-      materializeLabelIn(Array.from(wrapper.childNodes), lineText, sigilChar, label, level, doc);
+      materializeLabelIn(Array.from(wrapper.childNodes), lineText, sigilChar, label, level, doc, foldFor(line));
     }
   };
 }
 
 // src/settingsTab.ts
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // src/ui/toolbarHighlight.ts
 var SKIP_ITEM_TYPES = /* @__PURE__ */ new Set(["separator", "break", "spreader", "group"]);
@@ -1520,7 +1617,7 @@ var VIEW_STATE_OPTIONS = {
   body: "Body only",
   both: "Both"
 };
-var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab {
+var VirtualOutlinerSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -1528,7 +1625,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian2.Setting(containerEl).setName("Depth sigil").setDesc(
+    new import_obsidian3.Setting(containerEl).setName("Depth sigil").setDesc(
       'The character repeated at line start to mark an outline entry (e.g. "@@ text" is a level-2 entry). Exactly one character.'
     ).addText((text) => {
       text.setValue(this.plugin.settings.sigil).onChange(async (value) => {
@@ -1546,20 +1643,20 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
         text: `"${this.plugin.settings.sigil}" already opens a markdown block construct (heading, list, quote, \u2026) at line start and may collide with it.`
       });
     }
-    new import_obsidian2.Setting(containerEl).setName("Default view state").setDesc("The view a note opens in when it has no view state recorded yet.").addDropdown((dropdown) => {
+    new import_obsidian3.Setting(containerEl).setName("Default view state").setDesc("The view a note opens in when it has no view state recorded yet.").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(VIEW_STATE_OPTIONS)) dropdown.addOption(value, label);
       dropdown.setValue(this.plugin.settings.defaultViewState).onChange(async (value) => {
         this.plugin.settings.defaultViewState = value;
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian2.Setting(containerEl).setName("Indent body under its outline level").setDesc("Visual only \u2014 the file itself is never re-indented.").addToggle((toggle) => {
+    new import_obsidian3.Setting(containerEl).setName("Indent body under its outline level").setDesc("Visual only \u2014 the file itself is never re-indented.").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.indentBody).onChange(async (value) => {
         this.plugin.settings.indentBody = value;
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian2.Setting(containerEl).setName("Enter at the end of an entry").setDesc(
+    new import_obsidian3.Setting(containerEl).setName("Enter at the end of an entry").setDesc(
       "Where the new same-level entry goes. After the whole section keeps the current entry's body and sub-entries with it; on the next line puts the new entry directly below, so that body and those sub-entries move under the new entry. Pressing return in the middle of an entry always splits it in place."
     ).addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(ENTER_BEHAVIOR_OPTIONS)) dropdown.addOption(value, label);
@@ -1568,13 +1665,13 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian2.Setting(containerEl).setName("Level format").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("Level format").setHeading();
     containerEl.createEl("p", {
       cls: "vo-fixture-note",
       text: 'One format applied to every outline level (e.g. "1.2.1" from repeated Number style + Separator). Indent step and Space above still accumulate with depth, so deeper levels sit further right and further apart even though the format itself is shared.'
     });
     this.renderLevelSetting(containerEl);
-    new import_obsidian2.Setting(containerEl).setName("Metadata fields").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("Metadata fields").setHeading();
     containerEl.createEl("p", {
       cls: "vo-fixture-note",
       text: "Per-node fields (status, note, \u2026) exposed to Dataview/Datacore and stored in the end-of-file %%md-outline block."
@@ -1584,7 +1681,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
   }
   // ── Note Toolbar buttons (ported from md-annotation's Note Toolbar tab) ──
   renderToolbarSection(containerEl) {
-    new import_obsidian2.Setting(containerEl).setName("Note Toolbar buttons").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("Note Toolbar buttons").setHeading();
     if (!isNoteToolbarAvailable(this.app)) {
       containerEl.createEl("p", {
         cls: "vo-fixture-note",
@@ -1623,7 +1720,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
   // Toolbar + item dropdowns. Changing the toolbar clears the item, since
   // item uuids belong to a single toolbar.
   renderToolbarItemPicker(containerEl, name, highlight) {
-    new import_obsidian2.Setting(containerEl).setName(name).setDesc("Toolbar, then the button within it").addDropdown((dropdown) => {
+    new import_obsidian3.Setting(containerEl).setName(name).setDesc("Toolbar, then the button within it").addDropdown((dropdown) => {
       dropdown.addOption("", "None");
       for (const toolbar of listToolbars(this.app)) dropdown.addOption(toolbar.uuid, toolbar.name);
       dropdown.setValue(highlight.toolbarUuid).onChange(async (value) => {
@@ -1735,7 +1832,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
       for (const level of this.plugin.settings.levels) mutate(level);
       await this.plugin.saveSettings();
     };
-    new import_obsidian2.Setting(containerEl).setName("Number style").setDesc(`How each level's segment of the composite label is numbered (e.g. "1" + "." gives "1.2.1").`).addDropdown((dropdown) => {
+    new import_obsidian3.Setting(containerEl).setName("Number style").setDesc(`How each level's segment of the composite label is numbered (e.g. "1" + "." gives "1.2.1").`).addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(LABEL_STYLE_OPTIONS)) dropdown.addOption(value, label);
       dropdown.setValue(format.style).onChange(async (value) => {
         await applyToAllLevels((level) => {
@@ -1754,7 +1851,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
         });
       }
     );
-    new import_obsidian2.Setting(containerEl).setName("Italic").setDesc("Renders every level's number and entry text in italics.").addToggle((toggle) => {
+    new import_obsidian3.Setting(containerEl).setName("Italic").setDesc("Renders every level's number and entry text in italics.").addToggle((toggle) => {
       toggle.setValue(format.italic);
       toggle.onChange(async (value) => {
         await applyToAllLevels((level) => {
@@ -1762,7 +1859,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
         });
       });
     });
-    new import_obsidian2.Setting(containerEl).setName("Colour").setDesc("Colour of every level's number and entry text.").addColorPicker((picker) => {
+    new import_obsidian3.Setting(containerEl).setName("Colour").setDesc("Colour of every level's number and entry text.").addColorPicker((picker) => {
       if (format.color !== "") picker.setValue(format.color);
       picker.onChange(async (value) => {
         await applyToAllLevels((level) => {
@@ -1848,7 +1945,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
     );
   }
   addTextRow(containerEl, name, desc, value, apply) {
-    new import_obsidian2.Setting(containerEl).setName(name).setDesc(desc).addText((text) => {
+    new import_obsidian3.Setting(containerEl).setName(name).setDesc(desc).addText((text) => {
       text.setValue(value);
       text.onChange(async (next) => {
         await apply(next);
@@ -1860,7 +1957,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
     for (let i = 0; i < fields.length; i++) {
       const field = fields[i];
       if (!field) continue;
-      const setting = new import_obsidian2.Setting(containerEl).setName(`Field ${i + 1}`);
+      const setting = new import_obsidian3.Setting(containerEl).setName(`Field ${i + 1}`);
       setting.addText((text) => {
         text.setPlaceholder("Name").setValue(field.name);
         text.onChange(async (value) => {
@@ -1894,7 +1991,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
         });
       });
     }
-    new import_obsidian2.Setting(containerEl).addButton((button) => {
+    new import_obsidian3.Setting(containerEl).addButton((button) => {
       button.setButtonText("Add field").onClick(async () => {
         fields.push({ name: `Field ${fields.length + 1}`, type: "text", options: [] });
         await this.plugin.saveSettings();
@@ -1905,9 +2002,9 @@ var VirtualOutlinerSettingTab = class extends import_obsidian2.PluginSettingTab 
 };
 
 // src/ui/sidebar.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 var SIDEBAR_VIEW_TYPE = "virtual-outliner-sidebar";
-var OutlineSidebarView = class extends import_obsidian3.ItemView {
+var OutlineSidebarView = class extends import_obsidian4.ItemView {
   constructor(leaf, host) {
     super(leaf);
     this.host = host;
@@ -1999,7 +2096,7 @@ var OutlineSidebarView = class extends import_obsidian3.ItemView {
     const collapsed = node.id !== null && this.host.isCollapsed(path, node.id);
     const toggle = row.createDiv({ cls: `vo-node-toggle${canToggle ? "" : " vo-node-toggle-empty"}` });
     if (canToggle) {
-      (0, import_obsidian3.setIcon)(toggle, collapsed ? "chevron-right" : "chevron-down");
+      (0, import_obsidian4.setIcon)(toggle, collapsed ? "chevron-right" : "chevron-down");
       toggle.addEventListener("click", (evt) => {
         evt.stopPropagation();
         this.host.toggleCollapsed(path, node);
@@ -2031,7 +2128,7 @@ function normalizeFileStateEntry(v, fallback) {
 var RESOLVE_DEBOUNCE_MS = 200;
 var CSS_VAR_STYLE_ID = "virtual-outliner-level-vars";
 var TOOLBAR_HIGHLIGHT_DELAY_MS = 50;
-var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
+var VirtualOutlinerPlugin = class extends import_obsidian5.Plugin {
   constructor() {
     super(...arguments);
     this.settings = normalizeSettings(null);
@@ -2043,6 +2140,12 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     this.changeListeners = /* @__PURE__ */ new Set();
     this.toolbarHighlighter = null;
     this.toolbarTimer = null;
+    // One stable handler for every editor's fold chevrons (a fresh closure per
+    // decorate would be harmless but pointless).
+    this.onFoldClick = (view, lineIndex) => {
+      const path = editorViewPath(view);
+      if (path !== null) this.toggleFoldAtLine(path, lineIndex, view);
+    };
   }
   async onload() {
     const raw = await this.loadData();
@@ -2061,7 +2164,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     };
     this.registerEditorExtension([
       buildHiddenContentGuard(() => {
-        new import_obsidian4.Notice("Hidden text is not deleted from this view \u2014 switch to outline and body to edit it.");
+        new import_obsidian5.Notice("Hidden text is not deleted from this view \u2014 switch to outline and body to edit it.");
       }),
       buildOutlineKeymap(this.keymapHost),
       buildEditorExtension({
@@ -2083,7 +2186,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
         levels: () => this.settings.levels,
         viewState: (path) => this.viewStateFor(path),
         collapsedIds: (path) => this.collapsedIdsFor(path),
-        indentBody: () => this.settings.indentBody
+        indentBody: () => this.settings.indentBody,
+        toggleFold: (path, lineIndex) => this.toggleFoldAtLine(path, lineIndex, null)
       })
     );
     this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new OutlineSidebarView(leaf, this.sidebarHost()));
@@ -2116,16 +2220,44 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
       callback: () => {
         this.settings.indentBody = !this.settings.indentBody;
         void this.saveSettings();
-        new import_obsidian4.Notice(this.settings.indentBody ? "Indent body with outline: on" : "Indent body with outline: off");
+        new import_obsidian5.Notice(this.settings.indentBody ? "Indent body with outline: on" : "Indent body with outline: off");
       }
     });
+    this.addCommand({
+      id: "toggle-fold-entry",
+      name: "Toggle collapse of current outline entry",
+      checkCallback: (checking) => {
+        const view = this.activeEditorView();
+        const path = view ? editorViewPath(view) : null;
+        if (!view || path === null) return false;
+        if (checking) return true;
+        const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
+        this.toggleFoldAtLine(path, line, view);
+        return true;
+      }
+    });
+    const foldAllCommand = (id, name, run) => {
+      this.addCommand({
+        id,
+        name,
+        checkCallback: (checking) => {
+          const file = this.activeMarkdownFile();
+          if (!file) return false;
+          if (checking) return true;
+          run(file.path);
+          return true;
+        }
+      });
+    };
+    foldAllCommand("collapse-all-entries", "Collapse all outline entries", (path) => this.collapseAll(path));
+    foldAllCommand("expand-all-entries", "Expand all outline entries", (path) => this.expandAll(path));
     this.addCommand({
       id: "toggle-enter-behavior",
       name: "Toggle new entry on next line vs after section",
       callback: () => {
         this.settings.enterBehavior = this.settings.enterBehavior === "line" ? "section" : "line";
         void this.saveSettings();
-        new import_obsidian4.Notice(
+        new import_obsidian5.Notice(
           this.settings.enterBehavior === "line" ? "Enter adds the new entry on the next line" : "Enter adds the new entry after the whole section"
         );
       }
@@ -2253,7 +2385,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian4.Plugin {
     var _a;
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const view = leaf.view;
-      if (!(view instanceof import_obsidian4.MarkdownView)) continue;
+      if (!(view instanceof import_obsidian5.MarkdownView)) continue;
       if (view.getMode() !== "preview") continue;
       if (path !== null && ((_a = view.file) == null ? void 0 : _a.path) !== path) continue;
       view.previewMode.rerender(true);
@@ -2345,15 +2477,49 @@ ${body}
     this.decorateAllFor(path);
     this.notifyChange();
   }
-  toggleCollapsed(path, node) {
+  // Folds or unfolds one entry from a click on its chevron (either view) or
+  // the toggle command. `lineIndex` may be the entry line or any body line
+  // under it; `caretView` is the editor the command ran in, if any. Collapsing
+  // the section the caret is sitting in would leave the caret inside a hidden
+  // atomic block with no rendered position, so it is first moved to the end
+  // of the entry's visible text.
+  toggleFoldAtLine(path, lineIndex, caretView) {
+    var _a;
+    const view = caretView != null ? caretView : this.editorFor(path);
+    const body = view ? parseMetaDocument(view.state.doc.toString()).body : (_a = this.states.get(path)) == null ? void 0 : _a.body;
+    if (body === void 0) return;
+    const node = ownerNodeAtLine(body, lineIndex, this.settings.sigil);
+    if (!node) {
+      new import_obsidian5.Notice("Put the cursor on an outline entry or its body to collapse it.");
+      return;
+    }
+    if (!hasFoldableContent(body.split("\n"), node)) {
+      new import_obsidian5.Notice("Nothing to collapse under this entry.");
+      return;
+    }
+    const collapsing = node.id === null || !this.collapsedIdsFor(path).has(node.id);
+    let moveCaret = false;
+    if (collapsing && caretView) {
+      const caretLine = caretView.state.doc.lineAt(caretView.state.selection.main.head).number - 1;
+      moveCaret = caretLine > node.entryLine && caretLine < node.subtreeEnd;
+    }
+    this.toggleCollapsed(path, node, moveCaret ? caretView : null);
+  }
+  toggleCollapsed(path, node, caretView = null) {
     var _a, _b;
     if (node.id !== null) {
+      if (caretView) {
+        const line = caretView.state.doc.line(node.entryLine + 1);
+        const idMatch = ID_SUFFIX_RE.exec(line.text);
+        const visibleEnd = line.from + (idMatch ? idMatch.index : line.text.length);
+        caretView.dispatch({ selection: { anchor: visibleEnd } });
+      }
       this.flipCollapse(path, node.id);
       return;
     }
     const view = this.editorFor(path);
     if (!view) {
-      new import_obsidian4.Notice("Open this note to collapse an entry that doesn't have a stable ID yet.");
+      new import_obsidian5.Notice("Open this note to collapse an entry that doesn't have a stable ID yet.");
       return;
     }
     const doc = view.state.doc.toString();
@@ -2365,7 +2531,11 @@ ${body}
     const lineEnd = lineStart + lineText.length;
     const id = mintId(Date.now(), Math.random());
     const withId = appendId("", id);
-    view.dispatch({ changes: { from: lineEnd, to: lineEnd, insert: withId } });
+    view.dispatch({
+      changes: { from: lineEnd, to: lineEnd, insert: withId },
+      selection: caretView === view ? { anchor: lineEnd } : void 0
+    });
+    this.setStateFromDoc(path, view.state.doc.toString());
     this.flipCollapse(path, id);
   }
   collapseAll(path) {
@@ -2395,7 +2565,10 @@ ${body}
         changes.push({ from: lineEnd, to: lineEnd, insert: appendId("", id) });
         mintedIds.push(id);
       }
-      if (changes.length > 0) view.dispatch({ changes });
+      if (changes.length > 0) {
+        view.dispatch({ changes });
+        this.setStateFromDoc(path, view.state.doc.toString());
+      }
       for (const id of mintedIds) entry.collapsedIds.add(id);
     } else {
       for (const node of eligible) {
@@ -2406,7 +2579,7 @@ ${body}
     void this.persist();
     this.decorateAllFor(path);
     this.notifyChange();
-    if (missingIdSkipped) new import_obsidian4.Notice("Open this note to fold every entry \u2014 some don't have a stable ID yet.");
+    if (missingIdSkipped) new import_obsidian5.Notice("Open this note to fold every entry \u2014 some don't have a stable ID yet.");
   }
   expandAll(path) {
     this.fileStateEntry(path).collapsedIds.clear();
@@ -2491,7 +2664,7 @@ ${body}
       state.collapsedIds,
       this.settings.indentBody
     );
-    const decorations = buildOutlineDecorations(view, plan, this.settings.sigil);
+    const decorations = buildOutlineDecorations(view, plan, this.settings.sigil, this.onFoldClick);
     view.dispatch({
       effects: setOutlineDecorations.of(decorations),
       selection: view.composing ? void 0 : view.state.selection
@@ -2526,7 +2699,7 @@ ${body}
     }
     const created = await this.app.vault.create(target, filtered);
     await this.app.workspace.getLeaf(true).openFile(created);
-    new import_obsidian4.Notice(`Generated ${target}`);
+    new import_obsidian5.Notice(`Generated ${target}`);
   }
   pruneOrphanedIn(view, path) {
     const doc = view.state.doc.toString();
@@ -2536,11 +2709,11 @@ ${body}
     for (const node of parsed.flat) if (node.id !== null) liveIds.add(node.id);
     const result = pruneOrphaned(doc, liveIds);
     if (result.removedIds.length === 0) {
-      new import_obsidian4.Notice("Virtual Outliner: nothing to prune.");
+      new import_obsidian5.Notice("Virtual Outliner: nothing to prune.");
       return;
     }
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: result.doc } });
-    new import_obsidian4.Notice(`Virtual Outliner: pruned ${result.removedIds.length} orphaned record(s).`);
+    new import_obsidian5.Notice(`Virtual Outliner: pruned ${result.removedIds.length} orphaned record(s).`);
   }
   // ── Sidebar ───────────────────────────────────────────────────────────────
   sidebarHost() {
@@ -2564,10 +2737,10 @@ ${body}
   }
   async jumpToNode(path, node) {
     var _a, _b;
-    let view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    let view = this.app.workspace.getActiveViewOfType(import_obsidian5.MarkdownView);
     if (!view || ((_a = view.file) == null ? void 0 : _a.path) !== path) {
       await this.app.workspace.openLinkText(path, "", false);
-      view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+      view = this.app.workspace.getActiveViewOfType(import_obsidian5.MarkdownView);
     }
     if (!view || ((_b = view.file) == null ? void 0 : _b.path) !== path) return;
     const targetLine = node.ownBodyStart < node.ownBodyEnd ? node.ownBodyStart : node.entryLine;
@@ -2618,7 +2791,7 @@ ${body}
   // Editor wrapper exposes no public handle to it, so it is matched from the
   // views the editor extension has already registered.
   activeEditorView() {
-    const markdownView = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    const markdownView = this.app.workspace.getActiveViewOfType(import_obsidian5.MarkdownView);
     if (!markdownView || markdownView.getMode() !== "source") return null;
     for (const view of this.editors) {
       if (markdownView.containerEl.contains(view.dom)) return view;

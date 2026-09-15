@@ -15,10 +15,11 @@ import type { EditorView } from '@codemirror/view';
 import type { VirtualOutlinerAPI } from './api';
 import { createApi } from './api';
 import { lineStartOffsets } from './core/lines';
-import { appendId, mintId } from './core/id';
+import { appendId, ID_SUFFIX_RE, mintId } from './core/id';
 import { parseMetaDocument, pruneOrphaned } from './core/metadata';
 import { parseOutline } from './core/parser';
-import { computeRenderPlan } from './core/render';
+import { ownerNodeAtLine } from './core/ops';
+import { computeRenderPlan, hasFoldableContent } from './core/render';
 import { generateFilteredCopy } from './core/exportFilter';
 import type { OutlineSettings } from './core/settings';
 import { levelCssVars, normalizeSettings } from './core/settings';
@@ -120,6 +121,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				viewState: (path) => this.viewStateFor(path),
 				collapsedIds: (path) => this.collapsedIdsFor(path),
 				indentBody: () => this.settings.indentBody,
+				toggleFold: (path, lineIndex) => this.toggleFoldAtLine(path, lineIndex, null),
 			}),
 		);
 
@@ -161,6 +163,39 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				new Notice(this.settings.indentBody ? 'Indent body with outline: on' : 'Indent body with outline: off');
 			},
 		});
+
+		// Fold/unfold the entry the caret is in — its child entries and all body
+		// text beneath it — like Obsidian's own heading fold. From a body line it
+		// acts on the entry that body belongs to.
+		this.addCommand({
+			id: 'toggle-fold-entry',
+			name: 'Toggle collapse of current outline entry',
+			checkCallback: (checking) => {
+				const view = this.activeEditorView();
+				const path = view ? editorViewPath(view) : null;
+				if (!view || path === null) return false;
+				if (checking) return true;
+				const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
+				this.toggleFoldAtLine(path, line, view);
+				return true;
+			},
+		});
+
+		const foldAllCommand = (id: string, name: string, run: (path: string) => void): void => {
+			this.addCommand({
+				id,
+				name,
+				checkCallback: (checking) => {
+					const file = this.activeMarkdownFile();
+					if (!file) return false;
+					if (checking) return true;
+					run(file.path);
+					return true;
+				},
+			});
+		};
+		foldAllCommand('collapse-all-entries', 'Collapse all outline entries', (path) => this.collapseAll(path));
+		foldAllCommand('expand-all-entries', 'Expand all outline entries', (path) => this.expandAll(path));
 
 		this.addCommand({
 			id: 'toggle-enter-behavior',
@@ -427,8 +462,42 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		this.notifyChange();
 	}
 
-	toggleCollapsed(path: string, node: OutlineNode): void {
+	// Folds or unfolds one entry from a click on its chevron (either view) or
+	// the toggle command. `lineIndex` may be the entry line or any body line
+	// under it; `caretView` is the editor the command ran in, if any. Collapsing
+	// the section the caret is sitting in would leave the caret inside a hidden
+	// atomic block with no rendered position, so it is first moved to the end
+	// of the entry's visible text.
+	toggleFoldAtLine(path: string, lineIndex: number, caretView: EditorView | null): void {
+		const view = caretView ?? this.editorFor(path);
+		const body = view ? parseMetaDocument(view.state.doc.toString()).body : this.states.get(path)?.body;
+		if (body === undefined) return;
+		const node = ownerNodeAtLine(body, lineIndex, this.settings.sigil);
+		if (!node) {
+			new Notice('Put the cursor on an outline entry or its body to collapse it.');
+			return;
+		}
+		if (!hasFoldableContent(body.split('\n'), node)) {
+			new Notice('Nothing to collapse under this entry.');
+			return;
+		}
+		const collapsing = node.id === null || !this.collapsedIdsFor(path).has(node.id);
+		let moveCaret = false;
+		if (collapsing && caretView) {
+			const caretLine = caretView.state.doc.lineAt(caretView.state.selection.main.head).number - 1;
+			moveCaret = caretLine > node.entryLine && caretLine < node.subtreeEnd;
+		}
+		this.toggleCollapsed(path, node, moveCaret ? caretView : null);
+	}
+
+	toggleCollapsed(path: string, node: OutlineNode, caretView: EditorView | null = null): void {
 		if (node.id !== null) {
+			if (caretView) {
+				const line = caretView.state.doc.line(node.entryLine + 1);
+				const idMatch = ID_SUFFIX_RE.exec(line.text);
+				const visibleEnd = line.from + (idMatch ? idMatch.index : line.text.length);
+				caretView.dispatch({ selection: { anchor: visibleEnd } });
+			}
 			this.flipCollapse(path, node.id);
 			return;
 		}
@@ -446,7 +515,16 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		const lineEnd = lineStart + lineText.length;
 		const id = mintId(Date.now(), Math.random());
 		const withId = appendId('', id); // ' ^o-xxxxxxxx'
-		view.dispatch({ changes: { from: lineEnd, to: lineEnd, insert: withId } });
+		// The selection is in post-change coordinates, where `lineEnd` is still
+		// just in front of the id that was inserted there.
+		view.dispatch({
+			changes: { from: lineEnd, to: lineEnd, insert: withId },
+			selection: caretView === view ? { anchor: lineEnd } : undefined,
+		});
+		// Re-parse now so the new id is known when the collapse is applied, rather
+		// than only after the 200ms edit debounce — without this the first click
+		// on an id-less entry did nothing visible until the next resolve.
+		this.setStateFromDoc(path, view.state.doc.toString());
 		this.flipCollapse(path, id);
 	}
 
@@ -477,7 +555,10 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				changes.push({ from: lineEnd, to: lineEnd, insert: appendId('', id) });
 				mintedIds.push(id);
 			}
-			if (changes.length > 0) view.dispatch({ changes });
+			if (changes.length > 0) {
+				view.dispatch({ changes });
+				this.setStateFromDoc(path, view.state.doc.toString());
+			}
 			for (const id of mintedIds) entry.collapsedIds.add(id);
 		} else {
 			for (const node of eligible) {
@@ -595,7 +676,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			state.collapsedIds,
 			this.settings.indentBody,
 		);
-		const decorations = buildOutlineDecorations(view, plan, this.settings.sigil);
+		const decorations = buildOutlineDecorations(view, plan, this.settings.sigil, this.onFoldClick);
 		// Reasserting the (unchanged) selection alongside the decoration effect
 		// makes CM6 rewrite the DOM selection after the update, rather than
 		// trusting whatever contentEditable left behind. This was originally
@@ -612,6 +693,13 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			selection: view.composing ? undefined : view.state.selection,
 		});
 	}
+
+	// One stable handler for every editor's fold chevrons (a fresh closure per
+	// decorate would be harmless but pointless).
+	private onFoldClick = (view: EditorView, lineIndex: number): void => {
+		const path = editorViewPath(view);
+		if (path !== null) this.toggleFoldAtLine(path, lineIndex, view);
+	};
 
 	private decorateAllFor(path: string): void {
 		const state = this.states.get(path);

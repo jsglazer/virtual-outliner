@@ -279,3 +279,32 @@ describe('hidden-content delete guard (Outline-only view)', () => {
 		expect(blocked).toBe(0);
 	});
 });
+
+describe('fold decorations (Update006)', () => {
+	const FOLD_DOC = ['@ Thesis ^o-aaaaaaaa', 'body under thesis', '@@ Detail', 'more body'].join('\n');
+
+	function widgets(state: EditorState, collapsed: Set<string>, withHandler: boolean): string[] {
+		const plan = computeRenderPlan(state.doc.toString(), SIGIL, LEVELS, 'both', collapsed, false);
+		const deco = buildOutlineDecorations(fakeView(state), plan, SIGIL, withHandler ? () => {} : null);
+		const out: string[] = [];
+		for (const iter = deco.iter(); iter.value !== null; iter.next()) {
+			const widget: unknown = (iter.value.spec as { widget?: unknown }).widget;
+			if (widget) out.push(`${widget.constructor.name}@${iter.from}`);
+		}
+		return out;
+	}
+
+	it('adds a clickable "…" placeholder at the visible end of a collapsed entry only', () => {
+		const state = EditorState.create({ doc: FOLD_DOC });
+		const visibleEnd = '@ Thesis'.length;
+		expect(widgets(state, new Set(['^o-aaaaaaaa']), true)).toContain(`FoldPlaceholderWidget@${visibleEnd}`);
+		expect(widgets(state, new Set(), true).some((w) => w.startsWith('FoldPlaceholderWidget'))).toBe(false);
+	});
+
+	it('renders no fold controls when no toggle handler is supplied', () => {
+		const state = EditorState.create({ doc: FOLD_DOC });
+		expect(widgets(state, new Set(['^o-aaaaaaaa']), false).some((w) => w.startsWith('FoldPlaceholderWidget'))).toBe(
+			false,
+		);
+	});
+});

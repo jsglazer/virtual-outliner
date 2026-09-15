@@ -88,3 +88,25 @@ describe('computeRenderPlan', () => {
 		expect(plan.indentLevel.get(3)).toBe(2); // "@@ A.1" entry line still indents
 	});
 });
+
+describe('computeRenderPlan: per-entry fold state (Update006)', () => {
+	const FOLD_DOC = ['@ A ^o-aaaaaaaa', 'A body', '@@ A.1 ^o-bbbbbbbb', '', '@@ A.2', 'A.2 body', '@ B'].join('\n');
+
+	it('marks only entries with non-blank content beneath them as foldable', () => {
+		const plan = computeRenderPlan(FOLD_DOC, '@', levels(), 'both', new Set());
+		expect(plan.foldable.get(0)).toBe(false); // A: body + children
+		expect(plan.foldable.has(2)).toBe(false); // A.1: only a blank line under it
+		expect(plan.foldable.get(4)).toBe(false); // A.2: id-less but has body
+		expect(plan.foldable.has(6)).toBe(false); // B: nothing under it
+	});
+
+	it('reports a collapsed entry as folded and hides its whole subtree but not the entry', () => {
+		const plan = computeRenderPlan(FOLD_DOC, '@', levels(), 'both', new Set(['^o-aaaaaaaa']));
+		expect(plan.foldable.get(0)).toBe(true);
+		expect(isLineHidden(plan.hiddenLineRanges, 0)).toBe(false);
+		for (let line = 1; line <= 5; line++) expect(isLineHidden(plan.hiddenLineRanges, line)).toBe(true);
+		expect(isLineHidden(plan.hiddenLineRanges, 6)).toBe(false);
+		// Children hidden inside a fold get no fold control of their own.
+		expect(plan.foldable.has(4)).toBe(false);
+	});
+});

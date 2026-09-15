@@ -293,10 +293,76 @@
    markers — an inline style outranks any stylesheet rule, so padding silently
    did nothing on exactly those lines, and overriding the rendered blocks'
    padding would collapse their bullets. A margin stacks on top of whatever the
-   line already has instead. */
+   line already has instead.
+
+   `!important` is REQUIRED (Update006). Obsidian's app.css ships
+   `.markdown-source-view.mod-cm6 .cm-content > * { margin: 0 !important }`,
+   which zeroes every editor line's margin, so without it the class was applied
+   and the variable resolved (85.5px at level 3, confirmed live) while the
+   computed margin stayed 0px — the toggle visibly did nothing. Among
+   !important declarations specificity decides, and this selector (five
+   classes/attributes) outranks that one (three). */
 .markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-body-indent-l'],
 .markdown-rendered [class*='vo-body-indent-l'] {
-	margin-inline-start: var(--vo-body-indent, 0px);
+	margin-inline-start: var(--vo-body-indent, 0px) !important;
+}
+
+/* Per-entry fold control (Update006): a chevron in the gutter to the left of
+   an entry's label that folds its child entries and body, shown on hover like
+   Obsidian's heading fold indicator and always while folded. It reuses
+   Obsidian's `collapse-icon` class for the theme's own icon colour and size.
+   Absolutely positioned against the line so it takes no room in the text and
+   never shifts the label; the line's own indent is where the label starts. */
+.markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-entry-l'],
+.markdown-rendered [class*='vo-entry-l'] {
+	position: relative;
+}
+
+.vo-label .vo-fold {
+	position: absolute;
+	inset-inline-start: calc(var(--vo-indent, 0px) - 1.4em);
+	top: 0;
+	bottom: 0;
+	width: 1.2em;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: var(--cursor, pointer);
+	opacity: 0;
+	transition: opacity 120ms ease-in-out;
+}
+
+/* No rotation rules of our own: Obsidian's `right-triangle` icon already points
+   down (expanded), and app.css's `.collapse-icon.is-collapsed svg.svg-icon`
+   turns it to point right when folded, in the right direction for RTL too. */
+
+.cm-line:hover .vo-label .vo-fold,
+.markdown-rendered [class*='vo-entry-l']:hover .vo-label .vo-fold,
+.vo-label .vo-fold.is-collapsed {
+	opacity: 1;
+}
+
+/* No hover on touch devices: keep every chevron visible there. */
+@media (hover: none) {
+	.vo-label .vo-fold {
+		opacity: 1;
+	}
+}
+
+.vo-fold-placeholder {
+	margin-inline-start: 0.4em;
+	padding: 0 0.35em;
+	border-radius: var(--radius-s);
+	color: var(--text-faint);
+	background-color: var(--background-modifier-hover);
+	cursor: var(--cursor, pointer);
+	user-select: none;
+	font-weight: normal;
+	font-style: normal;
+}
+
+.vo-fold-placeholder:hover {
+	color: var(--text-muted);
 }
 
 .markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-entry-l'],
