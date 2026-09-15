@@ -130,6 +130,22 @@ export function resolvePdfOutput(pdfOutput: string, noteDirAbs: string, noteStem
 	return normalizePosixPath(`${value}/${noteStem}.pdf`);
 }
 
+// The first free `<stem>-01.pdf`, `<stem>-02.pdf`, … beside `pdfPath`, offered
+// instead of overwriting when `pdfPath` already exists. Numbers are at least
+// two digits and grow past 99.
+export function numberedPdfPath(pdfPath: string, exists: (path: string) => boolean): string {
+	const slash = pdfPath.lastIndexOf('/');
+	const dir = pdfPath.slice(0, slash + 1);
+	const name = pdfPath.slice(slash + 1);
+	const dot = name.lastIndexOf('.');
+	const stem = dot > 0 ? name.slice(0, dot) : name;
+	const ext = dot > 0 ? name.slice(dot) : '';
+	for (let n = 1; ; n++) {
+		const candidate = `${dir}${stem}-${String(n).padStart(2, '0')}${ext}`;
+		if (!exists(candidate)) return candidate;
+	}
+}
+
 // Cheap sanity checks for the preamble editor. Not a LaTeX parser: it only
 // catches the mistakes that make every export fail.
 export function checkPreamble(preamble: string): string[] {

@@ -17,7 +17,7 @@ import { FileSystemAdapter, TFolder } from 'obsidian';
 import type { BodyExtraction } from '../core/exportBody';
 import { collectCiteKeys, extractBody } from '../core/exportBody';
 import type { ExportOptions } from '../core/exportOptions';
-import { resolveExportOptions, resolvePdfOutput } from '../core/exportOptions';
+import { numberedPdfPath, resolveExportOptions, resolvePdfOutput } from '../core/exportOptions';
 import type { ConversionIssue, ExportResolver } from '../core/obsidianMarkdown';
 import { toPandocMarkdown } from '../core/obsidianMarkdown';
 import type { PdfExportSettings } from '../core/settings';
@@ -43,6 +43,11 @@ export interface ExportPlan {
 	options: ExportOptions;
 	fontsize: string;
 	outputPath: string;
+	// Set when the PDF the note would normally write already exists. The
+	// dialog then defaults outputPath to the next free `<name>-01.pdf` and
+	// lets the user choose to overwrite instead.
+	collision: { existing: string; numbered: string } | null;
+	overwrite: boolean;
 	preambleSource: string;
 }
 
@@ -65,7 +70,7 @@ export class PdfExporter {
 	async plan(file: TFile, doc: string): Promise<ExportPlan | string> {
 		const base = vaultBasePath(this.host.app);
 		if (base === null) return 'PDF export needs a vault stored on this computer.';
-		const { path, os } = node();
+		const { fs, path, os } = node();
 		const settings = this.host.settings();
 		const extraction = extractBody(doc, this.host.sigilChar());
 		if (extraction.isEmpty) return `${file.basename} has no body text to export yet — only outline entries.`;
@@ -76,12 +81,17 @@ export class PdfExporter {
 			file.basename,
 		);
 		const noteDir = path.join(base, file.parent?.path ?? '');
+		const target = resolvePdfOutput(options.pdfOutput, noteDir, file.basename, os.homedir());
+		const exists = (p: string): boolean => fs.existsSync(p);
+		const collision = exists(target) ? { existing: target, numbered: numberedPdfPath(target, exists) } : null;
 		return {
 			file,
 			extraction,
 			options,
 			fontsize: options.fontsize ?? settings.lastFontSize,
-			outputPath: resolvePdfOutput(options.pdfOutput, noteDir, file.basename, os.homedir()),
+			outputPath: collision?.numbered ?? target,
+			collision,
+			overwrite: false,
 			preambleSource: (await this.resolvePreamble(file, options)).label,
 		};
 	}
@@ -184,6 +194,7 @@ export class PdfExporter {
 			version: 1,
 			source: 'source.md',
 			output: plan.outputPath,
+			overwrite: plan.overwrite,
 			fontsize: plan.fontsize,
 			headnum: plan.options.headnum,
 			toc: plan.options.toc,

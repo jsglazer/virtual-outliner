@@ -4,8 +4,22 @@ import {
 	checkPreamble,
 	normalizeFontSize,
 	resolveExportOptions,
+	numberedPdfPath,
 	resolvePdfOutput,
 } from '../src/core/exportOptions';
+
+describe('numberedPdfPath', () => {
+	it('starts at -01 beside the original', () => {
+		expect(numberedPdfPath('/a/b/Puzzle Statement.pdf', () => false)).toBe('/a/b/Puzzle Statement-01.pdf');
+	});
+	it('skips numbers already taken and keeps the extension case', () => {
+		const taken = new Set(['/a/Final-01.PDF', '/a/Final-02.PDF']);
+		expect(numberedPdfPath('/a/Final.PDF', (p) => taken.has(p))).toBe('/a/Final-03.PDF');
+	});
+	it('grows past two digits', () => {
+		expect(numberedPdfPath('/a/N.pdf', (p) => !p.endsWith('-100.pdf'))).toBe('/a/N-100.pdf');
+	});
+});
 
 const defaults = { headnum: false, toc: false, notes: 'f' as const, cite: 'MLA' };
 

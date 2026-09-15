@@ -7,6 +7,7 @@ A job is a build folder holding job.json plus the files it names:
       "version": 1,
       "source": "source.md",        # prepared Markdown, relative to the build folder
       "output": "/abs/path/Note.pdf",
+      "overwrite": false,           # replace an existing output (else deliver refuses)
       "fontsize": "12pt",           # 8 9 10 11 12 14 17 20 (extarticle sizes)
       "headnum": false,             # number body headings (pandoc -N)
       "toc": false,                 # table of contents from body headings
@@ -23,6 +24,8 @@ Subcommands:
     env <job.json>                     shell assignments (JOB_*) for render-pdf.sh
     prepare <job.json> <work.md> <meta.tex>
     deliver <job.json> <pdf>           collision check + atomic move; prints status JSON
+    next-free <pdf>                    the first free <name>-01.pdf, <name>-02.pdf, … beside it
+    set-output <job.json> <pdf> <0|1>  change the output path and overwrite flag
     latex-errors <doc.log>             the useful lines of a failed LaTeX log
     status-fail <stage> <message>      prints a failure status JSON line
     qa <note.md> <config.json|""> <fontsize> <build dir>
@@ -39,9 +42,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FONT_SIZES = {"8", "9", "10", "11", "12", "14", "17", "20"}
-# The PDF Creator stamp written by meta.tex. deliver() only overwrites an
-# existing PDF that carries it, so an unrelated "Note.pdf" beside "Note.md"
-# (a source document, a Zotero attachment) is never clobbered.
+# The PDF Creator metadata written by meta.tex.
 CREATOR = "Virtual Outliner"
 STYLES = {
     "mla": ("mla.csl", "Works Cited"),
@@ -198,9 +199,6 @@ def cmd_prepare(job_path, work_md, meta_tex):
     meta = [
         "% Written by job.py — per-export values, included BEFORE the preamble so the",
         "% preamble's \\providecommand defaults leave them alone.",
-        # Object-stream level 1 keeps the /Info dictionary (and with it the
-        # Creator stamp deliver() looks for) uncompressed and readable.
-        "\\pdfvariable objcompresslevel=1",
         "\\def\\DocTitle{%s}" % title,
         "\\def\\DocAuthor{%s}" % author,
         "\\AtBeginDocument{\\hypersetup{pdfcreator={%s},pdftitle={%s},pdfauthor={%s}}}" % (CREATOR, title, author),
@@ -215,47 +213,6 @@ def cmd_prepare(job_path, work_md, meta_tex):
         fh.write("\n".join(meta) + "\n")
 
 
-PDF_STRING = re.compile(rb"/Creator\s*(\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]*>)", re.S)
-PDF_ESCAPES = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
-
-
-def decode_pdf_string(token):
-    """Bytes of a PDF literal "(…)" or hex "<…>" string, decoded to text."""
-    if token.startswith(b"<"):
-        raw = bytes.fromhex(re.sub(rb"\s", b"", token[1:-1]).decode("ascii"))
-    else:
-        body, raw, i = token[1:-1], bytearray(), 0
-        while i < len(body):
-            c = body[i:i + 1]
-            if c != b"\\":
-                raw += c
-                i += 1
-                continue
-            m = re.match(rb"[0-7]{1,3}", body[i + 1:i + 4])
-            if m:
-                raw.append(int(m.group(0), 8) & 0xFF)
-                i += 1 + len(m.group(0))
-            else:
-                nxt = body[i + 1:i + 2]
-                raw += PDF_ESCAPES.get(nxt, nxt)
-                i += 2
-        raw = bytes(raw)
-    if raw.startswith(b"\xfe\xff"):
-        return raw[2:].decode("utf-16-be", errors="replace")
-    return raw.decode("latin-1")
-
-
-def is_ours(pdf_path):
-    """True when the PDF's /Info Creator is the Virtual Outliner stamp. meta.tex
-    sets objcompresslevel=1 so the /Info dictionary is never compressed."""
-    try:
-        with open(pdf_path, "rb") as fh:
-            data = fh.read()
-    except OSError:
-        return False
-    return any(CREATOR in decode_pdf_string(m.group(1)) for m in PDF_STRING.finditer(data))
-
-
 def cmd_deliver(job_path, pdf):
     job, build = load_job(job_path)
     src = in_build(build, pdf)
@@ -264,9 +221,11 @@ def cmd_deliver(job_path, pdf):
         fail("deliver", "The job has no output path.")
     if not os.path.isfile(src):
         fail("deliver", "LaTeX finished without producing a PDF.")
-    if os.path.exists(out) and not is_ours(out):
-        fail("collision", "%s already exists and was not made by Virtual Outliner, so it was left untouched. "
-                          "Set pdf-output: in the note's frontmatter to write somewhere else." % out)
+    # The plugin dialog and the Quick Action ask before an export reaches
+    # here, so an existing file without "overwrite" appeared after they asked.
+    if os.path.exists(out) and not job.get("overwrite"):
+        fail("collision", "%s already exists, so it was left untouched. Export again to choose a new name "
+                          "or overwrite it." % out)
     try:
         os.makedirs(os.path.dirname(out), exist_ok=True)
         tmp = out + ".vo-partial"
@@ -275,6 +234,22 @@ def cmd_deliver(job_path, pdf):
     except OSError as e:
         fail("deliver", "Could not write %s: %s" % (out, e))
     status({"ok": True, "output": out})
+
+
+def next_free(pdf):
+    stem, ext = os.path.splitext(pdf)
+    n = 1
+    while os.path.exists("%s-%02d%s" % (stem, n, ext)):
+        n += 1
+    return "%s-%02d%s" % (stem, n, ext)
+
+
+def cmd_set_output(job_path, pdf, overwrite):
+    job, _ = load_job(job_path)
+    job["output"] = pdf
+    job["overwrite"] = overwrite == "1"
+    with open(job_path, "w", encoding="utf-8") as fh:
+        json.dump(job, fh, indent=2)
 
 
 def cmd_latex_errors(log_path):
@@ -400,6 +375,7 @@ def cmd_qa(note, config_path, fontsize, build):
         "version": 1,
         "source": "source.md",
         "output": resolve_output(front.get("pdf-output"), note),
+        "overwrite": False,
         "fontsize": fontsize or front.get("fontsize") or "12",
         "headnum": parse_bool(front.get("headnum", ""), bool(defaults.get("headnum", False))),
         "toc": parse_bool(front.get("toc", ""), bool(defaults.get("toc", False))),
@@ -426,6 +402,10 @@ def main(argv):
         cmd_prepare(*args)
     elif cmd == "deliver" and len(args) == 2:
         cmd_deliver(*args)
+    elif cmd == "next-free" and len(args) == 1:
+        print(next_free(args[0]))
+    elif cmd == "set-output" and len(args) == 3:
+        cmd_set_output(*args)
     elif cmd == "latex-errors" and len(args) == 1:
         cmd_latex_errors(*args)
     elif cmd == "status-fail" and len(args) == 2:

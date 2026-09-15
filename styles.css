@@ -664,8 +664,18 @@
 	word-break: break-all;
 }
 
-.vo-export-warnings {
+.vo-export-warnings,
+.vo-export-collision > .vo-export-label {
 	color: var(--text-warning);
+}
+
+.vo-export-collision {
+	margin-top: 0.5em;
+}
+
+.vo-export-collision .setting-item {
+	padding-top: 0.25em;
+	border-top: none;
 }
 
 .vo-export-warnings ul {

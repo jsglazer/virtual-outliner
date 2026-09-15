@@ -9,7 +9,7 @@
 #
 # Pipeline: job.py prepare (endnote/reference tail + meta.tex) -> table widths
 # -> list breaks -> pandoc to .tex (extracting media) -> sanitize/optimize media
-# -> table row lines -> latexmk -> job.py deliver (collision check, atomic move).
+# -> table row lines -> latexmk -> job.py deliver (refuses an existing file unless the job says overwrite; atomic move).
 #
 # The LAST line on stdout is always one JSON status object, which is what the
 # plugin parses: {"ok":true,"output":…} or {"ok":false,"stage":…,"message":…}.

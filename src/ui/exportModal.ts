@@ -69,7 +69,24 @@ export class ExportPdfModal extends Modal {
 
 		const where = contentEl.createDiv({ cls: 'vo-export-where' });
 		where.createDiv({ text: 'Output', cls: 'vo-export-label' });
-		where.createDiv({ text: plan.outputPath, cls: 'vo-export-path' });
+		const pathEl = where.createDiv({ text: plan.outputPath, cls: 'vo-export-path' });
+		const { collision } = plan;
+		if (collision !== null) {
+			const name = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
+			const alert = where.createDiv({ cls: 'vo-export-collision' });
+			alert.createDiv({ text: `${name(collision.existing)} already exists.`, cls: 'vo-export-label' });
+			new Setting(alert).setName('If the file exists').addDropdown((dd) =>
+				dd
+					.addOption('number', `Save as ${name(collision.numbered)}`)
+					.addOption('overwrite', `Overwrite ${name(collision.existing)}`)
+					.setValue(plan.overwrite ? 'overwrite' : 'number')
+					.onChange((v) => {
+						plan.overwrite = v === 'overwrite';
+						plan.outputPath = plan.overwrite ? collision.existing : collision.numbered;
+						pathEl.setText(plan.outputPath);
+					}),
+			);
+		}
 		where.createDiv({
 			text: plan.options.pdfOutput !== '' ? 'From the note\'s pdf-output.' : 'Beside the note. Set pdf-output: in the frontmatter to change it.',
 			cls: 'setting-item-description',
