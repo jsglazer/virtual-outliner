@@ -4,6 +4,9 @@
 
 Outline-first authoring for Obsidian: lay down a full multi-level outline, then write headings and prose directly beneath each entry — without the outline and the body ever getting in each other's way.
 
+> [!IMPORTANT]
+> **Sync all file types.** Virtual Outliner assumes your vault sync carries **every file type plus plugin settings**, not just Markdown. In Obsidian Sync, turn on syncing for *all other file types* and for *installed community plugins* (which includes each plugin's settings). Plugin settings — and anything the plugin stores in them — are expected to be identical on every device, and files the plugin reads from the vault (not only `.md`) are expected to be present everywhere.
+
 ## What it does
 
 - **Outline as a layer, not a filter.** One Markdown file, two views. An outline entry is just a line starting with a repeated sigil (`@`, `@@`, `@@@`, …, configurable); everything else — your own prose, headings, lists, tables, code — is the body. A **node** is one entry plus every body line beneath it, up to the next entry.
