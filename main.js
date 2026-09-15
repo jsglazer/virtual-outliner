@@ -1002,6 +1002,7 @@ var HiddenBlockWidget = class extends import_view.WidgetType {
 };
 var hiddenBlockWidget = new HiddenBlockWidget();
 function lineIndexAt(view, el) {
+  if (!view.contentDOM.contains(el)) return null;
   try {
     return view.state.doc.lineAt(view.posAtDOM(el)).number - 1;
   } catch (e) {

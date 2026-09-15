@@ -187,7 +187,12 @@ const hiddenBlockWidget = new HiddenBlockWidget();
 // edits above the entry have mapped the widget to a new line.
 export type FoldToggleHandler = (view: EditorView, lineIndex: number) => void;
 
+// A widget element CM6 has already replaced (a redraw between mousedown and
+// click) is no longer in the content DOM, and `posAtDOM` on it does not throw —
+// it falls back to the end of the document, which silently folded the LAST
+// entry instead of the clicked one (caught live). Such a click is ignored.
 function lineIndexAt(view: EditorView, el: HTMLElement): number | null {
+	if (!view.contentDOM.contains(el)) return null;
 	try {
 		return view.state.doc.lineAt(view.posAtDOM(el)).number - 1;
 	} catch {
