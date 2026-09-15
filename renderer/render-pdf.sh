@@ -67,8 +67,11 @@ eval "$ENV_OUT"
 "$PY" "$HERE/tables.py" work.md work-tables.md 2>>"$LOG" || cp work.md work-tables.md
 "$PY" "$HERE/lists.py" work-tables.md work-final.md 2>>"$LOG" || cp work-tables.md work-final.md
 
+# Plain pandoc paragraphs: consecutive lines join into one paragraph, and a
+# blank line (which is what each removed outline entry becomes) starts a new
+# one. End a line with two spaces or a backslash to force a line break.
 args=(
-  -f markdown+hard_line_breaks+mark
+  -f markdown+mark
   -t latex -s -o doc.tex
   --extract-media=media
   --resource-path="$BUILD:$JOB_RESOURCE_PATH"
