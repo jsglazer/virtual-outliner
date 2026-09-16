@@ -701,3 +701,19 @@
 	opacity: 0.45;
 	font-size: 0.85em;
 }
+
+/* Body-only view (and a collapsed entry) draws no label, so the break shows on
+   the body line it falls on: a little air above it and a ¶ in the margin. */
+.vo-break-line {
+	position: relative;
+	margin-top: 0.75em;
+}
+
+.vo-break-line::before {
+	content: '¶';
+	position: absolute;
+	left: -1.1em;
+	opacity: 0.35;
+	font-size: 0.85em;
+	pointer-events: none;
+}

@@ -127,3 +127,25 @@ describe('computeRenderPlan: body owner lines (Update006 follow-up)', () => {
 		expect(plan.bodyOwnerLine.size).toBe(0);
 	});
 });
+
+describe('paragraph-break marks', () => {
+	const doc = ['@ A', 'A body', '@@p A.1', '', 'A.1 body', '@@ A.2', 'A.2 body'].join('\n');
+
+	it('"both": the flag marks the entry line, and nothing in the body', () => {
+		const plan = computeRenderPlan(doc, '@', levels(), 'both', new Set());
+		expect([...plan.paragraphBreak]).toEqual([2]);
+		expect([...plan.paragraphBreakBody]).toEqual([]);
+	});
+
+	it('"body": the entry line is hidden, so the first body line under it is marked', () => {
+		const plan = computeRenderPlan(doc, '@', levels(), 'body', new Set());
+		expect([...plan.paragraphBreak]).toEqual([]);
+		expect([...plan.paragraphBreakBody]).toEqual([4]); // skips the blank line 3
+	});
+
+	it('"outline": the body is hidden, so only the label carries the mark', () => {
+		const plan = computeRenderPlan(doc, '@', levels(), 'outline', new Set());
+		expect([...plan.paragraphBreak]).toEqual([2]);
+		expect([...plan.paragraphBreakBody]).toEqual([]);
+	});
+});

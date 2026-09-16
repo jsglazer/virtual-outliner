@@ -315,6 +315,7 @@ function levelClasses(plan: RenderPlan, line: number): string[] {
 	if (indentLevel !== undefined) classes.push(`vo-indent-l${indentLevel}`);
 	if (bodyIndentLevel !== undefined) classes.push(`vo-body-indent-l${bodyIndentLevel}`);
 	if (entryLevel !== undefined) classes.push(`vo-entry-l${entryLevel}`);
+	if (plan.paragraphBreakBody.has(line)) classes.push('vo-break-line');
 	return classes;
 }
 

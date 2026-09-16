@@ -651,7 +651,7 @@ function isLineHidden(hidden, line) {
   return false;
 }
 function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, indentBody = true) {
-  var _a, _b;
+  var _a, _b, _c, _d;
   const parsed = parseOutline(body, sigilChar);
   const lines = body.split("\n");
   const collapseRanges = [];
@@ -685,13 +685,23 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
   const bodyOwnerLine = /* @__PURE__ */ new Map();
   const foldable = /* @__PURE__ */ new Map();
   const paragraphBreak = /* @__PURE__ */ new Set();
+  const paragraphBreakBody = /* @__PURE__ */ new Set();
   const showLabels = viewState === "outline" || viewState === "both";
   for (const node2 of parsed.flat) {
-    if (isLineHidden(hiddenLineRanges, node2.entryLine)) continue;
+    if (isLineHidden(hiddenLineRanges, node2.entryLine)) {
+      if (hasParagraphFlag((_b = lines[node2.entryLine]) != null ? _b : "", sigilChar)) {
+        for (let line = node2.entryLine + 1; line < node2.subtreeEnd; line++) {
+          if (isLineHidden(hiddenLineRanges, line) || ((_c = lines[line]) != null ? _c : "").trim() === "") continue;
+          paragraphBreakBody.add(line);
+          break;
+        }
+      }
+      continue;
+    }
     entryLevel2.set(node2.entryLine, node2.level);
     if (showLabels) labels.set(node2.entryLine, computeLabel(levels, node2));
     indentLevel.set(node2.entryLine, node2.level);
-    if (hasParagraphFlag((_b = lines[node2.entryLine]) != null ? _b : "", sigilChar)) paragraphBreak.add(node2.entryLine);
+    if (hasParagraphFlag((_d = lines[node2.entryLine]) != null ? _d : "", sigilChar)) paragraphBreak.add(node2.entryLine);
     if (hasFoldableContent(lines, node2)) {
       foldable.set(node2.entryLine, node2.id !== null && collapsedIds.has(node2.id));
     }
@@ -705,7 +715,7 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
       }
     }
   }
-  return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel: entryLevel2, foldable, paragraphBreak, hiddenLineRanges };
+  return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel: entryLevel2, foldable, paragraphBreak, paragraphBreakBody, hiddenLineRanges };
 }
 function hasFoldableContent(lines, node2) {
   var _a;
@@ -1339,6 +1349,11 @@ function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null, tex
       deco: import_view.Decoration.line({ class: `vo-entry-l${level}` })
     });
   }
+  for (const lineIndex of plan.paragraphBreakBody) {
+    if (lineIndex >= lineCount) continue;
+    const line = doc.line(lineIndex + 1);
+    items.push({ from: line.from, to: line.from, deco: import_view.Decoration.line({ class: "vo-break-line" }) });
+  }
   items.sort((a, b) => {
     var _a2, _b2;
     return a.from - b.from || ((_a2 = a.deco.startSide) != null ? _a2 : 0) - ((_b2 = b.deco.startSide) != null ? _b2 : 0);
@@ -1686,6 +1701,7 @@ function levelClasses(plan, line) {
   if (indentLevel !== void 0) classes.push(`vo-indent-l${indentLevel}`);
   if (bodyIndentLevel !== void 0) classes.push(`vo-body-indent-l${bodyIndentLevel}`);
   if (entryLevel2 !== void 0) classes.push(`vo-entry-l${entryLevel2}`);
+  if (plan.paragraphBreakBody.has(line)) classes.push("vo-break-line");
   return classes;
 }
 function createReadingPostProcessor(host) {
@@ -3935,18 +3951,22 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       id: "toggle-paragraph-break",
       name: "Toggle paragraph break at entry",
       editorCallback: (editor) => {
-        const cursor = editor.getCursor();
-        const line = editor.getLine(cursor.line);
-        const next = setParagraphFlag(line, this.settings.sigil, !hasParagraphFlag(line, this.settings.sigil));
-        if (next === null) {
+        if (!this.toggleParagraphBreak(editor, editor.getCursor().line)) {
           new import_obsidian7.Notice("Put the cursor on an outline entry to set a paragraph break.");
-          return;
         }
-        editor.setLine(cursor.line, next);
-        editor.setCursor({ line: cursor.line, ch: Math.max(0, cursor.ch + next.length - line.length) });
-        new import_obsidian7.Notice(next.length > line.length ? "This entry starts a new paragraph in the PDF." : "This entry continues the paragraph above.");
       }
     });
+    this.registerEvent(
+      this.app.workspace.on("editor-menu", (menu, editor) => {
+        const lineIndex = editor.getCursor().line;
+        const line = editor.getLine(lineIndex);
+        if (setParagraphFlag(line, this.settings.sigil, true) === null) return;
+        const on = hasParagraphFlag(line, this.settings.sigil);
+        menu.addItem(
+          (item) => item.setTitle(on ? "Remove paragraph break" : "Start a new paragraph here").setIcon("pilcrow").onClick(() => this.toggleParagraphBreak(editor, lineIndex))
+        );
+      })
+    );
     this.addCommand({
       id: "prune-orphaned-metadata",
       name: "Prune orphaned outline metadata",
@@ -4412,6 +4432,23 @@ ${body}
     if (path === null) return;
     this.setStateFromDoc(path, view.state.doc.toString());
     this.decorate(view);
+  }
+  // Adds or removes the `p` flag on one entry line, keeping the caret where
+  // it was relative to the text. False when the line is not an outline entry
+  // (or the sigil character is `p`, which makes the flag unavailable).
+  toggleParagraphBreak(editor, lineIndex) {
+    const line = editor.getLine(lineIndex);
+    const next = setParagraphFlag(line, this.settings.sigil, !hasParagraphFlag(line, this.settings.sigil));
+    if (next === null) return false;
+    const cursor = editor.getCursor();
+    editor.setLine(lineIndex, next);
+    if (cursor.line === lineIndex) {
+      editor.setCursor({ line: lineIndex, ch: Math.max(0, cursor.ch + next.length - line.length) });
+    }
+    new import_obsidian7.Notice(
+      next.length > line.length ? "This entry starts a new paragraph in the PDF." : "This entry continues the paragraph above."
+    );
+    return true;
   }
   editorFor(path) {
     for (const view of this.editors) {

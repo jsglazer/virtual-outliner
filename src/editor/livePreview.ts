@@ -471,6 +471,13 @@ export function buildOutlineDecorations(
 			deco: Decoration.line({ class: `vo-entry-l${level}` }),
 		});
 	}
+	// The ¶ rides on the label, which Body-only view doesn't draw — mark the
+	// body line the break falls on instead, so the breaks stay visible there.
+	for (const lineIndex of plan.paragraphBreakBody) {
+		if (lineIndex >= lineCount) continue;
+		const line = doc.line(lineIndex + 1);
+		items.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'vo-break-line' }) });
+	}
 
 	items.sort((a, b) => a.from - b.from || (a.deco.startSide ?? 0) - (b.deco.startSide ?? 0));
 	for (const item of items) builder.add(item.from, item.to, item.deco);

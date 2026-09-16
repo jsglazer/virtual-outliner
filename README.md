@@ -76,7 +76,7 @@ dv.table(['Label', 'Text', 'Status'], nodes.map(n => [n.label, n.text, n.meta?.S
 
 **Export to PDF** turns an outlined draft into a clean final document: only the prose is typeset. The body under one entry flows on from the body under the entry before it, because a subsection is often just the next sentence or two — the whole outline becomes continuous prose. To force a line break inside a paragraph, end the line with two spaces or a backslash.
 
-**Paragraph breaks.** A new paragraph starts wherever the note has a blank line or a heading, and wherever an entry carries the paragraph-break flag: a `p` between the sigils and the space, as in `@@p While some succeeded`. Like the sigils themselves the flag is never visible — the entry's label shows a dim ¶ instead — and **Toggle paragraph break at entry** sets it on the entry the cursor is on. A break is also kept automatically where joining would be wrong, such as either side of a list, table, quote or code block. The body's own Markdown headings (`#`, `##`, …) become the PDF's sections, bookmarks, and optional table of contents.
+**Paragraph breaks.** A new paragraph starts wherever the note has a blank line or a heading, and wherever an entry carries the paragraph-break flag: a `p` between the sigils and the space, as in `@@p While some succeeded`. Like the sigils themselves the flag is never visible, so it cannot be typed in directly: the entry's label shows a dim ¶ instead, and you set or clear it with **Toggle paragraph break at entry** or the right-click item **Start a new paragraph here**. In Body-only view, where no labels are drawn, the ¶ appears in the margin beside the body line the break falls on. A break is also kept automatically where joining would be wrong, such as either side of a list, table, quote or code block. The body's own Markdown headings (`#`, `##`, …) become the PDF's sections, bookmarks, and optional table of contents.
 
 The command opens a dialog for the font size (8–20 pt), the options below, and shows where the PDF will go and anything written *on* an outline entry line (a footnote, citation, or link) that the export will drop. Set per-note options in the frontmatter; anything left out uses the defaults in **Settings → PDF export**:
 
@@ -109,7 +109,7 @@ The renderer (shell and Python scripts, citation styles, default preamble) is bu
 - **Move outline block up** / **Move outline block down** — the `Alt-↑` / `Alt-↓` moves, usable with the cursor anywhere in the block, including its body text
 - **Generate filtered copy** — writes a new `.md` file with the current view honored and labels materialized
 - **Export to PDF** — typesets the body text only (desktop)
-- **Toggle paragraph break at entry** — marks the entry the cursor is on as starting a new paragraph in the PDF (`@@p …`, shown as a ¶ on its label)
+- **Toggle paragraph break at entry** — marks the entry the cursor is on as starting a new paragraph in the PDF (`@@p …`, shown as a ¶ on its label, or in the margin of its first body line in Body-only view). Also on the editor's right-click menu.
 - **Prune orphaned outline metadata** — removes metadata records whose node no longer exists, after reporting what it's about to remove
 
 ## Development

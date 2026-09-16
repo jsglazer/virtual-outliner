@@ -33,6 +33,11 @@ export interface RenderPlan {
 	// both views can mark the label with a ¶ — the flag itself hides with the
 	// sigils, and only PDF export acts on it.
 	paragraphBreak: Set<number>;
+	// Body lines that OPEN a flagged entry whose own entry line is hidden —
+	// Body-only view, or a collapsed ancestor. The label (and its ¶) is not on
+	// screen there, so the break is marked on the first body line instead;
+	// without this, Body-only view shows no sign of where the paragraphs fall.
+	paragraphBreakBody: Set<number>;
 	// Body line index -> its owning node's 1-based level, for body lines that
 	// should be indented under their entry (only when "Indent body" is on).
 	// Kept apart from indentLevel because body sits one step deeper than its
@@ -145,10 +150,20 @@ export function computeRenderPlan(
 	const bodyOwnerLine = new Map<number, number>();
 	const foldable = new Map<number, boolean>();
 	const paragraphBreak = new Set<number>();
+	const paragraphBreakBody = new Set<number>();
 
 	const showLabels = viewState === 'outline' || viewState === 'both';
 	for (const node of parsed.flat) {
-		if (isLineHidden(hiddenLineRanges, node.entryLine)) continue;
+		if (isLineHidden(hiddenLineRanges, node.entryLine)) {
+			if (hasParagraphFlag(lines[node.entryLine] ?? '', sigilChar)) {
+				for (let line = node.entryLine + 1; line < node.subtreeEnd; line++) {
+					if (isLineHidden(hiddenLineRanges, line) || (lines[line] ?? '').trim() === '') continue;
+					paragraphBreakBody.add(line);
+					break;
+				}
+			}
+			continue;
+		}
 		entryLevel.set(node.entryLine, node.level);
 		if (showLabels) labels.set(node.entryLine, computeLabel(levels, node));
 		indentLevel.set(node.entryLine, node.level);
@@ -168,7 +183,7 @@ export function computeRenderPlan(
 		}
 	}
 
-	return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel, foldable, paragraphBreak, hiddenLineRanges };
+	return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel, foldable, paragraphBreak, paragraphBreakBody, hiddenLineRanges };
 }
 
 export function hasFoldableContent(lines: readonly string[], node: OutlineNode): boolean {

@@ -8,7 +8,7 @@
 // active file." The one exception is "Generate filtered copy", which
 // creates a brand-new export file and never touches the source document.
 
-import type { TFile, WorkspaceLeaf } from 'obsidian';
+import type { Editor, TFile, WorkspaceLeaf } from 'obsidian';
 import { MarkdownView, Notice, Platform, Plugin } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
 
@@ -280,24 +280,32 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			this.app.workspace.onLayoutReady(() => void this.setupPdfRenderer());
 		}
 
-		// The flag hides with the sigils, so this command (and the ¶ on the
-		// label) is how it is seen and changed.
+		// The flag hides with the sigils — the prefix is one atomic range, so it
+		// cannot be typed into — which makes this command, the right-click item
+		// below and the ¶ on the label the only way it is seen and changed.
 		this.addCommand({
 			id: 'toggle-paragraph-break',
 			name: 'Toggle paragraph break at entry',
 			editorCallback: (editor) => {
-				const cursor = editor.getCursor();
-				const line = editor.getLine(cursor.line);
-				const next = setParagraphFlag(line, this.settings.sigil, !hasParagraphFlag(line, this.settings.sigil));
-				if (next === null) {
+				if (!this.toggleParagraphBreak(editor, editor.getCursor().line)) {
 					new Notice('Put the cursor on an outline entry to set a paragraph break.');
-					return;
 				}
-				editor.setLine(cursor.line, next);
-				editor.setCursor({ line: cursor.line, ch: Math.max(0, cursor.ch + next.length - line.length) });
-				new Notice(next.length > line.length ? 'This entry starts a new paragraph in the PDF.' : 'This entry continues the paragraph above.');
 			},
 		});
+		this.registerEvent(
+			this.app.workspace.on('editor-menu', (menu, editor) => {
+				const lineIndex = editor.getCursor().line;
+				const line = editor.getLine(lineIndex);
+				if (setParagraphFlag(line, this.settings.sigil, true) === null) return;
+				const on = hasParagraphFlag(line, this.settings.sigil);
+				menu.addItem((item) =>
+					item
+						.setTitle(on ? 'Remove paragraph break' : 'Start a new paragraph here')
+						.setIcon('pilcrow')
+						.onClick(() => this.toggleParagraphBreak(editor, lineIndex)),
+				);
+			}),
+		);
 
 		this.addCommand({
 			id: 'prune-orphaned-metadata',
@@ -821,6 +829,26 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		if (path === null) return;
 		this.setStateFromDoc(path, view.state.doc.toString());
 		this.decorate(view);
+	}
+
+	// Adds or removes the `p` flag on one entry line, keeping the caret where
+	// it was relative to the text. False when the line is not an outline entry
+	// (or the sigil character is `p`, which makes the flag unavailable).
+	private toggleParagraphBreak(editor: Editor, lineIndex: number): boolean {
+		const line = editor.getLine(lineIndex);
+		const next = setParagraphFlag(line, this.settings.sigil, !hasParagraphFlag(line, this.settings.sigil));
+		if (next === null) return false;
+		const cursor = editor.getCursor();
+		editor.setLine(lineIndex, next);
+		if (cursor.line === lineIndex) {
+			editor.setCursor({ line: lineIndex, ch: Math.max(0, cursor.ch + next.length - line.length) });
+		}
+		new Notice(
+			next.length > line.length
+				? 'This entry starts a new paragraph in the PDF.'
+				: 'This entry continues the paragraph above.',
+		);
+		return true;
 	}
 
 	private editorFor(path: string): EditorView | null {
