@@ -692,3 +692,12 @@
 	padding: 0.5em;
 	border-radius: var(--radius-s);
 }
+
+/* A ¶ beside the label of an entry whose body starts a new paragraph in the
+   PDF (`@@p text`). The flag itself hides with the sigils. */
+.vo-label.vo-break::after {
+	content: '¶';
+	margin-left: 0.3em;
+	opacity: 0.45;
+	font-size: 0.85em;
+}

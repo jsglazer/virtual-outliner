@@ -15,6 +15,37 @@
 import { ID_SUFFIX_RE } from './id';
 
 export const DEFAULT_SIGIL_CHAR = '@';
+
+// The paragraph-break flag: one optional character between the sigil run and
+// the required space (`@@p Focus on failure`). PDF export joins each entry's
+// body into the paragraph above it; a flagged entry starts a new paragraph
+// instead. It sits inside the prefix both views already hide, so it is never
+// visible — the label shows a ¶ instead. Disabled when it IS the sigil
+// character, since `pp ` would then be ambiguous with level 2.
+export const PARAGRAPH_FLAG = 'p';
+
+function flagPattern(sigilChar: string): string {
+	return sigilChar === PARAGRAPH_FLAG ? '' : `${PARAGRAPH_FLAG}?`;
+}
+
+// True for `@@p text` (and `@@p `), false for `@@ text`. Non-entry lines are
+// false.
+export function hasParagraphFlag(line: string, sigilChar: string): boolean {
+	const match = outlineLineRegex(sigilChar).exec(line);
+	if (!match) return false;
+	const sigils = match[1] ?? '';
+	return line.slice(sigils.length, sigils.length + PARAGRAPH_FLAG.length) === PARAGRAPH_FLAG && sigilChar !== PARAGRAPH_FLAG;
+}
+
+// The same line with the flag added or removed, or null when the line is not
+// an outline line (or the flag is unavailable for this sigil).
+export function setParagraphFlag(line: string, sigilChar: string, on: boolean): string | null {
+	const match = outlineLineRegex(sigilChar).exec(line);
+	if (!match || sigilChar === PARAGRAPH_FLAG) return null;
+	const sigils = match[1] ?? '';
+	const rest = line.slice(sigils.length + (hasParagraphFlag(line, sigilChar) ? PARAGRAPH_FLAG.length : 0));
+	return sigils + (on ? PARAGRAPH_FLAG : '') + rest;
+}
 export const MAX_LEVEL = 6;
 
 function escapeForRegex(char: string): string {
@@ -28,7 +59,7 @@ function escapeForRegex(char: string): string {
 // line an outline entry".
 export function entryLineRegex(sigilChar: string): RegExp {
 	const escaped = escapeForRegex(sigilChar);
-	return new RegExp(`^(${escaped}{1,${MAX_LEVEL}})[ \\t]+(\\S.*)$`);
+	return new RegExp(`^(${escaped}{1,${MAX_LEVEL}})(?:${flagPattern(sigilChar)})[ \\t]+(\\S.*)$`);
 }
 
 // Level (1-based) of a line, or null if it is not an outline entry.
@@ -53,7 +84,7 @@ export function isEntryLine(line: string, sigilChar: string): boolean {
 // own `node === null` guard rather than a special case here.
 export function outlineLineRegex(sigilChar: string): RegExp {
 	const escaped = escapeForRegex(sigilChar);
-	return new RegExp(`^(${escaped}{1,${MAX_LEVEL}})[ \\t]+(.*)$`);
+	return new RegExp(`^(${escaped}{1,${MAX_LEVEL}})(?:${flagPattern(sigilChar)})[ \\t]+(.*)$`);
 }
 
 export function isOutlineLine(line: string, sigilChar: string): boolean {

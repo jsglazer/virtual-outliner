@@ -240,13 +240,32 @@ function appendId(text2, id) {
 
 // src/core/sigil.ts
 var DEFAULT_SIGIL_CHAR = "@";
+var PARAGRAPH_FLAG = "p";
+function flagPattern(sigilChar) {
+  return sigilChar === PARAGRAPH_FLAG ? "" : `${PARAGRAPH_FLAG}?`;
+}
+function hasParagraphFlag(line, sigilChar) {
+  var _a;
+  const match = outlineLineRegex(sigilChar).exec(line);
+  if (!match) return false;
+  const sigils = (_a = match[1]) != null ? _a : "";
+  return line.slice(sigils.length, sigils.length + PARAGRAPH_FLAG.length) === PARAGRAPH_FLAG && sigilChar !== PARAGRAPH_FLAG;
+}
+function setParagraphFlag(line, sigilChar, on) {
+  var _a;
+  const match = outlineLineRegex(sigilChar).exec(line);
+  if (!match || sigilChar === PARAGRAPH_FLAG) return null;
+  const sigils = (_a = match[1]) != null ? _a : "";
+  const rest = line.slice(sigils.length + (hasParagraphFlag(line, sigilChar) ? PARAGRAPH_FLAG.length : 0));
+  return sigils + (on ? PARAGRAPH_FLAG : "") + rest;
+}
 var MAX_LEVEL = 6;
 function escapeForRegex(char) {
   return char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function entryLineRegex(sigilChar) {
   const escaped = escapeForRegex(sigilChar);
-  return new RegExp(`^(${escaped}{1,${MAX_LEVEL}})[ \\t]+(\\S.*)$`);
+  return new RegExp(`^(${escaped}{1,${MAX_LEVEL}})(?:${flagPattern(sigilChar)})[ \\t]+(\\S.*)$`);
 }
 function entryLevel(line, sigilChar) {
   var _a;
@@ -260,7 +279,7 @@ function isEntryLine(line, sigilChar) {
 }
 function outlineLineRegex(sigilChar) {
   const escaped = escapeForRegex(sigilChar);
-  return new RegExp(`^(${escaped}{1,${MAX_LEVEL}})[ \\t]+(.*)$`);
+  return new RegExp(`^(${escaped}{1,${MAX_LEVEL}})(?:${flagPattern(sigilChar)})[ \\t]+(.*)$`);
 }
 function isOutlineLine(line, sigilChar) {
   return outlineLineRegex(sigilChar).test(line);
@@ -632,7 +651,7 @@ function isLineHidden(hidden, line) {
   return false;
 }
 function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, indentBody = true) {
-  var _a;
+  var _a, _b;
   const parsed = parseOutline(body, sigilChar);
   const lines = body.split("\n");
   const collapseRanges = [];
@@ -665,12 +684,14 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
   const bodyIndentLevel = /* @__PURE__ */ new Map();
   const bodyOwnerLine = /* @__PURE__ */ new Map();
   const foldable = /* @__PURE__ */ new Map();
+  const paragraphBreak = /* @__PURE__ */ new Set();
   const showLabels = viewState === "outline" || viewState === "both";
   for (const node2 of parsed.flat) {
     if (isLineHidden(hiddenLineRanges, node2.entryLine)) continue;
     entryLevel2.set(node2.entryLine, node2.level);
     if (showLabels) labels.set(node2.entryLine, computeLabel(levels, node2));
     indentLevel.set(node2.entryLine, node2.level);
+    if (hasParagraphFlag((_b = lines[node2.entryLine]) != null ? _b : "", sigilChar)) paragraphBreak.add(node2.entryLine);
     if (hasFoldableContent(lines, node2)) {
       foldable.set(node2.entryLine, node2.id !== null && collapsedIds.has(node2.id));
     }
@@ -684,7 +705,7 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
       }
     }
   }
-  return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel: entryLevel2, foldable, hiddenLineRanges };
+  return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel: entryLevel2, foldable, paragraphBreak, hiddenLineRanges };
 }
 function hasFoldableContent(lines, node2) {
   var _a;
@@ -1261,7 +1282,14 @@ function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null, tex
       items.push({
         from: line.from,
         to: line.from + segs.prefixEnd,
-        deco: import_view.Decoration.replace({ widget: new LabelWidget(label, `vo-l${level}`, fold, onToggleFold) })
+        deco: import_view.Decoration.replace({
+          widget: new LabelWidget(
+            label,
+            `vo-l${level}${plan.paragraphBreak.has(lineIndex) ? " vo-break" : ""}`,
+            fold,
+            onToggleFold
+          )
+        })
       });
     }
     if (segs.textEnd > segs.prefixEnd) {
@@ -1533,7 +1561,7 @@ function materializeLabelIn(nodes, line, sigilChar, label, level, doc, fold) {
   if (idSuffixStr !== "" && last) stripIdSuffix(last, idSuffixStr);
   if (!stripLinePrefix(first, prefixStr)) return;
   const labelSpan = doc.createElement("span");
-  labelSpan.className = `vo-label vo-l${level}`;
+  labelSpan.className = `vo-label vo-l${level}${hasParagraphFlag(line, sigilChar) ? " vo-break" : ""}`;
   if (fold) {
     const toggle = doc.createElement("span");
     toggle.className = `vo-fold collapse-icon${fold.collapsed ? " is-collapsed" : ""}`;
@@ -1788,6 +1816,10 @@ function lostKinds(entryText) {
   if (EMBED_RE.test(entryText)) kinds.push("embed");
   return kinds;
 }
+var BLOCK_START_RE = /^(?:\s{4,}|\t|#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||:{1,3}(?:\s|$)|`{3,}|~{3,}|(?:[-*_]\s*){3,}$)/;
+function isPlainProse(line) {
+  return line.trim() !== "" && !BLOCK_START_RE.test(line);
+}
 function extractBody(doc, sigilChar) {
   var _a, _b, _c, _d;
   const lines = stripFrontmatter(parseMetaDocument(doc).body).split("\n");
@@ -1796,25 +1828,37 @@ function extractBody(doc, sigilChar) {
   const lost = [];
   let fence = null;
   let lastBlank = true;
+  let lastText = "";
+  let dropped = false;
+  let forceBreak = false;
   for (let i = 0; i < lines.length; i++) {
     const line = (_a = lines[i]) != null ? _a : "";
+    if (fence === null && isOutlineLine(line, sigilChar)) {
+      const entryText = ((_c = (_b = entryRe.exec(line)) == null ? void 0 : _b[2]) != null ? _c : "").trim();
+      const kinds = lostKinds(entryText);
+      if (kinds.length > 0) lost.push({ line: i, text: entryText, kinds });
+      dropped = true;
+      if (hasParagraphFlag(line, sigilChar)) forceBreak = true;
+      continue;
+    }
+    const blank = fence === null && line.trim() === "";
+    if (dropped && !blank && !lastBlank && (forceBreak || !isPlainProse(lastText) || !isPlainProse(line))) {
+      out.push("");
+      lastBlank = true;
+    }
+    dropped = false;
+    forceBreak = false;
     if (fence !== null || FENCE_RE.test(line)) {
       fence = nextFenceState(line, fence);
       out.push(line);
       lastBlank = false;
+      lastText = line;
       continue;
     }
-    let emitted = line;
-    if (isOutlineLine(line, sigilChar)) {
-      const entryText = ((_c = (_b = entryRe.exec(line)) == null ? void 0 : _b[2]) != null ? _c : "").trim();
-      const kinds = lostKinds(entryText);
-      if (kinds.length > 0) lost.push({ line: i, text: entryText, kinds });
-      emitted = "";
-    }
-    const blank = emitted.trim() === "";
     if (blank && lastBlank) continue;
-    out.push(blank ? "" : emitted);
+    out.push(blank ? "" : line);
     lastBlank = blank;
+    if (!blank) lastText = line;
   }
   while (out.length > 0 && ((_d = out[out.length - 1]) != null ? _d : "").trim() === "") out.pop();
   const body = out.join("\n");
@@ -3887,6 +3931,22 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       });
       this.app.workspace.onLayoutReady(() => void this.setupPdfRenderer());
     }
+    this.addCommand({
+      id: "toggle-paragraph-break",
+      name: "Toggle paragraph break at entry",
+      editorCallback: (editor) => {
+        const cursor = editor.getCursor();
+        const line = editor.getLine(cursor.line);
+        const next = setParagraphFlag(line, this.settings.sigil, !hasParagraphFlag(line, this.settings.sigil));
+        if (next === null) {
+          new import_obsidian7.Notice("Put the cursor on an outline entry to set a paragraph break.");
+          return;
+        }
+        editor.setLine(cursor.line, next);
+        editor.setCursor({ line: cursor.line, ch: Math.max(0, cursor.ch + next.length - line.length) });
+        new import_obsidian7.Notice(next.length > line.length ? "This entry starts a new paragraph in the PDF." : "This entry continues the paragraph above.");
+      }
+    });
     this.addCommand({
       id: "prune-orphaned-metadata",
       name: "Prune orphaned outline metadata",

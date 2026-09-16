@@ -3,9 +3,39 @@ import { describe, expect, it } from 'vitest';
 import { collectCiteKeys, extractBody, groupKeysByLibrary, stripFrontmatter } from '../src/core/exportBody';
 
 describe('extractBody', () => {
-	it('turns a dropped entry between prose lines into a paragraph break', () => {
+	it('joins prose across a dropped entry into one paragraph', () => {
 		const out = extractBody(['Prose A', '@@ Entry', 'Prose B'].join('\n'), '@');
+		expect(out.body).toBe(['Prose A', 'Prose B'].join('\n'));
+	});
+
+	it('starts a new paragraph at an entry carrying the p flag', () => {
+		const out = extractBody(['Prose A', '@@p Entry', 'Prose B'].join('\n'), '@');
 		expect(out.body).toBe(['Prose A', '', 'Prose B'].join('\n'));
+	});
+
+	it('breaks only once when several entries in a row carry the flag', () => {
+		const out = extractBody(['A', '@ One', '@@p Two', '@@ Three', 'B'].join('\n'), '@');
+		expect(out.body).toBe(['A', '', 'B'].join('\n'));
+	});
+
+	it('keeps the blank line when either side of the seam is not plain prose', () => {
+		const list = extractBody(['- item', '@@ Entry', 'Prose'].join('\n'), '@');
+		expect(list.body).toBe(['- item', '', 'Prose'].join('\n'));
+		const heading = extractBody(['Prose', '@@ Entry', '## Heading'].join('\n'), '@');
+		expect(heading.body).toBe(['Prose', '', '## Heading'].join('\n'));
+		const table = extractBody(['| a | b |', '@@ Entry', 'Prose'].join('\n'), '@');
+		expect(table.body).toBe(['| a | b |', '', 'Prose'].join('\n'));
+		const quote = extractBody(['> quoted', '@@ Entry', 'Prose'].join('\n'), '@');
+		expect(quote.body).toBe(['> quoted', '', 'Prose'].join('\n'));
+	});
+
+	it('leaves a blank line the note already has alone', () => {
+		const out = extractBody(['A', '', '@@ Entry', 'B'].join('\n'), '@');
+		expect(out.body).toBe(['A', '', 'B'].join('\n'));
+	});
+
+	it('ignores the flag when the sigil character IS p', () => {
+		expect(extractBody(['A', 'pp Entry', 'B'].join('\n'), 'p').body).toBe(['A', 'B'].join('\n'));
 	});
 
 	it('keeps consecutive body lines together (they stay line breaks in the PDF)', () => {
@@ -27,6 +57,15 @@ describe('extractBody', () => {
 	it('keeps prose before the first entry and drops frontmatter', () => {
 		const doc = ['---', 'headnum: n', 'TOC: y', '---', '### Title', '@ Intro', 'Text'].join('\n');
 		expect(extractBody(doc, '@').body).toBe(['### Title', '', 'Text'].join('\n'));
+	});
+
+	it('reads the flag on an entry that also carries an id', () => {
+		const doc = ['A', '@@p Entry ^o-00az6fpc', 'B'].join('\n');
+		expect(extractBody(doc, '@').body).toBe(['A', '', 'B'].join('\n'));
+	});
+
+	it('never exports the flag itself', () => {
+		expect(extractBody(['@@p Entry', 'Body'].join('\n'), '@').body).not.toContain('p');
 	});
 
 	it('never exports ids or the metadata block', () => {

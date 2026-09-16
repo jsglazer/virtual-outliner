@@ -28,7 +28,7 @@ import { setIcon } from 'obsidian';
 import { parseMetaDocument } from '../core/metadata';
 import { computeRenderPlan, isLineHidden } from '../core/render';
 import type { RenderPlan } from '../core/render';
-import { entrySegments } from '../core/sigil';
+import { entrySegments, hasParagraphFlag } from '../core/sigil';
 import type { LevelFormat, ViewState } from '../core/types';
 
 export interface ReadingHost {
@@ -140,7 +140,7 @@ function materializeLabelIn(
 	if (!stripLinePrefix(first, prefixStr)) return;
 
 	const labelSpan = doc.createElement('span');
-	labelSpan.className = `vo-label vo-l${level}`;
+	labelSpan.className = `vo-label vo-l${level}${hasParagraphFlag(line, sigilChar) ? ' vo-break' : ''}`;
 	if (fold) {
 		const toggle = doc.createElement('span');
 		toggle.className = `vo-fold collapse-icon${fold.collapsed ? ' is-collapsed' : ''}`;

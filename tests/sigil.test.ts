@@ -1,6 +1,43 @@
 import { describe, expect, it } from 'vitest';
 
-import { entryLevel, entrySegments, isEntryLine, isOutlineLine, isRiskySigil } from '../src/core/sigil';
+import {
+	entryLevel,
+	entrySegments,
+	hasParagraphFlag,
+	isEntryLine,
+	isOutlineLine,
+	isRiskySigil,
+	setParagraphFlag,
+} from '../src/core/sigil';
+
+describe('paragraph-break flag', () => {
+	it('is part of the entry line and hides with the sigils', () => {
+		expect(isEntryLine('@@p Focus', '@')).toBe(true);
+		expect(entryLevel('@@p Focus', '@')).toBe(2);
+		expect(hasParagraphFlag('@@p Focus', '@')).toBe(true);
+		expect(hasParagraphFlag('@@ Focus', '@')).toBe(false);
+		const segs = entrySegments('@@p Focus', '@');
+		expect('@@p Focus'.slice(segs?.prefixEnd ?? 0)).toBe('Focus');
+	});
+
+	it('needs the space, like any entry', () => {
+		expect(isEntryLine('@@pFocus', '@')).toBe(false);
+		expect(isOutlineLine('@@p ', '@')).toBe(true);
+	});
+
+	it('toggles on and off, keeping the text and any id', () => {
+		expect(setParagraphFlag('@@ Focus ^o-00az6fpc', '@', true)).toBe('@@p Focus ^o-00az6fpc');
+		expect(setParagraphFlag('@@p Focus', '@', false)).toBe('@@ Focus');
+		expect(setParagraphFlag('@@p Focus', '@', true)).toBe('@@p Focus');
+		expect(setParagraphFlag('Prose', '@', true)).toBeNull();
+	});
+
+	it('is unavailable when the sigil character is p', () => {
+		expect(entryLevel('ppp Three', 'p')).toBe(3);
+		expect(hasParagraphFlag('ppp Three', 'p')).toBe(false);
+		expect(setParagraphFlag('pp Two', 'p', true)).toBeNull();
+	});
+});
 
 describe('entryLevel / isEntryLine', () => {
 	it('requires the separating space (Decision #2 — no escape handler)', () => {

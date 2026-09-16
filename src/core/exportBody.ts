@@ -8,12 +8,16 @@
 //
 // Deliberately separate from generateFilteredCopy (exportFilter.ts), which
 // mirrors what the editor currently shows and simply deletes hidden lines.
-// Deleting an entry line that sits between two prose lines makes them adjacent,
-// and pandoc joins adjacent lines into one paragraph; here each dropped entry
-// becomes a paragraph break instead.
+//
+// Paragraphs: an entry's body normally CONTINUES the paragraph above it, since
+// a subsection is often just the next sentence or two. A new paragraph starts
+// where the entry carries the paragraph-break flag (`@@p text`), where the note
+// has a blank line, or where either side of the seam is not plain prose — a
+// heading, list, table, quote or code fence, which pandoc would otherwise
+// misread as lazy continuation of the block before it.
 
 import { parseMetaDocument } from './metadata';
-import { isOutlineLine, outlineLineRegex } from './sigil';
+import { hasParagraphFlag, isOutlineLine, outlineLineRegex } from './sigil';
 
 export type LostKind = 'footnote' | 'citation' | 'link' | 'embed';
 
@@ -66,6 +70,15 @@ export function lostKinds(entryText: string): LostKind[] {
 	return kinds;
 }
 
+// Line starts that open their own block, so a seam next to one must keep its
+// blank line: heading, list item, blockquote, fence, table row, thematic
+// break, indented code, and pandoc's `:::` divs and `:` definitions.
+const BLOCK_START_RE = /^(?:\s{4,}|\t|#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||:{1,3}(?:\s|$)|`{3,}|~{3,}|(?:[-*_]\s*){3,}$)/;
+
+function isPlainProse(line: string): boolean {
+	return line.trim() !== '' && !BLOCK_START_RE.test(line);
+}
+
 export function extractBody(doc: string, sigilChar: string): BodyExtraction {
 	const lines = stripFrontmatter(parseMetaDocument(doc).body).split('\n');
 	const entryRe = outlineLineRegex(sigilChar);
@@ -73,26 +86,38 @@ export function extractBody(doc: string, sigilChar: string): BodyExtraction {
 	const lost: LostContent[] = [];
 	let fence: string | null = null;
 	let lastBlank = true; // suppresses leading blank lines too
+	let lastText = ''; // the last non-blank line emitted
+	let dropped = false; // an entry line was removed since the last body line
+	let forceBreak = false; // …and at least one of them carried the flag
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i] ?? '';
+		if (fence === null && isOutlineLine(line, sigilChar)) {
+			const entryText = (entryRe.exec(line)?.[2] ?? '').trim();
+			const kinds = lostKinds(entryText);
+			if (kinds.length > 0) lost.push({ line: i, text: entryText, kinds });
+			dropped = true;
+			if (hasParagraphFlag(line, sigilChar)) forceBreak = true;
+			continue;
+		}
+		const blank = fence === null && line.trim() === '';
+		if (dropped && !blank && !lastBlank && (forceBreak || !isPlainProse(lastText) || !isPlainProse(line))) {
+			out.push('');
+			lastBlank = true;
+		}
+		dropped = false;
+		forceBreak = false;
 		if (fence !== null || FENCE_RE.test(line)) {
 			fence = nextFenceState(line, fence);
 			out.push(line);
 			lastBlank = false;
+			lastText = line;
 			continue;
 		}
-		let emitted = line;
-		if (isOutlineLine(line, sigilChar)) {
-			const entryText = (entryRe.exec(line)?.[2] ?? '').trim();
-			const kinds = lostKinds(entryText);
-			if (kinds.length > 0) lost.push({ line: i, text: entryText, kinds });
-			emitted = '';
-		}
-		const blank = emitted.trim() === '';
 		if (blank && lastBlank) continue;
-		out.push(blank ? '' : emitted);
+		out.push(blank ? '' : line);
 		lastBlank = blank;
+		if (!blank) lastText = line;
 	}
 	while (out.length > 0 && (out[out.length - 1] ?? '').trim() === '') out.pop();
 

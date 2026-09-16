@@ -411,7 +411,14 @@ export function buildOutlineDecorations(
 			items.push({
 				from: line.from,
 				to: line.from + segs.prefixEnd,
-				deco: Decoration.replace({ widget: new LabelWidget(label, `vo-l${level}`, fold, onToggleFold) }),
+				deco: Decoration.replace({
+					widget: new LabelWidget(
+						label,
+						`vo-l${level}${plan.paragraphBreak.has(lineIndex) ? ' vo-break' : ''}`,
+						fold,
+						onToggleFold,
+					),
+				}),
 			});
 		}
 		if (segs.textEnd > segs.prefixEnd) {

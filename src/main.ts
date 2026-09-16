@@ -21,6 +21,7 @@ import { parseOutline } from './core/parser';
 import { ownerNodeAtLine } from './core/ops';
 import { computeRenderPlan, hasFoldableContent } from './core/render';
 import { generateFilteredCopy } from './core/exportFilter';
+import { hasParagraphFlag, setParagraphFlag } from './core/sigil';
 import type { OutlineSettings } from './core/settings';
 import { levelCssVars, normalizeSettings } from './core/settings';
 import type { OutlineNode, ViewState } from './core/types';
@@ -278,6 +279,25 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			});
 			this.app.workspace.onLayoutReady(() => void this.setupPdfRenderer());
 		}
+
+		// The flag hides with the sigils, so this command (and the ¶ on the
+		// label) is how it is seen and changed.
+		this.addCommand({
+			id: 'toggle-paragraph-break',
+			name: 'Toggle paragraph break at entry',
+			editorCallback: (editor) => {
+				const cursor = editor.getCursor();
+				const line = editor.getLine(cursor.line);
+				const next = setParagraphFlag(line, this.settings.sigil, !hasParagraphFlag(line, this.settings.sigil));
+				if (next === null) {
+					new Notice('Put the cursor on an outline entry to set a paragraph break.');
+					return;
+				}
+				editor.setLine(cursor.line, next);
+				editor.setCursor({ line: cursor.line, ch: Math.max(0, cursor.ch + next.length - line.length) });
+				new Notice(next.length > line.length ? 'This entry starts a new paragraph in the PDF.' : 'This entry continues the paragraph above.');
+			},
+		});
 
 		this.addCommand({
 			id: 'prune-orphaned-metadata',
