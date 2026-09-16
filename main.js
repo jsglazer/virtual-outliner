@@ -284,6 +284,29 @@ function outlineLineRegex(sigilChar) {
 function isOutlineLine(line, sigilChar) {
   return outlineLineRegex(sigilChar).test(line);
 }
+var COMMENT_MARK = "%";
+function commentLineRegex(sigilChar) {
+  const escaped = escapeForRegex(sigilChar);
+  return new RegExp(`^(${escaped}{1,${MAX_LEVEL}}${escapeForRegex(COMMENT_MARK)})(?:[ \\t]+(.*))?$`);
+}
+function isCommentLine(line, sigilChar) {
+  return sigilChar !== COMMENT_MARK && commentLineRegex(sigilChar).test(line);
+}
+function commentPrefixEnd(line, sigilChar) {
+  if (!isCommentLine(line, sigilChar)) return null;
+  const match = commentLineRegex(sigilChar).exec(line);
+  const rest = match == null ? void 0 : match[2];
+  return rest === void 0 ? line.length : line.length - rest.length;
+}
+function setComment(line, sigilChar, on) {
+  if (sigilChar === COMMENT_MARK || line.trim() === "") return null;
+  const commented = isCommentLine(line, sigilChar);
+  if (!commented && isOutlineLine(line, sigilChar)) return null;
+  if (on === commented) return line;
+  if (on) return `${sigilChar}${COMMENT_MARK} ${line}`;
+  const end = commentPrefixEnd(line, sigilChar);
+  return end === null ? line : line.slice(end);
+}
 function entrySegments(line, sigilChar) {
   var _a, _b;
   const match = entryLineRegex(sigilChar).exec(line);
@@ -651,7 +674,7 @@ function isLineHidden(hidden, line) {
   return false;
 }
 function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, indentBody = true) {
-  var _a, _b, _c, _d;
+  var _a, _b, _c, _d, _e;
   const parsed = parseOutline(body, sigilChar);
   const lines = body.split("\n");
   const collapseRanges = [];
@@ -686,12 +709,16 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
   const foldable = /* @__PURE__ */ new Map();
   const paragraphBreak = /* @__PURE__ */ new Set();
   const paragraphBreakBody = /* @__PURE__ */ new Set();
+  const commentLines = /* @__PURE__ */ new Set();
+  for (let i = 0; i < parsed.lineCount; i++) {
+    if (isCommentLine((_b = lines[i]) != null ? _b : "", sigilChar) && !isLineHidden(hiddenLineRanges, i)) commentLines.add(i);
+  }
   const showLabels = viewState === "outline" || viewState === "both";
   for (const node2 of parsed.flat) {
     if (isLineHidden(hiddenLineRanges, node2.entryLine)) {
-      if (hasParagraphFlag((_b = lines[node2.entryLine]) != null ? _b : "", sigilChar)) {
+      if (hasParagraphFlag((_c = lines[node2.entryLine]) != null ? _c : "", sigilChar)) {
         for (let line = node2.entryLine + 1; line < node2.subtreeEnd; line++) {
-          if (isLineHidden(hiddenLineRanges, line) || ((_c = lines[line]) != null ? _c : "").trim() === "") continue;
+          if (isLineHidden(hiddenLineRanges, line) || ((_d = lines[line]) != null ? _d : "").trim() === "") continue;
           paragraphBreakBody.add(line);
           break;
         }
@@ -701,7 +728,7 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
     entryLevel2.set(node2.entryLine, node2.level);
     if (showLabels) labels.set(node2.entryLine, computeLabel(levels, node2));
     indentLevel.set(node2.entryLine, node2.level);
-    if (hasParagraphFlag((_d = lines[node2.entryLine]) != null ? _d : "", sigilChar)) paragraphBreak.add(node2.entryLine);
+    if (hasParagraphFlag((_e = lines[node2.entryLine]) != null ? _e : "", sigilChar)) paragraphBreak.add(node2.entryLine);
     if (hasFoldableContent(lines, node2)) {
       foldable.set(node2.entryLine, node2.id !== null && collapsedIds.has(node2.id));
     }
@@ -715,7 +742,7 @@ function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, ind
       }
     }
   }
-  return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel: entryLevel2, foldable, paragraphBreak, paragraphBreakBody, hiddenLineRanges };
+  return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel: entryLevel2, foldable, paragraphBreak, paragraphBreakBody, commentLines, hiddenLineRanges };
 }
 function hasFoldableContent(lines, node2) {
   var _a;
@@ -868,6 +895,17 @@ function checkPreamble(preamble) {
 }
 
 // src/core/settings.ts
+var DEFAULT_PARAGRAPH_COLOR = "#9e9e9e";
+var DEFAULT_COMMENT_COLOR = "#b07d2b";
+function readColor(v, fallback) {
+  return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallback;
+}
+function markerCssVars(settings) {
+  return {
+    "--vo-paragraph-color": readColor(settings.paragraphColor, DEFAULT_PARAGRAPH_COLOR),
+    "--vo-comment-color": readColor(settings.commentColor, DEFAULT_COMMENT_COLOR)
+  };
+}
 function defaultPdfExportSettings() {
   return {
     preamble: "",
@@ -936,6 +974,8 @@ function defaultSettings() {
     levels,
     metaFields: defaultMetaFields(),
     toolbarHighlights: defaultToolbarHighlights(),
+    paragraphColor: DEFAULT_PARAGRAPH_COLOR,
+    commentColor: DEFAULT_COMMENT_COLOR,
     pdfExport: defaultPdfExportSettings()
   };
 }
@@ -1043,6 +1083,8 @@ function normalizeSettings(raw) {
     levels,
     metaFields: metaFields.length > 0 ? metaFields : fallback.metaFields,
     toolbarHighlights: readToolbarHighlights(raw.toolbarHighlights),
+    paragraphColor: readColor(raw.paragraphColor, fallback.paragraphColor),
+    commentColor: readColor(raw.commentColor, fallback.commentColor),
     pdfExport: readPdfExport(raw.pdfExport)
   };
 }
@@ -1349,6 +1391,14 @@ function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null, tex
       deco: import_view.Decoration.line({ class: `vo-entry-l${level}` })
     });
   }
+  for (const lineIndex of plan.commentLines) {
+    if (lineIndex >= lineCount) continue;
+    const line = doc.line(lineIndex + 1);
+    const prefixEnd = commentPrefixEnd(line.text, sigilChar);
+    if (prefixEnd === null) continue;
+    items.push({ from: line.from, to: line.from, deco: import_view.Decoration.line({ class: "vo-comment-line" }) });
+    if (prefixEnd > 0) items.push({ from: line.from, to: line.from + prefixEnd, deco: import_view.Decoration.replace({}) });
+  }
   for (const lineIndex of plan.paragraphBreakBody) {
     if (lineIndex >= lineCount) continue;
     const line = doc.line(lineIndex + 1);
@@ -1597,6 +1647,12 @@ function materializeLabelIn(nodes, line, sigilChar, label, level, doc, fold) {
     wrapper.after(placeholder);
   }
 }
+function stripCommentPrefix(nodes, line, sigilChar) {
+  const prefixEnd = commentPrefixEnd(line, sigilChar);
+  if (prefixEnd === null || prefixEnd === 0) return;
+  const { first } = collectFirstAndLastTextNode(nodes);
+  if (first) stripLinePrefix(first, line.slice(0, prefixEnd));
+}
 function materializeLabel(el, line, sigilChar, label, level, fold) {
   materializeLabelIn(el.childNodes, line, sigilChar, label, level, el.ownerDocument, fold);
 }
@@ -1702,6 +1758,7 @@ function levelClasses(plan, line) {
   if (bodyIndentLevel !== void 0) classes.push(`vo-body-indent-l${bodyIndentLevel}`);
   if (entryLevel2 !== void 0) classes.push(`vo-entry-l${entryLevel2}`);
   if (plan.paragraphBreakBody.has(line)) classes.push("vo-break-line");
+  if (plan.commentLines.has(line)) classes.push("vo-comment-line");
   return classes;
 }
 function createReadingPostProcessor(host) {
@@ -1738,6 +1795,11 @@ function createReadingPostProcessor(host) {
       }
       tagForAlignment(el, plan, lineStart);
       scheduleAlignment(el);
+      const lineTextRaw = body.split("\n")[lineStart];
+      if (plan.commentLines.has(lineStart) && lineTextRaw !== void 0) {
+        stripCommentPrefix(el.childNodes, lineTextRaw, sigilChar);
+        return;
+      }
       const label = plan.labels.get(lineStart);
       if (label === void 0) return;
       const level = (_a = plan.entryLevel.get(lineStart)) != null ? _a : 1;
@@ -1786,6 +1848,11 @@ function createReadingPostProcessor(host) {
       const wrapper = blockWrapSegment(segment, classes, doc);
       if (!wrapper || hidden) continue;
       tagForAlignment(wrapper, plan, line);
+      const commentText = lines[line];
+      if (plan.commentLines.has(line) && commentText !== void 0) {
+        stripCommentPrefix(Array.from(wrapper.childNodes), commentText, sigilChar);
+        continue;
+      }
       const label = plan.labels.get(line);
       if (label === void 0) continue;
       const lineText = lines[line];
@@ -1863,6 +1930,7 @@ function extractBody(doc, sigilChar, options = {}) {
       if (hasParagraphFlag(line, sigilChar)) forceBreak = true;
       continue;
     }
+    if (fence === null && isCommentLine(line, sigilChar)) continue;
     const blank = fence === null && line.trim() === "";
     if (dropped && !blank && !lastBlank && (forceBreak || !isPlainProse(lastText) || !isPlainProse(line))) {
       out.push("");
@@ -3563,6 +3631,35 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
         await this.plugin.saveSettings();
       });
     });
+    const markerColor = (name, desc, get, set, fallback) => {
+      new import_obsidian4.Setting(containerEl).setName(name).setDesc(desc).addColorPicker((picker) => {
+        picker.setValue(get());
+        picker.onChange(async (value) => {
+          set(value);
+          await this.plugin.saveSettings();
+        });
+      }).addExtraButton((button) => {
+        button.setIcon("rotate-ccw").setTooltip("Back to the default").onClick(async () => {
+          set(fallback);
+          await this.plugin.saveSettings();
+          this.display();
+        });
+      });
+    };
+    markerColor(
+      "Paragraph break colour",
+      "The \xB6 shown beside an entry that starts a new paragraph in the PDF.",
+      () => this.plugin.settings.paragraphColor,
+      (v) => this.plugin.settings.paragraphColor = v,
+      DEFAULT_PARAGRAPH_COLOR
+    );
+    markerColor(
+      "Comment colour",
+      "Comment lines (`@% \u2026`), which are never printed.",
+      () => this.plugin.settings.commentColor,
+      (v) => this.plugin.settings.commentColor = v,
+      DEFAULT_COMMENT_COLOR
+    );
     new import_obsidian4.Setting(containerEl).setName("Enter at the end of an entry").setDesc(
       "Where the new same-level entry goes. After the whole section keeps the current entry's body and sub-entries with it; on the next line puts the new entry directly below, so that body and those sub-entries move under the new entry. Pressing return in the middle of an entry always splits it in place."
     ).addDropdown((dropdown) => {
@@ -4461,15 +4558,31 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         }
       }
     });
+    this.addCommand({
+      id: "toggle-comment",
+      name: "Toggle comment on line",
+      editorCallback: (editor) => {
+        if (!this.toggleComment(editor)) {
+          new import_obsidian7.Notice("Only body lines can be commented \u2014 outline entries never print anyway.");
+        }
+      }
+    });
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor) => {
         const lineIndex = editor.getCursor().line;
         const line = editor.getLine(lineIndex);
-        if (setParagraphFlag(line, this.settings.sigil, true) === null) return;
-        const on = hasParagraphFlag(line, this.settings.sigil);
-        menu.addItem(
-          (item) => item.setTitle(on ? "Remove paragraph break" : "Start a new paragraph here").setIcon("pilcrow").onClick(() => this.toggleParagraphBreak(editor, lineIndex))
-        );
+        if (setParagraphFlag(line, this.settings.sigil, true) !== null) {
+          const on = hasParagraphFlag(line, this.settings.sigil);
+          menu.addItem(
+            (item) => item.setTitle(on ? "Remove paragraph break" : "Start a new paragraph here").setIcon("pilcrow").onClick(() => this.toggleParagraphBreak(editor, lineIndex))
+          );
+        }
+        const range = this.commentRange(editor);
+        if (range !== null) {
+          menu.addItem(
+            (item) => item.setTitle(range.allCommented ? "Uncomment" : "Comment out (never printed)").setIcon("message-square").onClick(() => this.toggleComment(editor))
+          );
+        }
       })
     );
     this.addCommand({
@@ -4724,7 +4837,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     return docs;
   }
   applyLevelCssVars() {
-    const vars = levelCssVars(this.settings.levels);
+    const vars = { ...levelCssVars(this.settings.levels), ...markerCssVars(this.settings) };
     const body = Object.entries(vars).map(([key, value]) => `	${key}: ${value};`).join("\n");
     const css = `:root {
 ${body}
@@ -4952,6 +5065,40 @@ ${body}
     }
     new import_obsidian7.Notice(
       next.length > line.length ? "This entry starts a new paragraph in the PDF." : "This entry continues the paragraph above."
+    );
+    return true;
+  }
+  // The lines the comment command would act on: the selection, or the cursor
+  // line, minus anything that cannot carry a comment (blank lines, outline
+  // entries). Null when nothing in range qualifies.
+  commentRange(editor) {
+    const from = editor.getCursor("from").line;
+    const to = editor.getCursor("to").line;
+    const sigil = this.settings.sigil;
+    let any = false;
+    let allCommented = true;
+    for (let i = from; i <= to; i++) {
+      const line = editor.getLine(i);
+      if (setComment(line, sigil, true) === null) continue;
+      any = true;
+      if (!isCommentLine(line, sigil)) allCommented = false;
+    }
+    return any ? { from, to, allCommented } : null;
+  }
+  toggleComment(editor) {
+    const range = this.commentRange(editor);
+    if (range === null) return false;
+    const sigil = this.settings.sigil;
+    let changed = 0;
+    for (let i = range.from; i <= range.to; i++) {
+      const line = editor.getLine(i);
+      const next = setComment(line, sigil, !range.allCommented);
+      if (next === null || next === line) continue;
+      editor.setLine(i, next);
+      changed++;
+    }
+    new import_obsidian7.Notice(
+      range.allCommented ? `Uncommented ${changed} line${changed === 1 ? "" : "s"}.` : `Commented ${changed} line${changed === 1 ? "" : "s"} \u2014 they will not be printed.`
     );
     return true;
   }

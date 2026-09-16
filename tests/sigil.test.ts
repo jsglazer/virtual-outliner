@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+	commentPrefixEnd,
 	entryLevel,
 	entrySegments,
 	hasParagraphFlag,
+	isCommentLine,
 	isEntryLine,
 	isOutlineLine,
 	isRiskySigil,
+	setComment,
 	setParagraphFlag,
 } from '../src/core/sigil';
 
@@ -107,5 +110,40 @@ describe('isRiskySigil', () => {
 	it('does not flag an ordinary letter/symbol', () => {
 		expect(isRiskySigil('@')).toBe(false);
 		expect(isRiskySigil('~')).toBe(false);
+	});
+});
+
+describe('comment lines', () => {
+	it('recognises sigils + % + space, at any depth', () => {
+		expect(isCommentLine('@% a note', '@')).toBe(true);
+		expect(isCommentLine('@@@% a note', '@')).toBe(true);
+		expect(isCommentLine('@%', '@')).toBe(true); // an empty comment
+		expect(isCommentLine('@ an entry', '@')).toBe(false);
+		expect(isCommentLine('plain prose', '@')).toBe(false);
+		expect(isCommentLine('100% of the time', '@')).toBe(false);
+	});
+
+	it('is unavailable when the sigil itself is %', () => {
+		expect(isCommentLine('%% a note', '%')).toBe(false);
+		expect(setComment('prose', '%', true)).toBeNull();
+	});
+
+	it('hides the prefix up to and including the space', () => {
+		expect(commentPrefixEnd('@% a note', '@')).toBe(3);
+		expect('@% a note'.slice(3)).toBe('a note');
+		expect(commentPrefixEnd('plain', '@')).toBeNull();
+	});
+
+	it('comments and uncomments a body line, and refuses entries and blanks', () => {
+		expect(setComment('Some prose.', '@', true)).toBe('@% Some prose.');
+		expect(setComment('@% Some prose.', '@', false)).toBe('Some prose.');
+		expect(setComment('@% Some prose.', '@', true)).toBe('@% Some prose.'); // idempotent
+		expect(setComment('@@ An entry', '@', true)).toBeNull();
+		expect(setComment('   ', '@', true)).toBeNull();
+	});
+
+	it('leaves an entry line parseable — a comment is never an outline entry', () => {
+		expect(isOutlineLine('@% a note', '@')).toBe(false);
+		expect(entryLevel('@% a note', '@')).toBeNull();
 	});
 });

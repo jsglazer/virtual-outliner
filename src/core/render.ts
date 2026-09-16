@@ -14,7 +14,7 @@
 
 import { computeLabel } from './label';
 import { parseOutline } from './parser';
-import { hasParagraphFlag, isOutlineLine } from './sigil';
+import { hasParagraphFlag, isCommentLine, isOutlineLine } from './sigil';
 import type { LevelFormat, OutlineNode, ParsedOutline, ViewState } from './types';
 
 export interface LineRange {
@@ -38,6 +38,10 @@ export interface RenderPlan {
 	// screen there, so the break is marked on the first body line instead;
 	// without this, Body-only view shows no sign of where the paragraphs fall.
 	paragraphBreakBody: Set<number>;
+	// Visible comment lines (`@% …`), which both shells hide the prefix of and
+	// paint in the comment colour. They are body as far as everything else is
+	// concerned — the parser never sees them as entries.
+	commentLines: Set<number>;
 	// Body line index -> its owning node's 1-based level, for body lines that
 	// should be indented under their entry (only when "Indent body" is on).
 	// Kept apart from indentLevel because body sits one step deeper than its
@@ -151,6 +155,10 @@ export function computeRenderPlan(
 	const foldable = new Map<number, boolean>();
 	const paragraphBreak = new Set<number>();
 	const paragraphBreakBody = new Set<number>();
+	const commentLines = new Set<number>();
+	for (let i = 0; i < parsed.lineCount; i++) {
+		if (isCommentLine(lines[i] ?? '', sigilChar) && !isLineHidden(hiddenLineRanges, i)) commentLines.add(i);
+	}
 
 	const showLabels = viewState === 'outline' || viewState === 'both';
 	for (const node of parsed.flat) {
@@ -183,7 +191,7 @@ export function computeRenderPlan(
 		}
 	}
 
-	return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel, foldable, paragraphBreak, paragraphBreakBody, hiddenLineRanges };
+	return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel, foldable, paragraphBreak, paragraphBreakBody, commentLines, hiddenLineRanges };
 }
 
 export function hasFoldableContent(lines: readonly string[], node: OutlineNode): boolean {

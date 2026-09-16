@@ -91,6 +91,44 @@ export function isOutlineLine(line: string, sigilChar: string): boolean {
 	return outlineLineRegex(sigilChar).test(line);
 }
 
+// A comment line: sigils, then `%`, then a space — `@% check this figure`.
+// The whole line is left out of every PDF (Dev and Submit alike) while staying
+// visible and editable in the note, styled in the comment colour. Its sigil
+// count is not a level: a comment is never an outline entry, so `@%` and `@@%`
+// behave identically and the parser sees neither as one. Disabled when the
+// sigil character IS `%`, where `%%` would be ambiguous.
+export const COMMENT_MARK = '%';
+
+export function commentLineRegex(sigilChar: string): RegExp {
+	const escaped = escapeForRegex(sigilChar);
+	return new RegExp(`^(${escaped}{1,${MAX_LEVEL}}${escapeForRegex(COMMENT_MARK)})(?:[ \\t]+(.*))?$`);
+}
+
+export function isCommentLine(line: string, sigilChar: string): boolean {
+	return sigilChar !== COMMENT_MARK && commentLineRegex(sigilChar).test(line);
+}
+
+// Offset where the hidden `@%` prefix (and the space after it) ends, or null
+// when the line is not a comment.
+export function commentPrefixEnd(line: string, sigilChar: string): number | null {
+	if (!isCommentLine(line, sigilChar)) return null;
+	const match = commentLineRegex(sigilChar).exec(line);
+	const rest = match?.[2];
+	return rest === undefined ? line.length : line.length - rest.length;
+}
+
+// The same line commented or uncommented, or null when it cannot be: a blank
+// line, an outline entry (those never reach the PDF anyway), or a sigil of `%`.
+export function setComment(line: string, sigilChar: string, on: boolean): string | null {
+	if (sigilChar === COMMENT_MARK || line.trim() === '') return null;
+	const commented = isCommentLine(line, sigilChar);
+	if (!commented && isOutlineLine(line, sigilChar)) return null;
+	if (on === commented) return line;
+	if (on) return `${sigilChar}${COMMENT_MARK} ${line}`;
+	const end = commentPrefixEnd(line, sigilChar);
+	return end === null ? line : line.slice(end);
+}
+
 export interface EntrySegments {
 	level: number;
 	// Offset within the line where the sigils + required space end and the

@@ -19,7 +19,7 @@ import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view
 import type { DecorationSet } from '@codemirror/view';
 import { editorInfoField, setIcon } from 'obsidian';
 
-import { entrySegments } from '../core/sigil';
+import { commentPrefixEnd, entrySegments } from '../core/sigil';
 import type { RenderPlan } from '../core/render';
 
 export const setOutlineDecorations = StateEffect.define<DecorationSet>({
@@ -470,6 +470,17 @@ export function buildOutlineDecorations(
 			to: line.from,
 			deco: Decoration.line({ class: `vo-entry-l${level}` }),
 		});
+	}
+	// A comment line keeps its text but loses its `@%` prefix, exactly as an
+	// entry loses its sigils, and the line class paints it in the comment
+	// colour. Nothing about it reaches the PDF.
+	for (const lineIndex of plan.commentLines) {
+		if (lineIndex >= lineCount) continue;
+		const line = doc.line(lineIndex + 1);
+		const prefixEnd = commentPrefixEnd(line.text, sigilChar);
+		if (prefixEnd === null) continue;
+		items.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'vo-comment-line' }) });
+		if (prefixEnd > 0) items.push({ from: line.from, to: line.from + prefixEnd, deco: Decoration.replace({}) });
 	}
 	// The ¶ rides on the label, which Body-only view doesn't draw — mark the
 	// body line the break falls on instead, so the breaks stay visible there.

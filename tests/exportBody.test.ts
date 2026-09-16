@@ -160,3 +160,21 @@ describe('line-number anchors', () => {
 		);
 	});
 });
+
+describe('comment lines', () => {
+	it('leaves no trace: the prose around one joins as if it were not there', () => {
+		const doc = ['@ Intro', 'First sentence.', '@% check this against CBO 2019', 'Second sentence.'].join('\n');
+		expect(extractBody(doc, '@').body).toBe('First sentence.\nSecond sentence.');
+	});
+
+	it('is dropped whatever the export variant, line numbers included', () => {
+		const doc = ['Prose.', '@% a note'].join('\n');
+		const body = extractBody(doc, '@', { lineNumbers: true }).body;
+		expect(body).toBe('`\\voline{1}`{=latex}Prose.');
+	});
+
+	it('is ordinary text inside a fenced code block', () => {
+		const doc = ['```', '@% not a comment here', '```'].join('\n');
+		expect(extractBody(doc, '@').body).toContain('@% not a comment here');
+	});
+});

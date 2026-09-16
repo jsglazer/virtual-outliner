@@ -694,12 +694,25 @@
 }
 
 /* A ¶ beside the label of an entry whose body starts a new paragraph in the
-   PDF (`@@p text`). The flag itself hides with the sigils. */
+   PDF (`@@p text`). The flag itself hides with the sigils. The colour is a
+   setting (--vo-paragraph-color, written by main.ts alongside the level
+   variables), so no opacity here — the chosen colour is the colour. */
 .vo-label.vo-break::after {
 	content: '¶';
 	margin-left: 0.3em;
-	opacity: 0.45;
+	color: var(--vo-paragraph-color, var(--text-faint));
 	font-size: 0.85em;
+}
+
+/* A comment line (`@% …`): its prefix is decoration-hidden like an entry's
+   sigils, and the whole line takes the comment colour so it reads as the
+   non-printing aside it is. Scoped and !important for the editor for the same
+   reason the indent rules are — Obsidian's own .cm-line rules outrank a bare
+   class. */
+.markdown-source-view.mod-cm6 .cm-content .cm-line.vo-comment-line,
+.markdown-rendered .vo-comment-line {
+	color: var(--vo-comment-color, var(--text-accent)) !important;
+	font-style: italic;
 }
 
 /* Body-only view (and a collapsed entry) draws no label, so the break shows on
@@ -721,7 +734,7 @@
 	content: '¶';
 	position: absolute;
 	left: -1.1em;
-	opacity: 0.35;
+	color: var(--vo-paragraph-color, var(--text-faint));
 	font-size: 0.85em;
 	pointer-events: none;
 }

@@ -15,9 +15,11 @@
 // has a blank line, or where either side of the seam is not plain prose — a
 // heading, list, table, quote or code fence, which pandoc would otherwise
 // misread as lazy continuation of the block before it.
+//
+// Comment lines (`@% …`) are dropped outright, in every variant.
 
 import { parseMetaDocument } from './metadata';
-import { hasParagraphFlag, isOutlineLine, outlineLineRegex } from './sigil';
+import { hasParagraphFlag, isCommentLine, isOutlineLine, outlineLineRegex } from './sigil';
 
 export type LostKind = 'footnote' | 'citation' | 'link' | 'embed';
 
@@ -121,6 +123,10 @@ export function extractBody(doc: string, sigilChar: string, options: ExtractOpti
 			if (hasParagraphFlag(line, sigilChar)) forceBreak = true;
 			continue;
 		}
+		// A comment line leaves no trace: unlike an entry line it does not even
+		// mark a seam, so the prose around it joins as if it had never been
+		// typed. Inside a fence it is ordinary code.
+		if (fence === null && isCommentLine(line, sigilChar)) continue;
 		const blank = fence === null && line.trim() === '';
 		if (dropped && !blank && !lastBlank && (forceBreak || !isPlainProse(lastText) || !isPlainProse(line))) {
 			out.push('');

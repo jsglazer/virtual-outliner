@@ -73,7 +73,27 @@ export interface OutlineSettings {
 	levels: LevelFormat[]; // always exactly MAX_LEVEL entries, index 0 = level 1
 	metaFields: MetaFieldDef[];
 	toolbarHighlights: ToolbarHighlights;
+	// The ¶ that marks a paragraph break, and the text of a comment line.
+	// Both are '#rrggbb'; an empty or malformed value falls back to the
+	// default, so the markers are never invisible.
+	paragraphColor: string;
+	commentColor: string;
 	pdfExport: PdfExportSettings;
+}
+
+export const DEFAULT_PARAGRAPH_COLOR = '#9e9e9e';
+export const DEFAULT_COMMENT_COLOR = '#b07d2b';
+
+function readColor(v: unknown, fallback: string): string {
+	return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallback;
+}
+
+// The marker colours as CSS custom properties, alongside levelCssVars.
+export function markerCssVars(settings: OutlineSettings): Record<string, string> {
+	return {
+		'--vo-paragraph-color': readColor(settings.paragraphColor, DEFAULT_PARAGRAPH_COLOR),
+		'--vo-comment-color': readColor(settings.commentColor, DEFAULT_COMMENT_COLOR),
+	};
 }
 
 export function defaultPdfExportSettings(): PdfExportSettings {
@@ -150,6 +170,8 @@ export function defaultSettings(): OutlineSettings {
 		levels,
 		metaFields: defaultMetaFields(),
 		toolbarHighlights: defaultToolbarHighlights(),
+		paragraphColor: DEFAULT_PARAGRAPH_COLOR,
+		commentColor: DEFAULT_COMMENT_COLOR,
 		pdfExport: defaultPdfExportSettings(),
 	};
 }
@@ -283,6 +305,8 @@ export function normalizeSettings(raw: unknown): OutlineSettings {
 		levels,
 		metaFields: metaFields.length > 0 ? metaFields : fallback.metaFields,
 		toolbarHighlights: readToolbarHighlights(raw.toolbarHighlights),
+		paragraphColor: readColor(raw.paragraphColor, fallback.paragraphColor),
+		commentColor: readColor(raw.commentColor, fallback.commentColor),
 		pdfExport: readPdfExport(raw.pdfExport),
 	};
 }

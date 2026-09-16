@@ -91,6 +91,7 @@ notes: e                          # e = endnotes at the end, f = footnotes at th
 ```
 
 - **Dev or Submit.** The export dialog's **Version** dropdown picks the output template. *Dev* (the default) is the working copy — the preamble exactly as written, date/time stamp in the footer. *Submit* is the hand-in copy: no timestamp, and the page count centred in the footer. The Finder Quick Action always renders Dev.
+- **Comments never print.** A line written as `@% a note to myself` — the sigil, a `%`, a space — is left out of the PDF in both versions, while staying visible in the note. Its `@%` hides the way an entry's sigils do, and the line takes the comment colour. Use **Toggle comment on line** or the right-click item **Comment out**; a selection comments every eligible line at once. Outline entry lines cannot be commented, because they never print anyway.
 - **Line numbers (Dev only).** Turn **Line numbers** on and each body line's number *in the Obsidian editor* — frontmatter counted, exactly what the gutter shows — prints in the left margin of the PDF, beside the typeset line its text begins on. Continuation lines are unnumbered, and where several source lines share one typeset line (which paragraph joining makes common) the first one is shown. The numbers sit in the margin as zero-size boxes, so the body measures and breaks identically with them on or off.
 - **Notes** use the normal syntax — `[^1]` in the text and `[^1]: text` below.
 - **Citations** use pandoc syntax (`[@smith2020, p. 12]`, `@smith2020`). Their data comes from Zotero through the [Zotero Manager](https://github.com/jsglazer/zotero-manager) plugin, so Zotero (with Better BibTeX) must be running; the export stops and says so if it isn't. A `bibliography:` file in the frontmatter is used instead when present.
@@ -99,6 +100,8 @@ notes: e                          # e = endnotes at the end, f = footnotes at th
 - **Requirements:** macOS with [pandoc](https://pandoc.org), [MacTeX](https://tug.org/mactex/) (`lualatex`, `latexmk`), and `python3`. Settings shows which are found.
 
 The renderer (shell and Python scripts, citation styles, default preamble) is bundled inside `main.js`, so it syncs with the plugin; on load it is written to `~/Library/Application Support/virtual-outliner/`. **Install quick action** in Settings adds a Finder Quick Action, *Convert Md to PDF (Virtual Outliner)*, that uses the same renderer for ordinary Markdown files and refuses notes that contain an outline.
+
+Two colours are configurable in **Settings → Virtual Outliner**: **Paragraph break colour** (the ¶) and **Comment colour**.
 
 ## Commands
 
@@ -112,6 +115,7 @@ The renderer (shell and Python scripts, citation styles, default preamble) is bu
 - **Generate filtered copy** — writes a new `.md` file with the current view honored and labels materialized
 - **Export to PDF** — typesets the body text only (desktop)
 - **Toggle paragraph break at entry** — marks the entry the cursor is on as starting a new paragraph in the PDF (`@@p …`, shown as a ¶ on its label, or in the margin of its first body line in Body-only view). Also on the editor's right-click menu.
+- **Toggle comment on line** — comments the line, or every line of the selection, so it is never printed (`@% …`). Also on the editor's right-click menu.
 - **Prune orphaned outline metadata** — removes metadata records whose node no longer exists, after reporting what it's about to remove
 
 ## Development

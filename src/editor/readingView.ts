@@ -28,7 +28,7 @@ import { setIcon } from 'obsidian';
 import { parseMetaDocument } from '../core/metadata';
 import { computeRenderPlan, isLineHidden } from '../core/render';
 import type { RenderPlan } from '../core/render';
-import { entrySegments, hasParagraphFlag } from '../core/sigil';
+import { commentPrefixEnd, entrySegments, hasParagraphFlag } from '../core/sigil';
 import type { LevelFormat, ViewState } from '../core/types';
 
 export interface ReadingHost {
@@ -160,6 +160,16 @@ function materializeLabelIn(
 		foldClickTarget(placeholder, fold);
 		wrapper.after(placeholder);
 	}
+}
+
+// The reading-view counterpart of the comment prefix decoration: strip the
+// `@%` (and its space) off the front of the rendered line. The line's own
+// class, added by levelClasses, does the colouring.
+function stripCommentPrefix(nodes: Iterable<Node>, line: string, sigilChar: string): void {
+	const prefixEnd = commentPrefixEnd(line, sigilChar);
+	if (prefixEnd === null || prefixEnd === 0) return;
+	const { first } = collectFirstAndLastTextNode(nodes);
+	if (first) stripLinePrefix(first, line.slice(0, prefixEnd));
 }
 
 function materializeLabel(
@@ -316,6 +326,7 @@ function levelClasses(plan: RenderPlan, line: number): string[] {
 	if (bodyIndentLevel !== undefined) classes.push(`vo-body-indent-l${bodyIndentLevel}`);
 	if (entryLevel !== undefined) classes.push(`vo-entry-l${entryLevel}`);
 	if (plan.paragraphBreakBody.has(line)) classes.push('vo-break-line');
+	if (plan.commentLines.has(line)) classes.push('vo-comment-line');
 	return classes;
 }
 
@@ -362,6 +373,11 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			}
 			tagForAlignment(el, plan, lineStart);
 			scheduleAlignment(el);
+			const lineTextRaw = body.split('\n')[lineStart];
+			if (plan.commentLines.has(lineStart) && lineTextRaw !== undefined) {
+				stripCommentPrefix(el.childNodes, lineTextRaw, sigilChar);
+				return;
+			}
 			const label = plan.labels.get(lineStart);
 			if (label === undefined) return;
 			const level = plan.entryLevel.get(lineStart) ?? 1;
@@ -424,6 +440,11 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			if (!wrapper || hidden) continue;
 			tagForAlignment(wrapper, plan, line);
 
+			const commentText = lines[line];
+			if (plan.commentLines.has(line) && commentText !== undefined) {
+				stripCommentPrefix(Array.from(wrapper.childNodes), commentText, sigilChar);
+				continue;
+			}
 			const label = plan.labels.get(line);
 			if (label === undefined) continue;
 			const lineText = lines[line];

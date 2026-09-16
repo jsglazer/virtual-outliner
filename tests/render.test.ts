@@ -149,3 +149,19 @@ describe('paragraph-break marks', () => {
 		expect([...plan.paragraphBreakBody]).toEqual([]);
 	});
 });
+
+describe('comment lines in the plan', () => {
+	it('lists visible comment lines and never treats one as an entry', () => {
+		const doc = ['@ A', 'A body', '@% a note', '@ B'].join('\n');
+		const plan = computeRenderPlan(doc, '@', levels(), 'both', new Set());
+		expect([...plan.commentLines]).toEqual([2]);
+		expect(plan.labels.has(2)).toBe(false);
+		expect(plan.parsed.flat.length).toBe(2);
+	});
+
+	it('omits a comment hidden by the view state', () => {
+		const doc = ['@ A', '@% a note'].join('\n');
+		expect([...computeRenderPlan(doc, '@', levels(), 'outline', new Set()).commentLines]).toEqual([]);
+		expect([...computeRenderPlan(doc, '@', levels(), 'body', new Set()).commentLines]).toEqual([1]);
+	});
+});

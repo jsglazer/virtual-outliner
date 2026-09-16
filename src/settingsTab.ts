@@ -4,6 +4,7 @@ import { Notice, Platform, PluginSettingTab, Setting } from 'obsidian';
 import { checkPreamble, CITE_STYLES } from './core/exportOptions';
 
 import type { ColorOption, ToolbarHighlight } from './core/settings';
+import { DEFAULT_COMMENT_COLOR, DEFAULT_PARAGRAPH_COLOR } from './core/settings';
 import { isRiskySigil } from './core/sigil';
 import type { EnterBehavior, LabelStyle, LevelFormat, ViewState } from './core/types';
 import type VirtualOutlinerPlugin from './main';
@@ -96,6 +97,49 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				});
 			});
+
+		const markerColor = (
+			name: string,
+			desc: string,
+			get: () => string,
+			set: (value: string) => void,
+			fallback: string,
+		): void => {
+			new Setting(containerEl)
+				.setName(name)
+				.setDesc(desc)
+				.addColorPicker((picker) => {
+					picker.setValue(get());
+					picker.onChange(async (value) => {
+						set(value);
+						await this.plugin.saveSettings();
+					});
+				})
+				.addExtraButton((button) => {
+					button
+						.setIcon('rotate-ccw')
+						.setTooltip('Back to the default')
+						.onClick(async () => {
+							set(fallback);
+							await this.plugin.saveSettings();
+							this.display();
+						});
+				});
+		};
+		markerColor(
+			'Paragraph break colour',
+			'The ¶ shown beside an entry that starts a new paragraph in the PDF.',
+			() => this.plugin.settings.paragraphColor,
+			(v) => (this.plugin.settings.paragraphColor = v),
+			DEFAULT_PARAGRAPH_COLOR,
+		);
+		markerColor(
+			'Comment colour',
+			'Comment lines (`@% …`), which are never printed.',
+			() => this.plugin.settings.commentColor,
+			(v) => (this.plugin.settings.commentColor = v),
+			DEFAULT_COMMENT_COLOR,
+		);
 
 		new Setting(containerEl)
 			.setName('Enter at the end of an entry')

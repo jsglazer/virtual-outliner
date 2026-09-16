@@ -21,9 +21,9 @@ import { parseOutline } from './core/parser';
 import { ownerNodeAtLine } from './core/ops';
 import { computeRenderPlan, hasFoldableContent } from './core/render';
 import { generateFilteredCopy } from './core/exportFilter';
-import { hasParagraphFlag, setParagraphFlag } from './core/sigil';
+import { hasParagraphFlag, isCommentLine, setComment, setParagraphFlag } from './core/sigil';
 import type { OutlineSettings } from './core/settings';
-import { levelCssVars, normalizeSettings } from './core/settings';
+import { levelCssVars, markerCssVars, normalizeSettings } from './core/settings';
 import type { OutlineNode, ViewState } from './core/types';
 import {
 	buildEditorExtension,
@@ -292,18 +292,40 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				}
 			},
 		});
+		// A comment line is never printed, in either PDF version. Like the
+		// paragraph flag its `@%` prefix is decoration-hidden, so it too is set
+		// from the menu or the command rather than typed in.
+		this.addCommand({
+			id: 'toggle-comment',
+			name: 'Toggle comment on line',
+			editorCallback: (editor) => {
+				if (!this.toggleComment(editor)) {
+					new Notice('Only body lines can be commented — outline entries never print anyway.');
+				}
+			},
+		});
 		this.registerEvent(
 			this.app.workspace.on('editor-menu', (menu, editor) => {
 				const lineIndex = editor.getCursor().line;
 				const line = editor.getLine(lineIndex);
-				if (setParagraphFlag(line, this.settings.sigil, true) === null) return;
-				const on = hasParagraphFlag(line, this.settings.sigil);
-				menu.addItem((item) =>
-					item
-						.setTitle(on ? 'Remove paragraph break' : 'Start a new paragraph here')
-						.setIcon('pilcrow')
-						.onClick(() => this.toggleParagraphBreak(editor, lineIndex)),
-				);
+				if (setParagraphFlag(line, this.settings.sigil, true) !== null) {
+					const on = hasParagraphFlag(line, this.settings.sigil);
+					menu.addItem((item) =>
+						item
+							.setTitle(on ? 'Remove paragraph break' : 'Start a new paragraph here')
+							.setIcon('pilcrow')
+							.onClick(() => this.toggleParagraphBreak(editor, lineIndex)),
+					);
+				}
+				const range = this.commentRange(editor);
+				if (range !== null) {
+					menu.addItem((item) =>
+						item
+							.setTitle(range.allCommented ? 'Uncomment' : 'Comment out (never printed)')
+							.setIcon('message-square')
+							.onClick(() => this.toggleComment(editor)),
+					);
+				}
 			}),
 		);
 
@@ -586,7 +608,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	}
 
 	private applyLevelCssVars(): void {
-		const vars = levelCssVars(this.settings.levels);
+		const vars = { ...levelCssVars(this.settings.levels), ...markerCssVars(this.settings) };
 		const body = Object.entries(vars)
 			.map(([key, value]) => `\t${key}: ${value};`)
 			.join('\n');
@@ -847,6 +869,44 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			next.length > line.length
 				? 'This entry starts a new paragraph in the PDF.'
 				: 'This entry continues the paragraph above.',
+		);
+		return true;
+	}
+
+	// The lines the comment command would act on: the selection, or the cursor
+	// line, minus anything that cannot carry a comment (blank lines, outline
+	// entries). Null when nothing in range qualifies.
+	private commentRange(editor: Editor): { from: number; to: number; allCommented: boolean } | null {
+		const from = editor.getCursor('from').line;
+		const to = editor.getCursor('to').line;
+		const sigil = this.settings.sigil;
+		let any = false;
+		let allCommented = true;
+		for (let i = from; i <= to; i++) {
+			const line = editor.getLine(i);
+			if (setComment(line, sigil, true) === null) continue;
+			any = true;
+			if (!isCommentLine(line, sigil)) allCommented = false;
+		}
+		return any ? { from, to, allCommented } : null;
+	}
+
+	private toggleComment(editor: Editor): boolean {
+		const range = this.commentRange(editor);
+		if (range === null) return false;
+		const sigil = this.settings.sigil;
+		let changed = 0;
+		for (let i = range.from; i <= range.to; i++) {
+			const line = editor.getLine(i);
+			const next = setComment(line, sigil, !range.allCommented);
+			if (next === null || next === line) continue;
+			editor.setLine(i, next);
+			changed++;
+		}
+		new Notice(
+			range.allCommented
+				? `Uncommented ${changed} line${changed === 1 ? '' : 's'}.`
+				: `Commented ${changed} line${changed === 1 ? '' : 's'} — they will not be printed.`,
 		);
 		return true;
 	}
