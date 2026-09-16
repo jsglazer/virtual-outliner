@@ -136,3 +136,27 @@ describe('groupKeysByLibrary', () => {
 		expect(unknown).toEqual(['c']);
 	});
 });
+
+describe('line-number anchors', () => {
+	const doc = ['---', 'title: T', '---', '@ Intro', 'First sentence.', 'Second sentence.', '', '## Heading', '- item'].join('\n');
+
+	it('numbers plain prose by its line in the editor, frontmatter counted', () => {
+		const { body } = extractBody(doc, '@', { lineNumbers: true });
+		expect(body.split('\n')[0]).toBe('`\\voline{5}`{=latex}First sentence.');
+		expect(body.split('\n')[1]).toBe('`\\voline{6}`{=latex}Second sentence.');
+	});
+
+	it('leaves headings, list items and fenced code unanchored', () => {
+		const body = extractBody(doc, '@', { lineNumbers: true }).body;
+		expect(body).toContain('\n## Heading');
+		expect(body).toContain('\n- item');
+		const fenced = extractBody(['Prose.', '', '```', 'code line', '```'].join('\n'), '@', { lineNumbers: true }).body;
+		expect(fenced).toContain('\ncode line');
+	});
+
+	it('is off by default, and changes nothing else about the body', () => {
+		expect(extractBody(doc, '@').body).toBe(
+			extractBody(doc, '@', { lineNumbers: true }).body.replace(/`\\voline\{\d+\}`\{=latex\}/g, ''),
+		);
+	});
+});

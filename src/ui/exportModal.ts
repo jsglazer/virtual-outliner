@@ -43,6 +43,10 @@ export class ExportPdfModal extends Modal {
 					.setValue(plan.variant)
 					.onChange((v) => (plan.variant = v === 'submit' ? 'submit' : 'dev')),
 			);
+		new Setting(contentEl)
+			.setName('Line numbers')
+			.setDesc('Dev only: each body line\'s editor line number, in the left margin')
+			.addToggle((t) => t.setValue(plan.lineNumbers).onChange((v) => (plan.lineNumbers = v)));
 		new Setting(contentEl).setName('Font size').addDropdown((dd) => {
 			for (const size of FONT_SIZES) dd.addOption(size, `${size} pt`);
 			dd.setValue(plan.fontsize).onChange((v) => (plan.fontsize = v));
