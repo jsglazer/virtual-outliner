@@ -48,6 +48,11 @@ export interface ExportPlan {
 	// as written, timestamp and all), "submit" is the hand-in copy — no
 	// timestamp, page count centred in the footer. Chosen per export.
 	variant: ExportVariant;
+	// Dev only: print each body line's editor line number in the left margin.
+	lineNumbers: boolean;
+	// The note's raw text, kept so the body can be extracted again with the
+	// line-number anchors in it once the dialog has been answered.
+	doc: string;
 	outputPath: string;
 	// Set when the PDF the note would normally write already exists. The
 	// dialog then warns and defaults to overwriting it, offering the next free
@@ -96,6 +101,8 @@ export class PdfExporter {
 			options,
 			fontsize: options.fontsize ?? settings.lastFontSize,
 			variant: 'dev',
+			lineNumbers: false,
+			doc,
 			outputPath: target,
 			collision,
 			overwrite: collision !== null,
@@ -169,7 +176,10 @@ export class PdfExporter {
 				return rel;
 			},
 		};
-		const converted = await toPandocMarkdown(plan.extraction.body, plan.file.path, this.host.sigilChar(), resolver);
+		const body = plan.lineNumbers && plan.variant === 'dev'
+			? extractBody(plan.doc, this.host.sigilChar(), { lineNumbers: true }).body
+			: plan.extraction.body;
+		const converted = await toPandocMarkdown(body, plan.file.path, this.host.sigilChar(), resolver);
 		for (const [vaultPath, rel] of staged) {
 			await fs.promises.copyFile(path.join(base, vaultPath), path.join(buildDir, rel));
 		}
@@ -204,6 +214,7 @@ export class PdfExporter {
 			overwrite: plan.overwrite,
 			fontsize: plan.fontsize,
 			variant: plan.variant,
+			lineNumbers: plan.lineNumbers,
 			headnum: plan.options.headnum,
 			toc: plan.options.toc,
 			notes: plan.options.notes,

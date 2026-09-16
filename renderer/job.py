@@ -17,6 +17,8 @@ A job is a build folder holding job.json plus the files it names:
       "cite": "MLA",                # MLA | APA | Chicago | Chicago-notes | path to a .csl
       "variant": "dev",             # "dev" keeps the preamble's own header/footer,
                                     # "submit" drops the timestamp and centres the page count
+      "lineNumbers": false,         # Dev only: \voline{N} anchors in the source become
+                                    # source line numbers in the left margin
       "title": "Note",              # running header title
       "author": "…",                # running header author (\\DocAuthor)
       "resourcePath": "/abs/note/folder"
@@ -181,6 +183,45 @@ def cmd_env(job_path):
 # Appended AFTER the preamble (see render-pdf.sh), so it overrides whatever
 # footer the preamble — default or the user's own — has set up. "dev" writes
 # nothing but a comment, leaving the preamble in charge.
+# Dev-only source line numbers. The plugin writes a `\voline{N}` anchor at the
+# start of every plain-prose body line, carrying that line's number in the
+# Obsidian editor. Each anchor records its own absolute position on one pass
+# (zref-savepos) and, on the next, draws its number in the left margin at the
+# height it was measured at — \smash{\rlap{}} so the box has no width and no
+# height and the text block is untouched. Anchors that land on a line already
+# numbered (same page, same baseline — what paragraph joining produces) print
+# nothing, so the number shown for a typeset line is the first source line that
+# starts on it.
+LINENUMBERS_TEX = "\n".join([
+    "\\RequirePackage{zref-savepos}",
+    "\\RequirePackage{zref-abspage}",
+    "\\RequirePackage{xcolor}",
+    "\\makeatletter",
+    "\\newcounter{vo@anchor}",
+    "\\def\\vo@lasty{-1}",
+    "\\def\\vo@lastpage{-1}",
+    "\\newcommand{\\vo@print}[1]{%",
+    "  \\ifnum\\vo@x=0 \\else",
+    "    \\smash{\\rlap{\\hspace{\\dimexpr 1in+\\hoffset+\\oddsidemargin-\\vo@x sp-\\marginparsep\\relax}%",
+    "      \\llap{\\scriptsize\\textcolor{gray}{#1}}}}%",
+    "  \\fi}",
+    "\\newcommand{\\voline}[1]{%",
+    "  \\stepcounter{vo@anchor}%",
+    "  \\leavevmode",
+    "  \\edef\\vo@name{voL\\the\\value{vo@anchor}}%",
+    "  \\zref@savepos",
+    "  \\zref@labelbyprops{\\vo@name}{posx,posy,abspage}%",
+    "  \\edef\\vo@x{\\zref@extractdefault{\\vo@name}{posx}{0}}%",
+    "  \\edef\\vo@y{\\zref@extractdefault{\\vo@name}{posy}{0}}%",
+    "  \\edef\\vo@p{\\zref@extractdefault{\\vo@name}{abspage}{0}}%",
+    "  \\ifnum\\vo@y=\\vo@lasty\\relax",
+    "    \\ifnum\\vo@p=\\vo@lastpage\\relax\\let\\vo@next\\@gobble\\else\\let\\vo@next\\vo@print\\fi",
+    "  \\else\\let\\vo@next\\vo@print\\fi",
+    "  \\xdef\\vo@lasty{\\vo@y}\\xdef\\vo@lastpage{\\vo@p}%",
+    "  \\vo@next{#1}}",
+    "\\makeatother",
+])
+
 SUBMIT_TEX = "\n".join([
     "% Written by job.py — the Submit variant's footer.",
     "\\fancyfoot{}",
@@ -225,8 +266,15 @@ def cmd_prepare(job_path, work_md, meta_tex, variant_tex):
         fh.write("\n".join(meta) + "\n")
 
     submit = str(job.get("variant") or "dev").lower() == "submit"
+    parts = [SUBMIT_TEX] if submit else ["% Dev variant: the preamble's own header and footer stand."]
+    # A Submit copy never carries line numbers; \voline must still be defined,
+    # since the anchors are already in the Markdown, so it is swallowed instead.
+    if not submit and job.get("lineNumbers"):
+        parts.append(LINENUMBERS_TEX)
+    else:
+        parts.append("\\newcommand{\\voline}[1]{}")
     with open(variant_tex, "w", encoding="utf-8") as fh:
-        fh.write((SUBMIT_TEX if submit else "% Dev variant: the preamble's own header and footer stand.") + "\n")
+        fh.write("\n".join(parts) + "\n")
 
 
 def cmd_deliver(job_path, pdf):
@@ -400,6 +448,7 @@ def cmd_qa(note, config_path, fontsize, build):
         "bibliography": bibliography,
         "cite": front.get("cite") or defaults.get("cite") or "MLA",
         "variant": "dev",
+        "lineNumbers": False,
         "title": front.get("title") or os.path.splitext(os.path.basename(note))[0],
         "author": front.get("author") or config.get("author", ""),
         "resourcePath": note_dir,

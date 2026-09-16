@@ -79,8 +79,29 @@ function isPlainProse(line: string): boolean {
 	return line.trim() !== '' && !BLOCK_START_RE.test(line);
 }
 
-export function extractBody(doc: string, sigilChar: string): BodyExtraction {
-	const lines = stripFrontmatter(parseMetaDocument(doc).body).split('\n');
+// `\voline{N}` carries the line's number IN THE EDITOR — frontmatter counted,
+// 1-based — into the LaTeX, where the Dev variant turns it into a margin
+// number (see renderer/job.py LINENUMBERS_TEX). It is written as a pandoc raw
+// attribute so it survives whatever the Markdown around it is, and only plain
+// prose gets one: inside a heading the anchor would leak into the PDF bookmark
+// and the table of contents, and inside a table cell or a fence it is not
+// LaTeX at all.
+function anchor(sourceLine: number): string {
+	return `\`\\voline{${sourceLine}}\`{=latex}`;
+}
+
+export interface ExtractOptions {
+	// Prefix each plain-prose line with its editor line number (Dev exports).
+	lineNumbers?: boolean;
+}
+
+export function extractBody(doc: string, sigilChar: string, options: ExtractOptions = {}): BodyExtraction {
+	const full = parseMetaDocument(doc).body;
+	const stripped = stripFrontmatter(full);
+	// What stripFrontmatter removed, so a line's index here can be turned back
+	// into the number Obsidian shows in its gutter.
+	const frontmatterLines = full.split('\n').length - stripped.split('\n').length;
+	const lines = stripped.split('\n');
 	const entryRe = outlineLineRegex(sigilChar);
 	const out: string[] = [];
 	const lost: LostContent[] = [];
@@ -115,7 +136,8 @@ export function extractBody(doc: string, sigilChar: string): BodyExtraction {
 			continue;
 		}
 		if (blank && lastBlank) continue;
-		out.push(blank ? '' : line);
+		const numbered = options.lineNumbers === true && !blank && isPlainProse(line);
+		out.push(blank ? '' : numbered ? anchor(i + frontmatterLines + 1) + line : line);
 		lastBlank = blank;
 		if (!blank) lastText = line;
 	}
