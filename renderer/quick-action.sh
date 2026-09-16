@@ -63,11 +63,12 @@ for f in "$@"; do
     continue
   fi
 
-  # The PDF already exists: ask, defaulting to the next free <name>-01.pdf.
+  # The PDF already exists: ask, defaulting to overwriting it (Save as
+  # <name>-01.pdf is the alternative), matching the plugin's export dialog.
   TARGET=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["output"])' "$BUILD/job.json")
   if [[ -e $TARGET ]]; then
     NEXT=$("$PY" "$HERE/job.py" next-free "$TARGET")
-    CHOICE=$(osascript -e "button returned of (display dialog $(quoted "${TARGET:t} already exists in ${TARGET:h}.") buttons {\"Skip\", \"Overwrite\", $(quoted "Save as ${NEXT:t}")} default button 3 cancel button 1 with icon caution with title \"Convert Md to PDF\")" 2>/dev/null) || CHOICE=Skip
+    CHOICE=$(osascript -e "button returned of (display dialog $(quoted "${TARGET:t} already exists in ${TARGET:h}.") buttons {\"Skip\", $(quoted "Save as ${NEXT:t}"), \"Overwrite\"} default button 3 cancel button 1 with icon caution with title \"Convert Md to PDF\")" 2>/dev/null) || CHOICE=Skip
     case $CHOICE in
       Skip) rm -rf "$BUILD"; continue ;;
       Overwrite) "$PY" "$HERE/job.py" set-output "$BUILD/job.json" "$TARGET" 1 ;;

@@ -74,11 +74,11 @@ export class ExportPdfModal extends Modal {
 		if (collision !== null) {
 			const name = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
 			const alert = where.createDiv({ cls: 'vo-export-collision' });
-			alert.createDiv({ text: `${name(collision.existing)} already exists.`, cls: 'vo-export-label' });
+			alert.createDiv({ text: `${name(collision.existing)} already exists and will be replaced.`, cls: 'vo-export-label' });
 			new Setting(alert).setName('If the file exists').addDropdown((dd) =>
 				dd
-					.addOption('number', `Save as ${name(collision.numbered)}`)
 					.addOption('overwrite', `Overwrite ${name(collision.existing)}`)
+					.addOption('number', `Save as ${name(collision.numbered)}`)
 					.setValue(plan.overwrite ? 'overwrite' : 'number')
 					.onChange((v) => {
 						plan.overwrite = v === 'overwrite';

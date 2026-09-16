@@ -44,8 +44,8 @@ export interface ExportPlan {
 	fontsize: string;
 	outputPath: string;
 	// Set when the PDF the note would normally write already exists. The
-	// dialog then defaults outputPath to the next free `<name>-01.pdf` and
-	// lets the user choose to overwrite instead.
+	// dialog then warns and defaults to overwriting it, offering the next free
+	// `<name>-01.pdf` as the alternative.
 	collision: { existing: string; numbered: string } | null;
 	overwrite: boolean;
 	preambleSource: string;
@@ -89,9 +89,9 @@ export class PdfExporter {
 			extraction,
 			options,
 			fontsize: options.fontsize ?? settings.lastFontSize,
-			outputPath: collision?.numbered ?? target,
+			outputPath: target,
 			collision,
-			overwrite: false,
+			overwrite: collision !== null,
 			preambleSource: (await this.resolvePreamble(file, options)).label,
 		};
 	}
