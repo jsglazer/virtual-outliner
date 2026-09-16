@@ -90,6 +90,7 @@ notes: e                          # e = endnotes at the end, f = footnotes at th
 ---
 ```
 
+- **Dev or Submit.** The export dialog's **Version** dropdown picks the output template. *Dev* (the default) is the working copy — the preamble exactly as written, date/time stamp in the footer. *Submit* is the hand-in copy: no timestamp, and the page count centred in the footer. The Finder Quick Action always renders Dev.
 - **Notes** use the normal syntax — `[^1]` in the text and `[^1]: text` below.
 - **Citations** use pandoc syntax (`[@smith2020, p. 12]`, `@smith2020`). Their data comes from Zotero through the [Zotero Manager](https://github.com/jsglazer/zotero-manager) plugin, so Zotero (with Better BibTeX) must be running; the export stops and says so if it isn't. A `bibliography:` file in the frontmatter is used instead when present.
 - **The LaTeX preamble** is stored in the plugin's settings and edited in **Settings → PDF export** (with *Import from file…* and *Reset to default*). A `Pre*.tex` beside a note, or `latex-preamble:` in its frontmatter, overrides it for that note.

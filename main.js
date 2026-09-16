@@ -2190,7 +2190,446 @@ function electronShell() {
 }
 
 // renderer/job.py
-var job_default = '#!/usr/bin/env python3\n"""Job helper for render-pdf.sh and quick-action.sh (Python 3.9+, stdlib only).\n\nA job is a build folder holding job.json plus the files it names:\n\n    {\n      "version": 1,\n      "source": "source.md",        # prepared Markdown, relative to the build folder\n      "output": "/abs/path/Note.pdf",\n      "overwrite": false,           # replace an existing output (else deliver refuses)\n      "fontsize": "12pt",           # 8 9 10 11 12 14 17 20 (extarticle sizes)\n      "headnum": false,             # number body headings (pandoc -N)\n      "toc": false,                 # table of contents from body headings\n      "notes": "f",                 # "f" footnotes at page bottom, "e" endnotes at document end\n      "preamble": "preamble.tex",   # relative to the build folder, or absolute\n      "bibliography": "",           # CSL-JSON / .bib path; "" = no citation processing\n      "cite": "MLA",                # MLA | APA | Chicago | Chicago-notes | path to a .csl\n      "title": "Note",              # running header title\n      "author": "\u2026",                # running header author (\\\\DocAuthor)\n      "resourcePath": "/abs/note/folder"\n    }\n\nSubcommands:\n    env <job.json>                     shell assignments (JOB_*) for render-pdf.sh\n    prepare <job.json> <work.md> <meta.tex>\n    deliver <job.json> <pdf>           collision check + atomic move; prints status JSON\n    next-free <pdf>                    the first free <name>-01.pdf, <name>-02.pdf, \u2026 beside it\n    set-output <job.json> <pdf> <0|1>  change the output path and overwrite flag\n    latex-errors <doc.log>             the useful lines of a failed LaTeX log\n    status-fail <stage> <message>      prints a failure status JSON line\n    qa <note.md> <config.json|""> <fontsize> <build dir>\n                                       Quick Action: refuse outline notes (exit 3),\n                                       otherwise write source.md, preamble.tex, job.json\n"""\n\nimport json\nimport os\nimport re\nimport shlex\nimport shutil\nimport sys\n\nHERE = os.path.dirname(os.path.abspath(__file__))\nFONT_SIZES = {"8", "9", "10", "11", "12", "14", "17", "20"}\n# The PDF Creator metadata written by meta.tex.\nCREATOR = "Virtual Outliner"\nSTYLES = {\n    "mla": ("mla.csl", "Works Cited"),\n    "apa": ("apa.csl", "References"),\n    "chicago": ("chicago.csl", "Bibliography"),\n    "chicago-notes": ("chicago-notes.csl", "Bibliography"),\n}\nFENCE = re.compile(r"^\\s*(```|~~~)")\nFOOTNOTE = re.compile(r"\\[\\^[^\\]\\s]+\\]|\\^\\[")\n\n\ndef status(obj):\n    print(json.dumps(obj))\n\n\ndef fail(stage, message, code=1):\n    status({"ok": False, "stage": stage, "message": message})\n    sys.exit(code)\n\n\ndef load_job(path):\n    with open(path, encoding="utf-8") as fh:\n        job = json.load(fh)\n    build = os.path.dirname(os.path.abspath(path))\n    return job, build\n\n\ndef in_build(build, value):\n    if not value:\n        return ""\n    value = os.path.expanduser(value)\n    return value if os.path.isabs(value) else os.path.join(build, value)\n\n\ndef normalize_fontsize(value):\n    size = str(value or "12").strip().lower()\n    if size.endswith("pt"):\n        size = size[:-2].strip()\n    if size not in FONT_SIZES:\n        raise ValueError("Font size %s is not available; choose one of %s pt."\n                         % (value, ", ".join(sorted(FONT_SIZES, key=int))))\n    return size + "pt"\n\n\ndef resolve_style(cite):\n    """(csl path, reference-section title) for a style name or .csl path."""\n    cite = (cite or "").strip()\n    if not cite:\n        cite = "mla"\n    known = STYLES.get(cite.lower())\n    if known:\n        return os.path.join(HERE, "styles", known[0]), known[1]\n    return os.path.expanduser(cite), "References"\n\n\ndef latex_escape(text):\n    out = []\n    for ch in text:\n        if ch == "\\\\":\n            out.append(r"\\textbackslash{}")\n        elif ch in "&%$#_{}":\n            out.append("\\\\" + ch)\n        elif ch == "~":\n            out.append(r"\\textasciitilde{}")\n        elif ch == "^":\n            out.append(r"\\textasciicircum{}")\n        else:\n            out.append(ch)\n    return "".join(out)\n\n\ndef outside_fences(text):\n    """Yield (line, in_fence) pairs."""\n    in_fence = False\n    for line in text.split("\\n"):\n        if FENCE.match(line):\n            in_fence = not in_fence\n            yield line, True\n            continue\n        yield line, in_fence\n\n\nATX_HEADING = re.compile(r"^(#{1,6})[ \\t]+\\S")\n\n\ndef heading_shift(text):\n    """How far to shift headings so the shallowest one used becomes a LaTeX\n    \\\\section: a note whose headings start at ## would otherwise number its\n    sections 0.1, 0.2, \u2026 and start its TOC one level in."""\n    levels = [len(m.group(1)) for line, fenced in outside_fences(text)\n              if not fenced for m in [ATX_HEADING.match(line)] if m]\n    return 1 - min(levels) if levels else 0\n\n\ndef has_footnotes(text):\n    return any(not fenced and FOOTNOTE.search(line) for line, fenced in outside_fences(text))\n\n\n# --- subcommands -------------------------------------------------------------\n\ndef cmd_env(job_path):\n    job, build = load_job(job_path)\n    try:\n        fontsize = normalize_fontsize(job.get("fontsize"))\n    except ValueError as e:\n        fail("job", str(e))\n    preamble = in_build(build, job.get("preamble") or "preamble.tex")\n    if not os.path.isfile(preamble):\n        fail("job", "Preamble not found: %s" % preamble)\n    bibliography = in_build(build, job.get("bibliography", ""))\n    csl = ""\n    if bibliography:\n        if not os.path.isfile(bibliography):\n            fail("job", "Bibliography not found: %s" % bibliography)\n        csl, _ = resolve_style(job.get("cite"))\n        if not os.path.isfile(csl):\n            fail("job", "Citation style not found: %s" % csl)\n    with open(in_build(build, job.get("source") or "source.md"), encoding="utf-8") as fh:\n        shift = heading_shift(fh.read())\n    values = {\n        "JOB_FONTSIZE": fontsize,\n        "JOB_HEADING_SHIFT": str(shift),\n        "JOB_HEADNUM": "1" if job.get("headnum") else "0",\n        "JOB_TOC": "1" if job.get("toc") else "0",\n        "JOB_PREAMBLE": preamble,\n        "JOB_BIBLIOGRAPHY": bibliography,\n        "JOB_CSL": csl,\n        "JOB_RESOURCE_PATH": job.get("resourcePath") or build,\n    }\n    for key, value in values.items():\n        print("%s=%s" % (key, shlex.quote(value)))\n\n\ndef cmd_prepare(job_path, work_md, meta_tex):\n    job, build = load_job(job_path)\n    with open(in_build(build, job.get("source") or "source.md"), encoding="utf-8") as fh:\n        text = fh.read().rstrip("\\n")\n\n    endnotes = job.get("notes") == "e"\n    tail = []\n    cite_makes_notes = bool(job.get("bibliography")) and "notes" in str(job.get("cite", "")).lower()\n    if endnotes and (has_footnotes(text) or cite_makes_notes):\n        tail.append("\\\\printendnotes")\n    if job.get("bibliography"):\n        _, heading = resolve_style(job.get("cite"))\n        tail.append("# %s {.unnumbered}\\n\\n::: {#refs}\\n:::" % heading)\n    if tail:\n        text += "\\n\\n" + "\\n\\n".join(tail)\n    with open(work_md, "w", encoding="utf-8") as fh:\n        fh.write(text + "\\n")\n\n    title = latex_escape(job.get("title") or "")\n    author = latex_escape(job.get("author") or "")\n    meta = [\n        "% Written by job.py \u2014 per-export values, included BEFORE the preamble so the",\n        "% preamble\'s \\\\providecommand defaults leave them alone.",\n        "\\\\def\\\\DocTitle{%s}" % title,\n        "\\\\def\\\\DocAuthor{%s}" % author,\n        "\\\\AtBeginDocument{\\\\hypersetup{pdfcreator={%s},pdftitle={%s},pdfauthor={%s}}}" % (CREATOR, title, author),\n    ]\n    if endnotes:\n        meta += [\n            "\\\\usepackage{enotez}",\n            "\\\\setenotez{list-name=Notes,backref=true}",\n            "\\\\let\\\\footnote\\\\endnote",\n        ]\n    with open(meta_tex, "w", encoding="utf-8") as fh:\n        fh.write("\\n".join(meta) + "\\n")\n\n\ndef cmd_deliver(job_path, pdf):\n    job, build = load_job(job_path)\n    src = in_build(build, pdf)\n    out = os.path.expanduser(job.get("output") or "")\n    if not out:\n        fail("deliver", "The job has no output path.")\n    if not os.path.isfile(src):\n        fail("deliver", "LaTeX finished without producing a PDF.")\n    # The plugin dialog and the Quick Action ask before an export reaches\n    # here, so an existing file without "overwrite" appeared after they asked.\n    if os.path.exists(out) and not job.get("overwrite"):\n        fail("collision", "%s already exists, so it was left untouched. Export again to choose a new name "\n                          "or overwrite it." % out)\n    try:\n        os.makedirs(os.path.dirname(out), exist_ok=True)\n        tmp = out + ".vo-partial"\n        shutil.copyfile(src, tmp)\n        os.replace(tmp, out)\n    except OSError as e:\n        fail("deliver", "Could not write %s: %s" % (out, e))\n    status({"ok": True, "output": out})\n\n\ndef next_free(pdf):\n    stem, ext = os.path.splitext(pdf)\n    n = 1\n    while os.path.exists("%s-%02d%s" % (stem, n, ext)):\n        n += 1\n    return "%s-%02d%s" % (stem, n, ext)\n\n\ndef cmd_set_output(job_path, pdf, overwrite):\n    job, _ = load_job(job_path)\n    job["output"] = pdf\n    job["overwrite"] = overwrite == "1"\n    with open(job_path, "w", encoding="utf-8") as fh:\n        json.dump(job, fh, indent=2)\n\n\ndef cmd_latex_errors(log_path):\n    try:\n        with open(log_path, encoding="utf-8", errors="replace") as fh:\n            lines = fh.read().split("\\n")\n    except OSError:\n        print("LaTeX failed and left no log.")\n        return\n    picked = []\n    for i, line in enumerate(lines):\n        if line.startswith("!") or re.match(r"^\\S+\\.tex:\\d+: ", line):\n            picked.extend(lines[i:i + 4])\n            picked.append("")\n        if len(picked) > 30:\n            break\n    print("\\n".join(picked).strip() or "\\n".join(lines[-20:]).strip())\n\n\n# --- Quick Action --------------------------------------------------------------\n\ndef parse_frontmatter(text):\n    """({lowercased key: str}, body) \u2014 flat `key: value` lines only."""\n    lines = text.split("\\n")\n    if not lines or lines[0].strip() != "---":\n        return {}, text\n    for end in range(1, len(lines)):\n        if lines[end].strip() in ("---", "..."):\n            fields = {}\n            for line in lines[1:end]:\n                m = re.match(r"^([A-Za-z0-9_-]+)\\s*:\\s*(.*)$", line)\n                if m:\n                    value = m.group(2).strip()\n                    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\\"\'":\n                        value = value[1:-1]\n                    fields[m.group(1).lower()] = value\n            return fields, "\\n".join(lines[end + 1:])\n    return {}, text\n\n\ndef parse_bool(value, default):\n    v = str(value).strip().lower()\n    if v in ("y", "yes", "true", "1", "on"):\n        return True\n    if v in ("n", "no", "false", "0", "off"):\n        return False\n    return default\n\n\ndef parse_notes(value, default):\n    v = str(value).strip().lower()\n    if v.startswith("e"):\n        return "e"\n    if v.startswith("f"):\n        return "f"\n    return default\n\n\ndef resolve_output(pdf_output, note_path):\n    note_dir = os.path.dirname(os.path.abspath(note_path))\n    stem = os.path.splitext(os.path.basename(note_path))[0]\n    value = (pdf_output or "").strip()\n    if not value:\n        return os.path.join(note_dir, stem + ".pdf")\n    value = os.path.expanduser(value)\n    if not os.path.isabs(value):\n        value = os.path.join(note_dir, value)\n    if value.lower().endswith(".pdf"):\n        return os.path.normpath(value)\n    return os.path.normpath(os.path.join(value, stem + ".pdf"))\n\n\ndef outline_reason(text, sigil):\n    if re.search(r"^%%md-outline\\s*$", text, re.M):\n        return "it has a Virtual Outliner metadata block"\n    entry = re.compile(r"^%s{1,6}[ \\t]+\\S" % re.escape(sigil))\n    for line, fenced in outside_fences(text):\n        if not fenced and entry.match(line):\n            return "it has outline entries (lines starting with %s)" % sigil\n    return None\n\n\ndef cmd_qa(note, config_path, fontsize, build):\n    config = {}\n    if config_path and os.path.isfile(config_path):\n        with open(config_path, encoding="utf-8") as fh:\n            config = json.load(fh)\n    defaults = config.get("defaults", {})\n    sigil = config.get("sigil") or "@"\n\n    with open(note, encoding="utf-8") as fh:\n        text = fh.read()\n    front, body = parse_frontmatter(text)\n    reason = outline_reason(body, sigil)\n    if reason:\n        print("%s can\'t be converted here because %s. Use Export to PDF in Obsidian instead."\n              % (os.path.basename(note), reason))\n        sys.exit(3)\n\n    sys.path.insert(0, HERE)\n    import wikilinks  # noqa: E402\n    body, unresolved = wikilinks.rewrite(body, note)\n    for u in unresolved:\n        print("unresolved embed: %s" % u, file=sys.stderr)\n\n    os.makedirs(build, exist_ok=True)\n    with open(os.path.join(build, "source.md"), "w", encoding="utf-8") as fh:\n        fh.write(body)\n\n    preamble_src = config.get("preamblePath") or ""\n    if not (preamble_src and os.path.isfile(preamble_src)):\n        preamble_src = os.path.join(HERE, "default-preamble.tex")\n    shutil.copyfile(preamble_src, os.path.join(build, "preamble.tex"))\n\n    note_dir = os.path.dirname(os.path.abspath(note))\n    bibliography = front.get("bibliography", "")\n    if bibliography:\n        bibliography = os.path.expanduser(bibliography)\n        if not os.path.isabs(bibliography):\n            bibliography = os.path.join(note_dir, bibliography)\n\n    job = {\n        "version": 1,\n        "source": "source.md",\n        "output": resolve_output(front.get("pdf-output"), note),\n        "overwrite": False,\n        "fontsize": fontsize or front.get("fontsize") or "12",\n        "headnum": parse_bool(front.get("headnum", ""), bool(defaults.get("headnum", False))),\n        "toc": parse_bool(front.get("toc", ""), bool(defaults.get("toc", False))),\n        "notes": parse_notes(front.get("notes", ""), defaults.get("notes", "f")),\n        "preamble": "preamble.tex",\n        "bibliography": bibliography,\n        "cite": front.get("cite") or defaults.get("cite") or "MLA",\n        "title": front.get("title") or os.path.splitext(os.path.basename(note))[0],\n        "author": front.get("author") or config.get("author", ""),\n        "resourcePath": note_dir,\n    }\n    with open(os.path.join(build, "job.json"), "w", encoding="utf-8") as fh:\n        json.dump(job, fh, indent=2)\n\n\ndef main(argv):\n    if len(argv) < 2:\n        print(__doc__)\n        return 2\n    cmd, args = argv[1], argv[2:]\n    if cmd == "env" and len(args) == 1:\n        cmd_env(*args)\n    elif cmd == "prepare" and len(args) == 3:\n        cmd_prepare(*args)\n    elif cmd == "deliver" and len(args) == 2:\n        cmd_deliver(*args)\n    elif cmd == "next-free" and len(args) == 1:\n        print(next_free(args[0]))\n    elif cmd == "set-output" and len(args) == 3:\n        cmd_set_output(*args)\n    elif cmd == "latex-errors" and len(args) == 1:\n        cmd_latex_errors(*args)\n    elif cmd == "status-fail" and len(args) == 2:\n        status({"ok": False, "stage": args[0], "message": args[1]})\n    elif cmd == "qa" and len(args) == 4:\n        cmd_qa(*args)\n    else:\n        print(__doc__)\n        return 2\n    return 0\n\n\nif __name__ == "__main__":\n    sys.exit(main(sys.argv))\n';
+var job_default = `#!/usr/bin/env python3
+"""Job helper for render-pdf.sh and quick-action.sh (Python 3.9+, stdlib only).
+
+A job is a build folder holding job.json plus the files it names:
+
+    {
+      "version": 1,
+      "source": "source.md",        # prepared Markdown, relative to the build folder
+      "output": "/abs/path/Note.pdf",
+      "overwrite": false,           # replace an existing output (else deliver refuses)
+      "fontsize": "12pt",           # 8 9 10 11 12 14 17 20 (extarticle sizes)
+      "headnum": false,             # number body headings (pandoc -N)
+      "toc": false,                 # table of contents from body headings
+      "notes": "f",                 # "f" footnotes at page bottom, "e" endnotes at document end
+      "preamble": "preamble.tex",   # relative to the build folder, or absolute
+      "bibliography": "",           # CSL-JSON / .bib path; "" = no citation processing
+      "cite": "MLA",                # MLA | APA | Chicago | Chicago-notes | path to a .csl
+      "variant": "dev",             # "dev" keeps the preamble's own header/footer,
+                                    # "submit" drops the timestamp and centres the page count
+      "title": "Note",              # running header title
+      "author": "\u2026",                # running header author (\\\\DocAuthor)
+      "resourcePath": "/abs/note/folder"
+    }
+
+Subcommands:
+    env <job.json>                     shell assignments (JOB_*) for render-pdf.sh
+    prepare <job.json> <work.md> <meta.tex> <variant.tex>
+    deliver <job.json> <pdf>           collision check + atomic move; prints status JSON
+    next-free <pdf>                    the first free <name>-01.pdf, <name>-02.pdf, \u2026 beside it
+    set-output <job.json> <pdf> <0|1>  change the output path and overwrite flag
+    latex-errors <doc.log>             the useful lines of a failed LaTeX log
+    status-fail <stage> <message>      prints a failure status JSON line
+    qa <note.md> <config.json|""> <fontsize> <build dir>
+                                       Quick Action: refuse outline notes (exit 3),
+                                       otherwise write source.md, preamble.tex, job.json
+"""
+
+import json
+import os
+import re
+import shlex
+import shutil
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+FONT_SIZES = {"8", "9", "10", "11", "12", "14", "17", "20"}
+# The PDF Creator metadata written by meta.tex.
+CREATOR = "Virtual Outliner"
+STYLES = {
+    "mla": ("mla.csl", "Works Cited"),
+    "apa": ("apa.csl", "References"),
+    "chicago": ("chicago.csl", "Bibliography"),
+    "chicago-notes": ("chicago-notes.csl", "Bibliography"),
+}
+FENCE = re.compile(r"^\\s*(\`\`\`|~~~)")
+FOOTNOTE = re.compile(r"\\[\\^[^\\]\\s]+\\]|\\^\\[")
+
+
+def status(obj):
+    print(json.dumps(obj))
+
+
+def fail(stage, message, code=1):
+    status({"ok": False, "stage": stage, "message": message})
+    sys.exit(code)
+
+
+def load_job(path):
+    with open(path, encoding="utf-8") as fh:
+        job = json.load(fh)
+    build = os.path.dirname(os.path.abspath(path))
+    return job, build
+
+
+def in_build(build, value):
+    if not value:
+        return ""
+    value = os.path.expanduser(value)
+    return value if os.path.isabs(value) else os.path.join(build, value)
+
+
+def normalize_fontsize(value):
+    size = str(value or "12").strip().lower()
+    if size.endswith("pt"):
+        size = size[:-2].strip()
+    if size not in FONT_SIZES:
+        raise ValueError("Font size %s is not available; choose one of %s pt."
+                         % (value, ", ".join(sorted(FONT_SIZES, key=int))))
+    return size + "pt"
+
+
+def resolve_style(cite):
+    """(csl path, reference-section title) for a style name or .csl path."""
+    cite = (cite or "").strip()
+    if not cite:
+        cite = "mla"
+    known = STYLES.get(cite.lower())
+    if known:
+        return os.path.join(HERE, "styles", known[0]), known[1]
+    return os.path.expanduser(cite), "References"
+
+
+def latex_escape(text):
+    out = []
+    for ch in text:
+        if ch == "\\\\":
+            out.append(r"\\textbackslash{}")
+        elif ch in "&%$#_{}":
+            out.append("\\\\" + ch)
+        elif ch == "~":
+            out.append(r"\\textasciitilde{}")
+        elif ch == "^":
+            out.append(r"\\textasciicircum{}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def outside_fences(text):
+    """Yield (line, in_fence) pairs."""
+    in_fence = False
+    for line in text.split("\\n"):
+        if FENCE.match(line):
+            in_fence = not in_fence
+            yield line, True
+            continue
+        yield line, in_fence
+
+
+ATX_HEADING = re.compile(r"^(#{1,6})[ \\t]+\\S")
+
+
+def heading_shift(text):
+    """How far to shift headings so the shallowest one used becomes a LaTeX
+    \\\\section: a note whose headings start at ## would otherwise number its
+    sections 0.1, 0.2, \u2026 and start its TOC one level in."""
+    levels = [len(m.group(1)) for line, fenced in outside_fences(text)
+              if not fenced for m in [ATX_HEADING.match(line)] if m]
+    return 1 - min(levels) if levels else 0
+
+
+def has_footnotes(text):
+    return any(not fenced and FOOTNOTE.search(line) for line, fenced in outside_fences(text))
+
+
+# --- subcommands -------------------------------------------------------------
+
+def cmd_env(job_path):
+    job, build = load_job(job_path)
+    try:
+        fontsize = normalize_fontsize(job.get("fontsize"))
+    except ValueError as e:
+        fail("job", str(e))
+    preamble = in_build(build, job.get("preamble") or "preamble.tex")
+    if not os.path.isfile(preamble):
+        fail("job", "Preamble not found: %s" % preamble)
+    bibliography = in_build(build, job.get("bibliography", ""))
+    csl = ""
+    if bibliography:
+        if not os.path.isfile(bibliography):
+            fail("job", "Bibliography not found: %s" % bibliography)
+        csl, _ = resolve_style(job.get("cite"))
+        if not os.path.isfile(csl):
+            fail("job", "Citation style not found: %s" % csl)
+    with open(in_build(build, job.get("source") or "source.md"), encoding="utf-8") as fh:
+        shift = heading_shift(fh.read())
+    values = {
+        "JOB_FONTSIZE": fontsize,
+        "JOB_HEADING_SHIFT": str(shift),
+        "JOB_HEADNUM": "1" if job.get("headnum") else "0",
+        "JOB_TOC": "1" if job.get("toc") else "0",
+        "JOB_PREAMBLE": preamble,
+        "JOB_BIBLIOGRAPHY": bibliography,
+        "JOB_CSL": csl,
+        "JOB_RESOURCE_PATH": job.get("resourcePath") or build,
+    }
+    for key, value in values.items():
+        print("%s=%s" % (key, shlex.quote(value)))
+
+
+# Appended AFTER the preamble (see render-pdf.sh), so it overrides whatever
+# footer the preamble \u2014 default or the user's own \u2014 has set up. "dev" writes
+# nothing but a comment, leaving the preamble in charge.
+SUBMIT_TEX = "\\n".join([
+    "% Written by job.py \u2014 the Submit variant's footer.",
+    "\\\\fancyfoot{}",
+    "\\\\fancyfoot[C]{\\\\scriptsize{\\\\thepage\\\\ of \\\\pageref{LastPage}}}",
+])
+
+
+def cmd_prepare(job_path, work_md, meta_tex, variant_tex):
+    job, build = load_job(job_path)
+    with open(in_build(build, job.get("source") or "source.md"), encoding="utf-8") as fh:
+        text = fh.read().rstrip("\\n")
+
+    endnotes = job.get("notes") == "e"
+    tail = []
+    cite_makes_notes = bool(job.get("bibliography")) and "notes" in str(job.get("cite", "")).lower()
+    if endnotes and (has_footnotes(text) or cite_makes_notes):
+        tail.append("\\\\printendnotes")
+    if job.get("bibliography"):
+        _, heading = resolve_style(job.get("cite"))
+        tail.append("# %s {.unnumbered}\\n\\n::: {#refs}\\n:::" % heading)
+    if tail:
+        text += "\\n\\n" + "\\n\\n".join(tail)
+    with open(work_md, "w", encoding="utf-8") as fh:
+        fh.write(text + "\\n")
+
+    title = latex_escape(job.get("title") or "")
+    author = latex_escape(job.get("author") or "")
+    meta = [
+        "% Written by job.py \u2014 per-export values, included BEFORE the preamble so the",
+        "% preamble's \\\\providecommand defaults leave them alone.",
+        "\\\\def\\\\DocTitle{%s}" % title,
+        "\\\\def\\\\DocAuthor{%s}" % author,
+        "\\\\AtBeginDocument{\\\\hypersetup{pdfcreator={%s},pdftitle={%s},pdfauthor={%s}}}" % (CREATOR, title, author),
+    ]
+    if endnotes:
+        meta += [
+            "\\\\usepackage{enotez}",
+            "\\\\setenotez{list-name=Notes,backref=true}",
+            "\\\\let\\\\footnote\\\\endnote",
+        ]
+    with open(meta_tex, "w", encoding="utf-8") as fh:
+        fh.write("\\n".join(meta) + "\\n")
+
+    submit = str(job.get("variant") or "dev").lower() == "submit"
+    with open(variant_tex, "w", encoding="utf-8") as fh:
+        fh.write((SUBMIT_TEX if submit else "% Dev variant: the preamble's own header and footer stand.") + "\\n")
+
+
+def cmd_deliver(job_path, pdf):
+    job, build = load_job(job_path)
+    src = in_build(build, pdf)
+    out = os.path.expanduser(job.get("output") or "")
+    if not out:
+        fail("deliver", "The job has no output path.")
+    if not os.path.isfile(src):
+        fail("deliver", "LaTeX finished without producing a PDF.")
+    # The plugin dialog and the Quick Action ask before an export reaches
+    # here, so an existing file without "overwrite" appeared after they asked.
+    if os.path.exists(out) and not job.get("overwrite"):
+        fail("collision", "%s already exists, so it was left untouched. Export again to choose a new name "
+                          "or overwrite it." % out)
+    try:
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        tmp = out + ".vo-partial"
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, out)
+    except OSError as e:
+        fail("deliver", "Could not write %s: %s" % (out, e))
+    status({"ok": True, "output": out})
+
+
+def next_free(pdf):
+    stem, ext = os.path.splitext(pdf)
+    n = 1
+    while os.path.exists("%s-%02d%s" % (stem, n, ext)):
+        n += 1
+    return "%s-%02d%s" % (stem, n, ext)
+
+
+def cmd_set_output(job_path, pdf, overwrite):
+    job, _ = load_job(job_path)
+    job["output"] = pdf
+    job["overwrite"] = overwrite == "1"
+    with open(job_path, "w", encoding="utf-8") as fh:
+        json.dump(job, fh, indent=2)
+
+
+def cmd_latex_errors(log_path):
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().split("\\n")
+    except OSError:
+        print("LaTeX failed and left no log.")
+        return
+    picked = []
+    for i, line in enumerate(lines):
+        if line.startswith("!") or re.match(r"^\\S+\\.tex:\\d+: ", line):
+            picked.extend(lines[i:i + 4])
+            picked.append("")
+        if len(picked) > 30:
+            break
+    print("\\n".join(picked).strip() or "\\n".join(lines[-20:]).strip())
+
+
+# --- Quick Action --------------------------------------------------------------
+
+def parse_frontmatter(text):
+    """({lowercased key: str}, body) \u2014 flat \`key: value\` lines only."""
+    lines = text.split("\\n")
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    for end in range(1, len(lines)):
+        if lines[end].strip() in ("---", "..."):
+            fields = {}
+            for line in lines[1:end]:
+                m = re.match(r"^([A-Za-z0-9_-]+)\\s*:\\s*(.*)$", line)
+                if m:
+                    value = m.group(2).strip()
+                    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\\"'":
+                        value = value[1:-1]
+                    fields[m.group(1).lower()] = value
+            return fields, "\\n".join(lines[end + 1:])
+    return {}, text
+
+
+def parse_bool(value, default):
+    v = str(value).strip().lower()
+    if v in ("y", "yes", "true", "1", "on"):
+        return True
+    if v in ("n", "no", "false", "0", "off"):
+        return False
+    return default
+
+
+def parse_notes(value, default):
+    v = str(value).strip().lower()
+    if v.startswith("e"):
+        return "e"
+    if v.startswith("f"):
+        return "f"
+    return default
+
+
+def resolve_output(pdf_output, note_path):
+    note_dir = os.path.dirname(os.path.abspath(note_path))
+    stem = os.path.splitext(os.path.basename(note_path))[0]
+    value = (pdf_output or "").strip()
+    if not value:
+        return os.path.join(note_dir, stem + ".pdf")
+    value = os.path.expanduser(value)
+    if not os.path.isabs(value):
+        value = os.path.join(note_dir, value)
+    if value.lower().endswith(".pdf"):
+        return os.path.normpath(value)
+    return os.path.normpath(os.path.join(value, stem + ".pdf"))
+
+
+def outline_reason(text, sigil):
+    if re.search(r"^%%md-outline\\s*$", text, re.M):
+        return "it has a Virtual Outliner metadata block"
+    entry = re.compile(r"^%s{1,6}[ \\t]+\\S" % re.escape(sigil))
+    for line, fenced in outside_fences(text):
+        if not fenced and entry.match(line):
+            return "it has outline entries (lines starting with %s)" % sigil
+    return None
+
+
+def cmd_qa(note, config_path, fontsize, build):
+    config = {}
+    if config_path and os.path.isfile(config_path):
+        with open(config_path, encoding="utf-8") as fh:
+            config = json.load(fh)
+    defaults = config.get("defaults", {})
+    sigil = config.get("sigil") or "@"
+
+    with open(note, encoding="utf-8") as fh:
+        text = fh.read()
+    front, body = parse_frontmatter(text)
+    reason = outline_reason(body, sigil)
+    if reason:
+        print("%s can't be converted here because %s. Use Export to PDF in Obsidian instead."
+              % (os.path.basename(note), reason))
+        sys.exit(3)
+
+    sys.path.insert(0, HERE)
+    import wikilinks  # noqa: E402
+    body, unresolved = wikilinks.rewrite(body, note)
+    for u in unresolved:
+        print("unresolved embed: %s" % u, file=sys.stderr)
+
+    os.makedirs(build, exist_ok=True)
+    with open(os.path.join(build, "source.md"), "w", encoding="utf-8") as fh:
+        fh.write(body)
+
+    preamble_src = config.get("preamblePath") or ""
+    if not (preamble_src and os.path.isfile(preamble_src)):
+        preamble_src = os.path.join(HERE, "default-preamble.tex")
+    shutil.copyfile(preamble_src, os.path.join(build, "preamble.tex"))
+
+    note_dir = os.path.dirname(os.path.abspath(note))
+    bibliography = front.get("bibliography", "")
+    if bibliography:
+        bibliography = os.path.expanduser(bibliography)
+        if not os.path.isabs(bibliography):
+            bibliography = os.path.join(note_dir, bibliography)
+
+    job = {
+        "version": 1,
+        "source": "source.md",
+        "output": resolve_output(front.get("pdf-output"), note),
+        "overwrite": False,
+        "fontsize": fontsize or front.get("fontsize") or "12",
+        "headnum": parse_bool(front.get("headnum", ""), bool(defaults.get("headnum", False))),
+        "toc": parse_bool(front.get("toc", ""), bool(defaults.get("toc", False))),
+        "notes": parse_notes(front.get("notes", ""), defaults.get("notes", "f")),
+        "preamble": "preamble.tex",
+        "bibliography": bibliography,
+        "cite": front.get("cite") or defaults.get("cite") or "MLA",
+        "variant": "dev",
+        "title": front.get("title") or os.path.splitext(os.path.basename(note))[0],
+        "author": front.get("author") or config.get("author", ""),
+        "resourcePath": note_dir,
+    }
+    with open(os.path.join(build, "job.json"), "w", encoding="utf-8") as fh:
+        json.dump(job, fh, indent=2)
+
+
+def main(argv):
+    if len(argv) < 2:
+        print(__doc__)
+        return 2
+    cmd, args = argv[1], argv[2:]
+    if cmd == "env" and len(args) == 1:
+        cmd_env(*args)
+    elif cmd == "prepare" and len(args) == 4:
+        cmd_prepare(*args)
+    elif cmd == "deliver" and len(args) == 2:
+        cmd_deliver(*args)
+    elif cmd == "next-free" and len(args) == 1:
+        print(next_free(args[0]))
+    elif cmd == "set-output" and len(args) == 3:
+        cmd_set_output(*args)
+    elif cmd == "latex-errors" and len(args) == 1:
+        cmd_latex_errors(*args)
+    elif cmd == "status-fail" and len(args) == 2:
+        status({"ok": False, "stage": args[0], "message": args[1]})
+    elif cmd == "qa" and len(args) == 4:
+        cmd_qa(*args)
+    else:
+        print(__doc__)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+`;
 
 // renderer/lib.sh
 var lib_default = '# lib.sh \u2014 media helpers for render-pdf.sh. Sourced, not run directly.\n#\n# Forked from ~/.claude/scripts/lib/md-convert-lib.sh (sanitize/optimize). This\n# copy ships inside the Virtual Outliner plugin bundle and is written to\n# ~/Library/Application Support/virtual-outliner/renderer/<version>/ on load,\n# so every path here is relative to the renderer folder, never ~/.claude.\n\n: ${IMG_MAX_WIDTH:=1600}\n# `=` not `:=`: an explicitly empty PNGQUANT_QUALITY="" must disable pngquant.\n: ${PNGQUANT_QUALITY=65-90}\n\nlog() { print -r -- "$(date \'+%Y-%m-%d %H:%M:%S\') $*" >>"${LOG:-/dev/null}" }\n\nhuman_size() {\n  local bytes=$1\n  if (( bytes >= 1048576 )); then\n    printf "%.1f MB" $(( bytes / 1048576.0 ))\n  else\n    printf "%d KB" $(( bytes / 1024 ))\n  fi\n}\n\n# Real format of a file, as a bare extension ("png", "jpg", "webp", ...).\nreal_format() {\n  local mime\n  mime=$(file -b --mime-type -- "$1" 2>/dev/null)\n  case $mime in\n    image/png)             print png  ;;\n    image/jpeg)            print jpg  ;;\n    image/webp)            print webp ;;\n    image/gif)             print gif  ;;\n    image/tiff)            print tiff ;;\n    image/svg+xml|text/*)  print svg  ;;\n    application/pdf)       print pdf  ;;\n    *)                     print ""   ;;\n  esac\n}\n\n# Convert $1 to PNG at $2. Returns non-zero if no converter could handle it.\nto_png() {\n  local src=$1 dst=$2\n  if [[ $(real_format "$src") == webp ]] && (( $+commands[dwebp] )); then\n    dwebp -quiet "$src" -o "$dst" && return 0\n  fi\n  if (( $+commands[magick] )); then\n    magick "$src" "$dst" && return 0\n  fi\n  sips -s format png "$src" --out "$dst" >/dev/null 2>&1\n}\n\n# Make every file under $1 actually be what its extension claims (CDNs lie).\n# Files with an extension lualatex can use (png/jpg/pdf) are converted in place;\n# files it cannot use at all (.webp, .gif, ...) get a new .png beside them and\n# the rename is echoed as "old<TAB>new" for the caller to patch into doc.tex.\nsanitize_media() {\n  local dir=$1\n  local f ext real png\n  [[ -d $dir ]] || return 0\n\n  for f in $dir/**/*(.N); do\n    ext=${${f:e}:l}\n    real=$(real_format "$f")\n\n    [[ -z $real || $real == svg ]] && continue\n    [[ $real == $ext ]] && continue\n    [[ $real == jpg && $ext == jpeg ]] && continue\n\n    case $ext in\n      png|jpg|jpeg)\n        if to_png "$f" "$f.tmp.png"; then\n          mv -f "$f.tmp.png" "$f"\n          log "  transcoded $real -> $ext: ${f:t}"\n        else\n          rm -f "$f.tmp.png"\n          log "  WARNING: could not transcode ${f:t} ($real)"\n        fi\n        ;;\n      *)\n        png="${f:r}.png"\n        if to_png "$f" "$png"; then\n          rm -f "$f"\n          print -r -- "${f:t}	${png:t}"\n          log "  converted $real -> png (renamed): ${f:t} -> ${png:t}"\n        else\n          log "  WARNING: could not convert ${f:t} ($real)"\n        fi\n        ;;\n    esac\n  done\n}\n\n# Shrink every PNG under $1: cap width at IMG_MAX_WIDTH, then lossy-recompress\n# with pngquant when it is installed. Never fatal, never makes a file bigger.\noptimize_media() {\n  local dir=$1\n  local f width before after\n  [[ -d $dir ]] || return 0\n\n  for f in $dir/**/*.png(.N); do\n    before=$(stat -f%z "$f")\n\n    if (( IMG_MAX_WIDTH > 0 )); then\n      width=$(sips -g pixelWidth "$f" 2>/dev/null | awk \'/pixelWidth/{print $2}\')\n      if [[ -n $width ]] && (( width > IMG_MAX_WIDTH )); then\n        sips --resampleWidth "$IMG_MAX_WIDTH" "$f" >/dev/null 2>&1\n      fi\n    fi\n\n    if [[ -n $PNGQUANT_QUALITY ]] && (( $+commands[pngquant] )); then\n      pngquant --quality="$PNGQUANT_QUALITY" --speed 1 --strip \\\n        --skip-if-larger --force --output "$f" -- "$f" 2>/dev/null\n    fi\n\n    after=$(stat -f%z "$f")\n    (( after < before )) && log "  optimized ${f:t}: $(human_size $before) -> $(human_size $after)"\n  done\n}\n';
@@ -2275,7 +2714,7 @@ var default_preamble_default = "\\usepackage[top=.75in, bottom=.75in, left=.75in
 var quick_action_default = '#!/bin/zsh\n# quick-action.sh \u2014 Finder Quick Action entry point ("Convert Md to PDF").\n#\n# The installed .workflow is a two-line stub that execs this file from\n# ~/Library/Application Support/virtual-outliner/renderer/current/, so the\n# Quick Action\'s behaviour updates whenever the plugin does.\n#\n# For each selected .md file: find its vault (the folder holding .obsidian),\n# load that vault\'s config written by the plugin (sigil, author, preamble,\n# export defaults), refuse notes that carry a Virtual Outliner outline \u2014 only\n# the plugin can strip one \u2014 and otherwise render next to the note (or to its\n# pdf-output: frontmatter) with the same renderer the plugin uses.\n\nemulate -L zsh\nsetopt no_nomatch\nset -u\n\nHERE=${0:A:h}\nSUPPORT="$HOME/Library/Application Support/virtual-outliner"\nexport PATH=/opt/homebrew/bin:/usr/local/bin:/Library/TeX/texbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}\nPY=python3\n(( $+commands[python3] )) || PY=/usr/bin/python3\n\nquoted() { print -r -- "\\"${${1//\\\\/\\\\\\\\}//\\"/\\\\\\"}\\"" }\nnotify() { osascript -e "display notification $(quoted "$2") with title $(quoted "$1")" >/dev/null 2>&1 }\nalert() { osascript -e "display dialog $(quoted "$1") buttons {\\"OK\\"} default button \\"OK\\" with icon caution with title \\"Convert Md to PDF\\"" >/dev/null 2>&1 }\n\n(( $# )) || exit 0\n\nFONT_SIZE=$(osascript -e \'text returned of (display dialog "Font size (pt): 8, 9, 10, 11, 12, 14, 17 or 20" default answer "12" buttons {"Cancel","OK"} default button "OK" with title "Convert Md to PDF")\' 2>/dev/null) || exit 0\nFONT_SIZE=${FONT_SIZE%pt}\n[[ -n $FONT_SIZE ]] || exit 0\n\nvault_root() {\n  local dir=${1:A:h}\n  while [[ $dir != / ]]; do\n    [[ -d "$dir/.obsidian" ]] && { print -r -- "$dir"; return 0 }\n    dir=${dir:h}\n  done\n  return 1\n}\n\nWROTE=0\nFAILS=0\nfor f in "$@"; do\n  [[ -f $f && ${f:e:l} == md ]] || continue\n  CONFIG=""\n  if ROOT=$(vault_root "$f"); then\n    CONFIG="$SUPPORT/vaults/${ROOT:t}/config.json"\n    [[ -f $CONFIG ]] || CONFIG=""\n  fi\n\n  BUILD=$(mktemp -d "${TMPDIR:-/tmp}/vo-quick-action.XXXXXX") || { (( FAILS++ )); continue }\n  OUT=$("$PY" "$HERE/job.py" qa "$f" "$CONFIG" "$FONT_SIZE" "$BUILD" 2>>"$BUILD/render.log")\n  RC=$?\n  if (( RC == 3 )); then\n    alert "$OUT"\n    rm -rf "$BUILD"\n    continue\n  elif (( RC != 0 )); then\n    alert "Could not prepare ${f:t}: $(tail -3 "$BUILD/render.log")"\n    (( FAILS++ ))\n    continue\n  fi\n\n  # The PDF already exists: ask, defaulting to overwriting it (Save as\n  # <name>-01.pdf is the alternative), matching the plugin\'s export dialog.\n  TARGET=$("$PY" -c \'import json,sys; print(json.load(open(sys.argv[1]))["output"])\' "$BUILD/job.json")\n  if [[ -e $TARGET ]]; then\n    NEXT=$("$PY" "$HERE/job.py" next-free "$TARGET")\n    CHOICE=$(osascript -e "button returned of (display dialog $(quoted "${TARGET:t} already exists in ${TARGET:h}.") buttons {\\"Skip\\", $(quoted "Save as ${NEXT:t}"), \\"Overwrite\\"} default button 3 cancel button 1 with icon caution with title \\"Convert Md to PDF\\")" 2>/dev/null) || CHOICE=Skip\n    case $CHOICE in\n      Skip) rm -rf "$BUILD"; continue ;;\n      Overwrite) "$PY" "$HERE/job.py" set-output "$BUILD/job.json" "$TARGET" 1 ;;\n      *) "$PY" "$HERE/job.py" set-output "$BUILD/job.json" "$NEXT" 0 ;;\n    esac\n  fi\n\n  STATUS=$(/bin/zsh "$HERE/render-pdf.sh" --job "$BUILD/job.json" | tail -1)\n  if [[ $STATUS == \'{"ok": true\'* ]]; then\n    (( WROTE++ ))\n    rm -rf "$BUILD"\n  else\n    MESSAGE=$(print -r -- "$STATUS" | "$PY" -c \'import json,sys; print(json.load(sys.stdin).get("message",""))\' 2>/dev/null)\n    alert "${f:t} failed: ${MESSAGE:-$STATUS}\n\nBuild files kept in $BUILD"\n    (( FAILS++ ))\n  fi\ndone\n\nif (( WROTE )); then\n  notify "Convert Md to PDF" "Wrote $WROTE PDF$([[ $WROTE == 1 ]] || print s)"\nfi\n(( FAILS == 0 ))\n';
 
 // renderer/render-pdf.sh
-var render_pdf_default = '#!/bin/zsh\n# render-pdf.sh \u2014 typeset one prepared Markdown source into a PDF.\n#\n#   zsh render-pdf.sh --job /path/to/build/job.json\n#\n# The build folder is the folder holding job.json. Whoever calls this (the\n# Obsidian plugin, or quick-action.sh) has already written the source Markdown\n# and the preamble there; job.py documents every job.json field.\n#\n# Pipeline: job.py prepare (endnote/reference tail + meta.tex) -> table widths\n# -> list breaks -> pandoc to .tex (extracting media) -> sanitize/optimize media\n# -> table row lines -> latexmk -> job.py deliver (refuses an existing file unless the job says overwrite; atomic move).\n#\n# The LAST line on stdout is always one JSON status object, which is what the\n# plugin parses: {"ok":true,"output":\u2026} or {"ok":false,"stage":\u2026,"message":\u2026}.\n# Everything else goes to render.log in the build folder.\n#\n# Run with /bin/zsh explicitly: sync services drop the executable bit, so\n# nothing here relies on it.\n\nemulate -L zsh\nsetopt no_nomatch pipe_fail\nset -u\n\nHERE=${0:A:h}\nexport PATH=/opt/homebrew/bin:/usr/local/bin:/Library/TeX/texbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}\n\nJOB=""\nwhile (( $# )); do\n  case $1 in\n    --job) JOB=${2:-}; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n\nPY=python3\n(( $+commands[python3] )) || PY=/usr/bin/python3\n\nfail_json() {\n  # stage, message\n  "$PY" "$HERE/job.py" status-fail "$1" "$2" 2>/dev/null \\\n    || print -r -- \'{"ok":false,"stage":"\'"$1"\'","message":"renderer failure"}\'\n  exit 1\n}\n\n[[ -n $JOB && -f $JOB ]] || fail_json args "No job file given (expected --job <job.json>)."\nJOB=${JOB:A}\nBUILD=${JOB:h}\ncd "$BUILD" || fail_json args "Cannot enter build folder $BUILD"\n\nLOG="$BUILD/render.log"\nsource "$HERE/lib.sh"\n# Leftovers from an earlier run in the same folder (e.g. an .aux written with\n# enotez loaded) break the next compile when the options change.\nrm -rf media doc.aux doc.toc doc.out doc.log doc.pdf doc.fls doc.fdb_latexmk doc.tex work*.md meta.tex pandoc.out latexmk.out\nlog "=== render $JOB"\n\nfor tool in pandoc latexmk lualatex; do\n  (( $+commands[$tool] )) || fail_json tools "$tool was not found. Install pandoc and MacTeX (pandoc, latexmk, lualatex)."\ndone\n\n# Shell assignments for the job\'s fields (values shell-quoted by job.py).\nENV_OUT=$("$PY" "$HERE/job.py" env "$JOB" 2>>"$LOG") || fail_json job "$(tail -3 "$LOG")"\neval "$ENV_OUT"\n\n"$PY" "$HERE/job.py" prepare "$JOB" work.md meta.tex 2>>"$LOG" || fail_json job "$(tail -3 "$LOG")"\n"$PY" "$HERE/tables.py" work.md work-tables.md 2>>"$LOG" || cp work.md work-tables.md\n"$PY" "$HERE/lists.py" work-tables.md work-final.md 2>>"$LOG" || cp work-tables.md work-final.md\n\n# Plain pandoc paragraphs: consecutive lines join into one paragraph, and a\n# blank line (which is what each removed outline entry becomes) starts a new\n# one. End a line with two spaces or a backslash to force a line break.\nargs=(\n  -f markdown+mark\n  -t latex -s -o doc.tex\n  --extract-media=media\n  --resource-path="$BUILD:$JOB_RESOURCE_PATH"\n  -H meta.tex -H "$JOB_PREAMBLE"\n  -V documentclass=extarticle -V fontsize="$JOB_FONTSIZE" -V papersize=letter\n)\n(( JOB_HEADING_SHIFT )) && args+=(--shift-heading-level-by="$JOB_HEADING_SHIFT")\n(( JOB_HEADNUM )) && args+=(-N)\n(( JOB_TOC )) && args+=(--toc)\nif [[ -n $JOB_BIBLIOGRAPHY ]]; then\n  args+=(--citeproc --bibliography="$JOB_BIBLIOGRAPHY")\n  [[ -n $JOB_CSL ]] && args+=(--csl="$JOB_CSL")\nfi\n\nlog "  pandoc ${args[*]}"\nif ! pandoc work-final.md "${args[@]}" >pandoc.out 2>&1; then\n  cat pandoc.out >>"$LOG"\n  fail_json pandoc "$(tail -15 pandoc.out)"\nfi\n[[ -s pandoc.out ]] && cat pandoc.out >>"$LOG"\n\nrenames=$(sanitize_media media)\nif [[ -n $renames ]]; then\n  while IFS=$\'\\t\' read -r old new; do\n    [[ -n $old ]] || continue\n    LC_ALL=C sed -i \'\' "s|media/${old}|media/${new}|g" doc.tex\n  done <<< "$renames"\nfi\noptimize_media media\n"$PY" "$HERE/rowlines.py" doc.tex >>"$LOG" 2>&1\n\nlog "  latexmk"\nif ! latexmk -lualatex -interaction=nonstopmode -halt-on-error -file-line-error doc.tex >latexmk.out 2>&1; then\n  fail_json latex "$("$PY" "$HERE/job.py" latex-errors doc.log 2>/dev/null)"\nfi\n\n"$PY" "$HERE/job.py" deliver "$JOB" doc.pdf 2>>"$LOG"\n';
+var render_pdf_default = '#!/bin/zsh\n# render-pdf.sh \u2014 typeset one prepared Markdown source into a PDF.\n#\n#   zsh render-pdf.sh --job /path/to/build/job.json\n#\n# The build folder is the folder holding job.json. Whoever calls this (the\n# Obsidian plugin, or quick-action.sh) has already written the source Markdown\n# and the preamble there; job.py documents every job.json field.\n#\n# Pipeline: job.py prepare (endnote/reference tail + meta.tex + variant.tex) -> table widths\n# -> list breaks -> pandoc to .tex (extracting media) -> sanitize/optimize media\n# -> table row lines -> latexmk -> job.py deliver (refuses an existing file unless the job says overwrite; atomic move).\n#\n# The LAST line on stdout is always one JSON status object, which is what the\n# plugin parses: {"ok":true,"output":\u2026} or {"ok":false,"stage":\u2026,"message":\u2026}.\n# Everything else goes to render.log in the build folder.\n#\n# Run with /bin/zsh explicitly: sync services drop the executable bit, so\n# nothing here relies on it.\n\nemulate -L zsh\nsetopt no_nomatch pipe_fail\nset -u\n\nHERE=${0:A:h}\nexport PATH=/opt/homebrew/bin:/usr/local/bin:/Library/TeX/texbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}\n\nJOB=""\nwhile (( $# )); do\n  case $1 in\n    --job) JOB=${2:-}; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n\nPY=python3\n(( $+commands[python3] )) || PY=/usr/bin/python3\n\nfail_json() {\n  # stage, message\n  "$PY" "$HERE/job.py" status-fail "$1" "$2" 2>/dev/null \\\n    || print -r -- \'{"ok":false,"stage":"\'"$1"\'","message":"renderer failure"}\'\n  exit 1\n}\n\n[[ -n $JOB && -f $JOB ]] || fail_json args "No job file given (expected --job <job.json>)."\nJOB=${JOB:A}\nBUILD=${JOB:h}\ncd "$BUILD" || fail_json args "Cannot enter build folder $BUILD"\n\nLOG="$BUILD/render.log"\nsource "$HERE/lib.sh"\n# Leftovers from an earlier run in the same folder (e.g. an .aux written with\n# enotez loaded) break the next compile when the options change.\nrm -rf media doc.aux doc.toc doc.out doc.log doc.pdf doc.fls doc.fdb_latexmk doc.tex work*.md meta.tex variant.tex pandoc.out latexmk.out\nlog "=== render $JOB"\n\nfor tool in pandoc latexmk lualatex; do\n  (( $+commands[$tool] )) || fail_json tools "$tool was not found. Install pandoc and MacTeX (pandoc, latexmk, lualatex)."\ndone\n\n# Shell assignments for the job\'s fields (values shell-quoted by job.py).\nENV_OUT=$("$PY" "$HERE/job.py" env "$JOB" 2>>"$LOG") || fail_json job "$(tail -3 "$LOG")"\neval "$ENV_OUT"\n\n"$PY" "$HERE/job.py" prepare "$JOB" work.md meta.tex variant.tex 2>>"$LOG" || fail_json job "$(tail -3 "$LOG")"\n"$PY" "$HERE/tables.py" work.md work-tables.md 2>>"$LOG" || cp work.md work-tables.md\n"$PY" "$HERE/lists.py" work-tables.md work-final.md 2>>"$LOG" || cp work-tables.md work-final.md\n\n# Plain pandoc paragraphs: consecutive lines join into one paragraph, and a\n# blank line (which is what each removed outline entry becomes) starts a new\n# one. End a line with two spaces or a backslash to force a line break.\nargs=(\n  -f markdown+mark\n  -t latex -s -o doc.tex\n  --extract-media=media\n  --resource-path="$BUILD:$JOB_RESOURCE_PATH"\n  -H meta.tex -H "$JOB_PREAMBLE" -H variant.tex\n  -V documentclass=extarticle -V fontsize="$JOB_FONTSIZE" -V papersize=letter\n)\n(( JOB_HEADING_SHIFT )) && args+=(--shift-heading-level-by="$JOB_HEADING_SHIFT")\n(( JOB_HEADNUM )) && args+=(-N)\n(( JOB_TOC )) && args+=(--toc)\nif [[ -n $JOB_BIBLIOGRAPHY ]]; then\n  args+=(--citeproc --bibliography="$JOB_BIBLIOGRAPHY")\n  [[ -n $JOB_CSL ]] && args+=(--csl="$JOB_CSL")\nfi\n\nlog "  pandoc ${args[*]}"\nif ! pandoc work-final.md "${args[@]}" >pandoc.out 2>&1; then\n  cat pandoc.out >>"$LOG"\n  fail_json pandoc "$(tail -15 pandoc.out)"\nfi\n[[ -s pandoc.out ]] && cat pandoc.out >>"$LOG"\n\nrenames=$(sanitize_media media)\nif [[ -n $renames ]]; then\n  while IFS=$\'\\t\' read -r old new; do\n    [[ -n $old ]] || continue\n    LC_ALL=C sed -i \'\' "s|media/${old}|media/${new}|g" doc.tex\n  done <<< "$renames"\nfi\noptimize_media media\n"$PY" "$HERE/rowlines.py" doc.tex >>"$LOG" 2>&1\n\nlog "  latexmk"\nif ! latexmk -lualatex -interaction=nonstopmode -halt-on-error -file-line-error doc.tex >latexmk.out 2>&1; then\n  fail_json latex "$("$PY" "$HERE/job.py" latex-errors doc.log 2>/dev/null)"\nfi\n\n"$PY" "$HERE/job.py" deliver "$JOB" doc.pdf 2>>"$LOG"\n';
 
 // renderer/rowlines.py
 var rowlines_default = `#!/usr/bin/env python3
@@ -2739,6 +3178,7 @@ var PdfExporter = class {
       extraction,
       options,
       fontsize: (_d = options.fontsize) != null ? _d : settings.lastFontSize,
+      variant: "dev",
       outputPath: target,
       collision,
       overwrite: collision !== null,
@@ -2839,6 +3279,7 @@ var PdfExporter = class {
       output: plan.outputPath,
       overwrite: plan.overwrite,
       fontsize: plan.fontsize,
+      variant: plan.variant,
       headnum: plan.options.headnum,
       toc: plan.options.toc,
       notes: plan.options.notes,
@@ -3533,6 +3974,9 @@ var ExportPdfModal = class extends import_obsidian5.Modal {
     const { contentEl, plan } = this;
     this.setTitle(`Export "${plan.file.basename}" to PDF`);
     contentEl.addClass("vo-export-modal");
+    new import_obsidian5.Setting(contentEl).setName("Version").setDesc("Dev keeps the date/time stamp; Submit drops it and centres the page count").addDropdown(
+      (dd) => dd.addOption("dev", "Dev").addOption("submit", "Submit").setValue(plan.variant).onChange((v) => plan.variant = v === "submit" ? "submit" : "dev")
+    );
     new import_obsidian5.Setting(contentEl).setName("Font size").addDropdown((dd) => {
       for (const size of FONT_SIZES) dd.addOption(size, `${size} pt`);
       dd.setValue(plan.fontsize).onChange((v) => plan.fontsize = v);

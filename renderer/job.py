@@ -15,6 +15,8 @@ A job is a build folder holding job.json plus the files it names:
       "preamble": "preamble.tex",   # relative to the build folder, or absolute
       "bibliography": "",           # CSL-JSON / .bib path; "" = no citation processing
       "cite": "MLA",                # MLA | APA | Chicago | Chicago-notes | path to a .csl
+      "variant": "dev",             # "dev" keeps the preamble's own header/footer,
+                                    # "submit" drops the timestamp and centres the page count
       "title": "Note",              # running header title
       "author": "…",                # running header author (\\DocAuthor)
       "resourcePath": "/abs/note/folder"
@@ -22,7 +24,7 @@ A job is a build folder holding job.json plus the files it names:
 
 Subcommands:
     env <job.json>                     shell assignments (JOB_*) for render-pdf.sh
-    prepare <job.json> <work.md> <meta.tex>
+    prepare <job.json> <work.md> <meta.tex> <variant.tex>
     deliver <job.json> <pdf>           collision check + atomic move; prints status JSON
     next-free <pdf>                    the first free <name>-01.pdf, <name>-02.pdf, … beside it
     set-output <job.json> <pdf> <0|1>  change the output path and overwrite flag
@@ -176,7 +178,17 @@ def cmd_env(job_path):
         print("%s=%s" % (key, shlex.quote(value)))
 
 
-def cmd_prepare(job_path, work_md, meta_tex):
+# Appended AFTER the preamble (see render-pdf.sh), so it overrides whatever
+# footer the preamble — default or the user's own — has set up. "dev" writes
+# nothing but a comment, leaving the preamble in charge.
+SUBMIT_TEX = "\n".join([
+    "% Written by job.py — the Submit variant's footer.",
+    "\\fancyfoot{}",
+    "\\fancyfoot[C]{\\scriptsize{\\thepage\\ of \\pageref{LastPage}}}",
+])
+
+
+def cmd_prepare(job_path, work_md, meta_tex, variant_tex):
     job, build = load_job(job_path)
     with open(in_build(build, job.get("source") or "source.md"), encoding="utf-8") as fh:
         text = fh.read().rstrip("\n")
@@ -211,6 +223,10 @@ def cmd_prepare(job_path, work_md, meta_tex):
         ]
     with open(meta_tex, "w", encoding="utf-8") as fh:
         fh.write("\n".join(meta) + "\n")
+
+    submit = str(job.get("variant") or "dev").lower() == "submit"
+    with open(variant_tex, "w", encoding="utf-8") as fh:
+        fh.write((SUBMIT_TEX if submit else "% Dev variant: the preamble's own header and footer stand.") + "\n")
 
 
 def cmd_deliver(job_path, pdf):
@@ -383,6 +399,7 @@ def cmd_qa(note, config_path, fontsize, build):
         "preamble": "preamble.tex",
         "bibliography": bibliography,
         "cite": front.get("cite") or defaults.get("cite") or "MLA",
+        "variant": "dev",
         "title": front.get("title") or os.path.splitext(os.path.basename(note))[0],
         "author": front.get("author") or config.get("author", ""),
         "resourcePath": note_dir,
@@ -398,7 +415,7 @@ def main(argv):
     cmd, args = argv[1], argv[2:]
     if cmd == "env" and len(args) == 1:
         cmd_env(*args)
-    elif cmd == "prepare" and len(args) == 3:
+    elif cmd == "prepare" and len(args) == 4:
         cmd_prepare(*args)
     elif cmd == "deliver" and len(args) == 2:
         cmd_deliver(*args)

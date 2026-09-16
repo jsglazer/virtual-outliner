@@ -33,6 +33,16 @@ export class ExportPdfModal extends Modal {
 		this.setTitle(`Export "${plan.file.basename}" to PDF`);
 		contentEl.addClass('vo-export-modal');
 
+		new Setting(contentEl)
+			.setName('Version')
+			.setDesc('Dev keeps the date/time stamp; Submit drops it and centres the page count')
+			.addDropdown((dd) =>
+				dd
+					.addOption('dev', 'Dev')
+					.addOption('submit', 'Submit')
+					.setValue(plan.variant)
+					.onChange((v) => (plan.variant = v === 'submit' ? 'submit' : 'dev')),
+			);
 		new Setting(contentEl).setName('Font size').addDropdown((dd) => {
 			for (const size of FONT_SIZES) dd.addOption(size, `${size} pt`);
 			dd.setValue(plan.fontsize).onChange((v) => (plan.fontsize = v));

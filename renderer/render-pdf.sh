@@ -7,7 +7,7 @@
 # Obsidian plugin, or quick-action.sh) has already written the source Markdown
 # and the preamble there; job.py documents every job.json field.
 #
-# Pipeline: job.py prepare (endnote/reference tail + meta.tex) -> table widths
+# Pipeline: job.py prepare (endnote/reference tail + meta.tex + variant.tex) -> table widths
 # -> list breaks -> pandoc to .tex (extracting media) -> sanitize/optimize media
 # -> table row lines -> latexmk -> job.py deliver (refuses an existing file unless the job says overwrite; atomic move).
 #
@@ -52,7 +52,7 @@ LOG="$BUILD/render.log"
 source "$HERE/lib.sh"
 # Leftovers from an earlier run in the same folder (e.g. an .aux written with
 # enotez loaded) break the next compile when the options change.
-rm -rf media doc.aux doc.toc doc.out doc.log doc.pdf doc.fls doc.fdb_latexmk doc.tex work*.md meta.tex pandoc.out latexmk.out
+rm -rf media doc.aux doc.toc doc.out doc.log doc.pdf doc.fls doc.fdb_latexmk doc.tex work*.md meta.tex variant.tex pandoc.out latexmk.out
 log "=== render $JOB"
 
 for tool in pandoc latexmk lualatex; do
@@ -63,7 +63,7 @@ done
 ENV_OUT=$("$PY" "$HERE/job.py" env "$JOB" 2>>"$LOG") || fail_json job "$(tail -3 "$LOG")"
 eval "$ENV_OUT"
 
-"$PY" "$HERE/job.py" prepare "$JOB" work.md meta.tex 2>>"$LOG" || fail_json job "$(tail -3 "$LOG")"
+"$PY" "$HERE/job.py" prepare "$JOB" work.md meta.tex variant.tex 2>>"$LOG" || fail_json job "$(tail -3 "$LOG")"
 "$PY" "$HERE/tables.py" work.md work-tables.md 2>>"$LOG" || cp work.md work-tables.md
 "$PY" "$HERE/lists.py" work-tables.md work-final.md 2>>"$LOG" || cp work-tables.md work-final.md
 
@@ -75,7 +75,7 @@ args=(
   -t latex -s -o doc.tex
   --extract-media=media
   --resource-path="$BUILD:$JOB_RESOURCE_PATH"
-  -H meta.tex -H "$JOB_PREAMBLE"
+  -H meta.tex -H "$JOB_PREAMBLE" -H variant.tex
   -V documentclass=extarticle -V fontsize="$JOB_FONTSIZE" -V papersize=letter
 )
 (( JOB_HEADING_SHIFT )) && args+=(--shift-heading-level-by="$JOB_HEADING_SHIFT")

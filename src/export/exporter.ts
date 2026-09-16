@@ -36,12 +36,18 @@ export interface ExporterHost {
 	settings(): PdfExportSettings;
 }
 
+export type ExportVariant = 'dev' | 'submit';
+
 // What the export dialog shows and edits before anything is written.
 export interface ExportPlan {
 	file: TFile;
 	extraction: BodyExtraction;
 	options: ExportOptions;
 	fontsize: string;
+	// Which output template to render: "dev" is the working copy (the preamble
+	// as written, timestamp and all), "submit" is the hand-in copy — no
+	// timestamp, page count centred in the footer. Chosen per export.
+	variant: ExportVariant;
 	outputPath: string;
 	// Set when the PDF the note would normally write already exists. The
 	// dialog then warns and defaults to overwriting it, offering the next free
@@ -89,6 +95,7 @@ export class PdfExporter {
 			extraction,
 			options,
 			fontsize: options.fontsize ?? settings.lastFontSize,
+			variant: 'dev',
 			outputPath: target,
 			collision,
 			overwrite: collision !== null,
@@ -196,6 +203,7 @@ export class PdfExporter {
 			output: plan.outputPath,
 			overwrite: plan.overwrite,
 			fontsize: plan.fontsize,
+			variant: plan.variant,
 			headnum: plan.options.headnum,
 			toc: plan.options.toc,
 			notes: plan.options.notes,
