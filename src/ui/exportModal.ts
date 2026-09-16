@@ -20,10 +20,19 @@ const LOST_LABELS: Record<LostKind, string> = {
 export class ExportPdfModal extends Modal {
 	private submitted = false;
 
+	// Rebuilt whenever the output path changes, so the path line and the
+	// "already exists" warning always describe the file that will be written.
+	private whereEl: HTMLElement | null = null;
+
 	constructor(
 		app: App,
 		private plan: ExportPlan,
 		private onSubmit: (plan: ExportPlan) => void,
+		// Points the plan at `<name><suffix>.pdf` and re-answers the collision
+		// question for that name (PdfExporter.retarget).
+		private retarget: (suffix: string) => void,
+		// What a Submit export offers to append, remembered from last time.
+		private defaultSuffix: string,
 	) {
 		super(app);
 	}
@@ -33,7 +42,27 @@ export class ExportPdfModal extends Modal {
 		this.setTitle(`Export "${plan.file.basename}" to PDF`);
 		contentEl.addClass('vo-export-modal');
 
-		new Setting(contentEl)
+		// Declared before the Version dropdown that shows and hides it, so the
+		// dropdown's handler can reach it; `.settingEl` is what actually moves.
+		let suffixInput: { setValue: (v: string) => void } | null = null;
+		const suffixSetting = new Setting(contentEl)
+			.setName('Append to file name')
+			.setDesc('A Submit copy usually wants a name of its own — this is added before ".pdf".')
+			.addText((text) => {
+				// Not UI prose but a literal file-name suffix, so it keeps its
+				// capital S — the sentence-case rule does not apply.
+				// eslint-disable-next-line obsidianmd/ui/sentence-case
+				text.setPlaceholder('-Submit')
+					.setValue(plan.nameSuffix)
+					.onChange((v) => {
+						this.retarget(v);
+						this.renderWhere();
+					});
+				suffixInput = text;
+			});
+		suffixSetting.settingEl.hidden = plan.variant !== 'submit';
+
+		const versionSetting = new Setting(contentEl)
 			.setName('Version')
 			.setDesc('Dev keeps the date/time stamp; Submit drops it and centres the page count')
 			.addDropdown((dd) =>
@@ -41,8 +70,20 @@ export class ExportPdfModal extends Modal {
 					.addOption('dev', 'Dev')
 					.addOption('submit', 'Submit')
 					.setValue(plan.variant)
-					.onChange((v) => (plan.variant = v === 'submit' ? 'submit' : 'dev')),
+					.onChange((v) => {
+						plan.variant = v === 'submit' ? 'submit' : 'dev';
+						const submit = plan.variant === 'submit';
+						suffixSetting.settingEl.hidden = !submit;
+						// Switching to Submit offers the remembered suffix;
+						// switching back to Dev writes the plain name again.
+						const suffix = submit ? (plan.nameSuffix !== '' ? plan.nameSuffix : this.defaultSuffix) : '';
+						suffixInput?.setValue(suffix);
+						this.retarget(suffix);
+						this.renderWhere();
+					}),
 			);
+		// Built first (the dropdown's handler closes over it), shown second.
+		versionSetting.settingEl.after(suffixSetting.settingEl);
 		new Setting(contentEl)
 			.setName('Line numbers')
 			.setDesc('Dev only: each body line\'s editor line number, in the left margin')
@@ -81,31 +122,8 @@ export class ExportPdfModal extends Modal {
 				dd.setValue(match ?? plan.options.cite).onChange((v) => (plan.options.cite = v));
 			});
 
-		const where = contentEl.createDiv({ cls: 'vo-export-where' });
-		where.createDiv({ text: 'Output', cls: 'vo-export-label' });
-		const pathEl = where.createDiv({ text: plan.outputPath, cls: 'vo-export-path' });
-		const { collision } = plan;
-		if (collision !== null) {
-			const name = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
-			const alert = where.createDiv({ cls: 'vo-export-collision' });
-			alert.createDiv({ text: `${name(collision.existing)} already exists and will be replaced.`, cls: 'vo-export-label' });
-			new Setting(alert).setName('If the file exists').addDropdown((dd) =>
-				dd
-					.addOption('overwrite', `Overwrite ${name(collision.existing)}`)
-					.addOption('number', `Save as ${name(collision.numbered)}`)
-					.setValue(plan.overwrite ? 'overwrite' : 'number')
-					.onChange((v) => {
-						plan.overwrite = v === 'overwrite';
-						plan.outputPath = plan.overwrite ? collision.existing : collision.numbered;
-						pathEl.setText(plan.outputPath);
-					}),
-			);
-		}
-		where.createDiv({
-			text: plan.options.pdfOutput !== '' ? 'From the note\'s pdf-output.' : 'Beside the note. Set pdf-output: in the frontmatter to change it.',
-			cls: 'setting-item-description',
-		});
-		where.createDiv({ text: `Preamble: ${plan.preambleSource}`, cls: 'setting-item-description' });
+		this.whereEl = contentEl.createDiv({ cls: 'vo-export-where' });
+		this.renderWhere();
 
 		if (plan.extraction.lost.length > 0) {
 			const warn = contentEl.createDiv({ cls: 'vo-export-warnings' });
@@ -130,6 +148,39 @@ export class ExportPdfModal extends Modal {
 			this.submit();
 			return false;
 		});
+	}
+
+	// The Output block: where the PDF goes, the collision choice when something
+	// is already there, and where the preamble came from.
+	private renderWhere(): void {
+		const where = this.whereEl;
+		if (!where) return;
+		const { plan } = this;
+		where.empty();
+		where.createDiv({ text: 'Output', cls: 'vo-export-label' });
+		const pathEl = where.createDiv({ text: plan.outputPath, cls: 'vo-export-path' });
+		const { collision } = plan;
+		if (collision !== null) {
+			const name = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
+			const alert = where.createDiv({ cls: 'vo-export-collision' });
+			alert.createDiv({ text: `${name(collision.existing)} already exists and will be replaced.`, cls: 'vo-export-label' });
+			new Setting(alert).setName('If the file exists').addDropdown((dd) =>
+				dd
+					.addOption('overwrite', `Overwrite ${name(collision.existing)}`)
+					.addOption('number', `Save as ${name(collision.numbered)}`)
+					.setValue(plan.overwrite ? 'overwrite' : 'number')
+					.onChange((v) => {
+						plan.overwrite = v === 'overwrite';
+						plan.outputPath = plan.overwrite ? collision.existing : collision.numbered;
+						pathEl.setText(plan.outputPath);
+					}),
+			);
+		}
+		where.createDiv({
+			text: plan.options.pdfOutput !== '' ? 'From the note\'s pdf-output.' : 'Beside the note. Set pdf-output: in the frontmatter to change it.',
+			cls: 'setting-item-description',
+		});
+		where.createDiv({ text: `Preamble: ${plan.preambleSource}`, cls: 'setting-item-description' });
 	}
 
 	private submit(): void {

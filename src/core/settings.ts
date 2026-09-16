@@ -58,6 +58,9 @@ export interface PdfExportSettings {
 	notes: NotesMode;
 	cite: string;
 	lastFontSize: string;
+	// What a Submit export offers to append to the file name — remembered from
+	// the last export, so the usual suffix is one keystroke away.
+	submitSuffix: string;
 	keepBuildFiles: boolean;
 	openAfterExport: boolean;
 }
@@ -105,6 +108,7 @@ export function defaultPdfExportSettings(): PdfExportSettings {
 		notes: 'f',
 		cite: 'MLA',
 		lastFontSize: '12',
+		submitSuffix: '-Submit',
 		keepBuildFiles: false,
 		openAfterExport: false,
 	};
@@ -270,6 +274,7 @@ function readPdfExport(v: unknown): PdfExportSettings {
 		notes: v.notes === 'e' ? 'e' : 'f',
 		cite: cite !== '' ? cite : CITE_STYLES[0] ?? 'MLA',
 		lastFontSize: FONT_SIZES.includes(size) ? size : fallback.lastFontSize,
+		submitSuffix: readString(v.submitSuffix, fallback.submitSuffix),
 		keepBuildFiles: readBool(v.keepBuildFiles, fallback.keepBuildFiles),
 		openAfterExport: readBool(v.openAfterExport, fallback.openAfterExport),
 	};

@@ -847,6 +847,16 @@ function resolvePdfOutput(pdfOutput, noteDirAbs, noteStem, homeDir) {
   if (value.toLowerCase().endsWith(".pdf")) return normalizePosixPath(value);
   return normalizePosixPath(`${value}/${noteStem}.pdf`);
 }
+function suffixedPdfPath(pdfPath, suffix) {
+  const clean = suffix.trim();
+  if (clean === "") return pdfPath;
+  const slash = pdfPath.lastIndexOf("/");
+  const name = pdfPath.slice(slash + 1);
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  return `${pdfPath.slice(0, slash + 1)}${stem}${clean}${ext}`;
+}
 function numberedPdfPath(pdfPath, exists) {
   const slash = pdfPath.lastIndexOf("/");
   const dir = pdfPath.slice(0, slash + 1);
@@ -915,6 +925,7 @@ function defaultPdfExportSettings() {
     notes: "f",
     cite: "MLA",
     lastFontSize: "12",
+    submitSuffix: "-Submit",
     keepBuildFiles: false,
     openAfterExport: false
   };
@@ -1060,6 +1071,7 @@ function readPdfExport(v) {
     notes: v.notes === "e" ? "e" : "f",
     cite: cite !== "" ? cite : (_a = CITE_STYLES[0]) != null ? _a : "MLA",
     lastFontSize: FONT_SIZES.includes(size) ? size : fallback.lastFontSize,
+    submitSuffix: readString(v.submitSuffix, fallback.submitSuffix),
     keepBuildFiles: readBool(v.keepBuildFiles, fallback.keepBuildFiles),
     openAfterExport: readBool(v.openAfterExport, fallback.openAfterExport)
   };
@@ -3304,12 +3316,26 @@ var PdfExporter = class {
       fontsize: (_d = options.fontsize) != null ? _d : settings.lastFontSize,
       variant: "dev",
       lineNumbers: false,
+      nameSuffix: "",
+      baseOutputPath: target,
       doc,
       outputPath: target,
       collision,
       overwrite: collision !== null,
       preambleSource: (await this.resolvePreamble(file, options)).label
     };
+  }
+  // Points the plan at `<name><suffix>.pdf` and re-answers "does it already
+  // exist?" for that name — a suffixed export usually has no collision even
+  // when the plain one does, and vice versa.
+  retarget(plan, suffix) {
+    const { fs } = node();
+    const exists = (p) => fs.existsSync(p);
+    const target = suffixedPdfPath(plan.baseOutputPath, suffix);
+    plan.nameSuffix = suffix;
+    plan.collision = exists(target) ? { existing: target, numbered: numberedPdfPath(target, exists) } : null;
+    plan.overwrite = plan.collision !== null;
+    plan.outputPath = target;
   }
   // Frontmatter latex-preamble → Pre*.tex beside the note → settings → bundled.
   async resolvePreamble(file, options) {
@@ -4121,19 +4147,42 @@ var LOST_LABELS = {
   embed: "embed"
 };
 var ExportPdfModal = class extends import_obsidian5.Modal {
-  constructor(app, plan, onSubmit) {
+  constructor(app, plan, onSubmit, retarget, defaultSuffix) {
     super(app);
     this.plan = plan;
     this.onSubmit = onSubmit;
+    this.retarget = retarget;
+    this.defaultSuffix = defaultSuffix;
     this.submitted = false;
+    // Rebuilt whenever the output path changes, so the path line and the
+    // "already exists" warning always describe the file that will be written.
+    this.whereEl = null;
   }
   onOpen() {
     const { contentEl, plan } = this;
     this.setTitle(`Export "${plan.file.basename}" to PDF`);
     contentEl.addClass("vo-export-modal");
-    new import_obsidian5.Setting(contentEl).setName("Version").setDesc("Dev keeps the date/time stamp; Submit drops it and centres the page count").addDropdown(
-      (dd) => dd.addOption("dev", "Dev").addOption("submit", "Submit").setValue(plan.variant).onChange((v) => plan.variant = v === "submit" ? "submit" : "dev")
+    let suffixInput = null;
+    const suffixSetting = new import_obsidian5.Setting(contentEl).setName("Append to file name").setDesc('A Submit copy usually wants a name of its own \u2014 this is added before ".pdf".').addText((text2) => {
+      text2.setPlaceholder("-Submit").setValue(plan.nameSuffix).onChange((v) => {
+        this.retarget(v);
+        this.renderWhere();
+      });
+      suffixInput = text2;
+    });
+    suffixSetting.settingEl.hidden = plan.variant !== "submit";
+    const versionSetting = new import_obsidian5.Setting(contentEl).setName("Version").setDesc("Dev keeps the date/time stamp; Submit drops it and centres the page count").addDropdown(
+      (dd) => dd.addOption("dev", "Dev").addOption("submit", "Submit").setValue(plan.variant).onChange((v) => {
+        plan.variant = v === "submit" ? "submit" : "dev";
+        const submit = plan.variant === "submit";
+        suffixSetting.settingEl.hidden = !submit;
+        const suffix = submit ? plan.nameSuffix !== "" ? plan.nameSuffix : this.defaultSuffix : "";
+        suffixInput == null ? void 0 : suffixInput.setValue(suffix);
+        this.retarget(suffix);
+        this.renderWhere();
+      })
     );
+    versionSetting.settingEl.after(suffixSetting.settingEl);
     new import_obsidian5.Setting(contentEl).setName("Line numbers").setDesc("Dev only: each body line's editor line number, in the left margin").addToggle((t) => t.setValue(plan.lineNumbers).onChange((v) => plan.lineNumbers = v));
     new import_obsidian5.Setting(contentEl).setName("Font size").addDropdown((dd) => {
       for (const size of FONT_SIZES) dd.addOption(size, `${size} pt`);
@@ -4152,7 +4201,33 @@ var ExportPdfModal = class extends import_obsidian5.Modal {
       const match = CITE_STYLES.find((s) => s.toLowerCase() === plan.options.cite.toLowerCase());
       dd.setValue(match != null ? match : plan.options.cite).onChange((v) => plan.options.cite = v);
     });
-    const where = contentEl.createDiv({ cls: "vo-export-where" });
+    this.whereEl = contentEl.createDiv({ cls: "vo-export-where" });
+    this.renderWhere();
+    if (plan.extraction.lost.length > 0) {
+      const warn = contentEl.createDiv({ cls: "vo-export-warnings" });
+      warn.createDiv({ text: "Written on outline entries, so left out of the PDF:", cls: "vo-export-label" });
+      const list = warn.createEl("ul");
+      for (const item of plan.extraction.lost) {
+        const kinds = item.kinds.map((k) => LOST_LABELS[k]).join(", ");
+        list.createEl("li", { text: `Line ${item.line + 1} \u2014 ${kinds}: ${item.text}` });
+      }
+    }
+    new import_obsidian5.Setting(contentEl).addButton((b) => b.setButtonText("Cancel").onClick(() => this.close())).addButton(
+      (b) => b.setButtonText("Export").setCta().onClick(() => this.submit())
+    );
+    this.scope.register([], "Enter", (evt) => {
+      evt.preventDefault();
+      this.submit();
+      return false;
+    });
+  }
+  // The Output block: where the PDF goes, the collision choice when something
+  // is already there, and where the preamble came from.
+  renderWhere() {
+    const where = this.whereEl;
+    if (!where) return;
+    const { plan } = this;
+    where.empty();
     where.createDiv({ text: "Output", cls: "vo-export-label" });
     const pathEl = where.createDiv({ text: plan.outputPath, cls: "vo-export-path" });
     const { collision } = plan;
@@ -4173,23 +4248,6 @@ var ExportPdfModal = class extends import_obsidian5.Modal {
       cls: "setting-item-description"
     });
     where.createDiv({ text: `Preamble: ${plan.preambleSource}`, cls: "setting-item-description" });
-    if (plan.extraction.lost.length > 0) {
-      const warn = contentEl.createDiv({ cls: "vo-export-warnings" });
-      warn.createDiv({ text: "Written on outline entries, so left out of the PDF:", cls: "vo-export-label" });
-      const list = warn.createEl("ul");
-      for (const item of plan.extraction.lost) {
-        const kinds = item.kinds.map((k) => LOST_LABELS[k]).join(", ");
-        list.createEl("li", { text: `Line ${item.line + 1} \u2014 ${kinds}: ${item.text}` });
-      }
-    }
-    new import_obsidian5.Setting(contentEl).addButton((b) => b.setButtonText("Cancel").onClick(() => this.close())).addButton(
-      (b) => b.setButtonText("Export").setCta().onClick(() => this.submit())
-    );
-    this.scope.register([], "Enter", (evt) => {
-      evt.preventDefault();
-      this.submit();
-      return false;
-    });
   }
   submit() {
     if (this.submitted) return;
@@ -4736,15 +4794,23 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       new import_obsidian7.Notice(plan);
       return;
     }
-    new ExportPdfModal(this.app, plan, (finalPlan) => void this.runExport(exporter, finalPlan)).open();
+    new ExportPdfModal(
+      this.app,
+      plan,
+      (finalPlan) => void this.runExport(exporter, finalPlan),
+      (suffix) => exporter.retarget(plan, suffix),
+      this.settings.pdfExport.submitSuffix
+    ).open();
   }
   async runExport(exporter, plan) {
     var _a;
     this.exportRunning = true;
     const progress = new import_obsidian7.Notice("Exporting PDF\u2026", 0);
     try {
-      if (plan.fontsize !== this.settings.pdfExport.lastFontSize) {
+      const suffix = plan.variant === "submit" ? plan.nameSuffix.trim() : this.settings.pdfExport.submitSuffix;
+      if (plan.fontsize !== this.settings.pdfExport.lastFontSize || suffix !== this.settings.pdfExport.submitSuffix) {
         this.settings.pdfExport.lastFontSize = plan.fontsize;
+        this.settings.pdfExport.submitSuffix = suffix;
         await this.persist();
       }
       const outcome = await exporter.run(plan, (msg) => progress.setMessage(msg));

@@ -130,6 +130,20 @@ export function resolvePdfOutput(pdfOutput: string, noteDirAbs: string, noteStem
 	return normalizePosixPath(`${value}/${noteStem}.pdf`);
 }
 
+// `Note.pdf` + `-Submit` -> `Note-Submit.pdf`. The suffix goes on the stem,
+// never the extension, and is trimmed; an empty one gives the path back
+// unchanged.
+export function suffixedPdfPath(pdfPath: string, suffix: string): string {
+	const clean = suffix.trim();
+	if (clean === '') return pdfPath;
+	const slash = pdfPath.lastIndexOf('/');
+	const name = pdfPath.slice(slash + 1);
+	const dot = name.lastIndexOf('.');
+	const stem = dot > 0 ? name.slice(0, dot) : name;
+	const ext = dot > 0 ? name.slice(dot) : '';
+	return `${pdfPath.slice(0, slash + 1)}${stem}${clean}${ext}`;
+}
+
 // The first free `<stem>-01.pdf`, `<stem>-02.pdf`, … beside `pdfPath`, offered
 // instead of overwriting when `pdfPath` already exists. Numbers are at least
 // two digits and grow past 99.

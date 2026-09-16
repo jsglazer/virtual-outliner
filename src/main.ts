@@ -513,15 +513,23 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			new Notice(plan);
 			return;
 		}
-		new ExportPdfModal(this.app, plan, (finalPlan) => void this.runExport(exporter, finalPlan)).open();
+		new ExportPdfModal(
+			this.app,
+			plan,
+			(finalPlan) => void this.runExport(exporter, finalPlan),
+			(suffix) => exporter.retarget(plan, suffix),
+			this.settings.pdfExport.submitSuffix,
+		).open();
 	}
 
 	private async runExport(exporter: PdfExporter, plan: Parameters<PdfExporter['run']>[0]): Promise<void> {
 		this.exportRunning = true;
 		const progress = new Notice('Exporting PDF…', 0);
 		try {
-			if (plan.fontsize !== this.settings.pdfExport.lastFontSize) {
+			const suffix = plan.variant === 'submit' ? plan.nameSuffix.trim() : this.settings.pdfExport.submitSuffix;
+			if (plan.fontsize !== this.settings.pdfExport.lastFontSize || suffix !== this.settings.pdfExport.submitSuffix) {
 				this.settings.pdfExport.lastFontSize = plan.fontsize;
+				this.settings.pdfExport.submitSuffix = suffix;
 				await this.persist();
 			}
 			const outcome = await exporter.run(plan, (msg) => progress.setMessage(msg));

@@ -17,7 +17,7 @@ import { FileSystemAdapter, TFolder } from 'obsidian';
 import type { BodyExtraction } from '../core/exportBody';
 import { collectCiteKeys, extractBody } from '../core/exportBody';
 import type { ExportOptions } from '../core/exportOptions';
-import { numberedPdfPath, resolveExportOptions, resolvePdfOutput } from '../core/exportOptions';
+import { numberedPdfPath, suffixedPdfPath, resolveExportOptions, resolvePdfOutput } from '../core/exportOptions';
 import type { ConversionIssue, ExportResolver } from '../core/obsidianMarkdown';
 import { toPandocMarkdown } from '../core/obsidianMarkdown';
 import type { PdfExportSettings } from '../core/settings';
@@ -50,6 +50,12 @@ export interface ExportPlan {
 	variant: ExportVariant;
 	// Dev only: print each body line's editor line number in the left margin.
 	lineNumbers: boolean;
+	// Appended to the PDF's file name (Submit exports offer one). The dialog
+	// edits it through PdfExporter.retarget, which recomputes outputPath and
+	// the collision warning for the new name.
+	nameSuffix: string;
+	// Where the PDF goes with no suffix — what outputPath is derived from.
+	baseOutputPath: string;
 	// The note's raw text, kept so the body can be extracted again with the
 	// line-number anchors in it once the dialog has been answered.
 	doc: string;
@@ -102,12 +108,27 @@ export class PdfExporter {
 			fontsize: options.fontsize ?? settings.lastFontSize,
 			variant: 'dev',
 			lineNumbers: false,
+			nameSuffix: '',
+			baseOutputPath: target,
 			doc,
 			outputPath: target,
 			collision,
 			overwrite: collision !== null,
 			preambleSource: (await this.resolvePreamble(file, options)).label,
 		};
+	}
+
+	// Points the plan at `<name><suffix>.pdf` and re-answers "does it already
+	// exist?" for that name — a suffixed export usually has no collision even
+	// when the plain one does, and vice versa.
+	retarget(plan: ExportPlan, suffix: string): void {
+		const { fs } = node();
+		const exists = (p: string): boolean => fs.existsSync(p);
+		const target = suffixedPdfPath(plan.baseOutputPath, suffix);
+		plan.nameSuffix = suffix;
+		plan.collision = exists(target) ? { existing: target, numbered: numberedPdfPath(target, exists) } : null;
+		plan.overwrite = plan.collision !== null;
+		plan.outputPath = target;
 	}
 
 	// Frontmatter latex-preamble → Pre*.tex beside the note → settings → bundled.

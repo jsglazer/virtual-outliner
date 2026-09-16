@@ -5,6 +5,7 @@ import {
 	normalizeFontSize,
 	resolveExportOptions,
 	numberedPdfPath,
+	suffixedPdfPath,
 	resolvePdfOutput,
 } from '../src/core/exportOptions';
 
@@ -18,6 +19,17 @@ describe('numberedPdfPath', () => {
 	});
 	it('grows past two digits', () => {
 		expect(numberedPdfPath('/a/N.pdf', (p) => !p.endsWith('-100.pdf'))).toBe('/a/N-100.pdf');
+	});
+});
+
+describe('suffixedPdfPath', () => {
+	it('appends to the stem, before the extension', () => {
+		expect(suffixedPdfPath('/a/b/Puzzle Statement.pdf', '-Submit')).toBe('/a/b/Puzzle Statement-Submit.pdf');
+		expect(suffixedPdfPath('/a/Final.PDF', ' -v2 ')).toBe('/a/Final-v2.PDF');
+	});
+	it('gives the path back when the suffix is empty', () => {
+		expect(suffixedPdfPath('/a/N.pdf', '')).toBe('/a/N.pdf');
+		expect(suffixedPdfPath('/a/N.pdf', '   ')).toBe('/a/N.pdf');
 	});
 });
 
