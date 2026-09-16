@@ -704,9 +704,17 @@
 
 /* Body-only view (and a collapsed entry) draws no label, so the break shows on
    the body line it falls on: a little air above it and a ¶ in the margin. */
+/* The margin needs the same scoped, !important form the indent rules use:
+   Obsidian's own `.cm-line` rule zeroes every editor line's margin with
+   !important, so a bare `.vo-break-line { margin-top }` computed to 0px and
+   the gap appeared in Reading view only (reported live). */
+.markdown-source-view.mod-cm6 .cm-content .cm-line.vo-break-line,
+.markdown-rendered .vo-break-line {
+	margin-top: 1em !important;
+}
+
 .vo-break-line {
 	position: relative;
-	margin-top: 0.75em;
 }
 
 .vo-break-line::before {
