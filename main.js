@@ -67,12 +67,12 @@ function toAlpha(n) {
 function dottedPath(indices) {
   return indices.join(".");
 }
-function segmentFor(style, ownIndex, pathIndices, hasDeeperSegment) {
+function segmentFor(style, ownIndex, pathIndices, hasDeeperSegment, hasShallowerSegment) {
   switch (style) {
     case "1":
       return String(ownIndex);
     case "1.0":
-      return hasDeeperSegment ? String(ownIndex) : `${ownIndex}.0`;
+      return hasDeeperSegment || hasShallowerSegment ? String(ownIndex) : `${ownIndex}.0`;
     case "1.1":
       return dottedPath(pathIndices);
     case "I":
@@ -118,7 +118,7 @@ function computeLabel(levelFormats, node2) {
         break;
       }
     }
-    const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment);
+    const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment, segments.length > 0);
     if (segment === "") continue;
     const prefix = segments.length === 0 ? "" : format.separator;
     segments.push(prefix + segment);

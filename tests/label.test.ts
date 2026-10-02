@@ -68,6 +68,17 @@ describe('computeLabel', () => {
 		expect(computeLabel(levels({ 1: { style: '1.0' } }), target)).toBe('1.2.1');
 	});
 
+	it('never ends a multi-part label in ".0" when every level uses "1.0" ("3.1.2", never "3.1.2.0")', () => {
+		const doc = '@ A\n@ B\n@ C\n@@ C.1\n@@@ C.1.a\n@@@ C.1.b';
+		const parsed = parseOutline(doc);
+		const c = parsed.roots[2];
+		const target = c?.children[0]?.children[1];
+		if (!c || !target) throw new Error('missing node');
+		const all10 = levels({ 1: { style: '1.0' }, 2: { style: '1.0' }, 3: { style: '1.0' }, 4: { style: '1.0' }, 5: { style: '1.0' }, 6: { style: '1.0' } });
+		expect(computeLabel(all10, target)).toBe('3.1.2');
+		expect(computeLabel(all10, c)).toBe('3.0');
+	});
+
 	it('joins mixed per-level styles as in the "I.B.3" example', () => {
 		const doc = '@ A\n@@ A.1\n@@ A.2\n@@@ A.2.a\n@@@ A.2.b\n@@@ A.2.c';
 		const parsed = parseOutline(doc);

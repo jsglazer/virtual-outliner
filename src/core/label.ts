@@ -62,6 +62,7 @@ function segmentFor(
 	ownIndex: number,
 	pathIndices: readonly number[],
 	hasDeeperSegment: boolean,
+	hasShallowerSegment: boolean,
 ): string {
 	switch (style) {
 		case '1':
@@ -69,11 +70,12 @@ function segmentFor(
 		case '1.0':
 			// Word-style multilevel numbering: the trailing ".0" is a
 			// PLACEHOLDER for the next level's index, not part of the number.
-			// It only shows when this segment is the last one in the composite
-			// ("3.0"); once a child level contributes its own segment the
-			// placeholder gives up its slot so the label reads "3.1" rather
-			// than "3.0.1".
-			return hasDeeperSegment ? String(ownIndex) : `${ownIndex}.0`;
+			// It only shows when this segment is the whole composite ("3.0");
+			// once a child level contributes its own segment the placeholder
+			// gives up its slot so the label reads "3.1" rather than "3.0.1",
+			// and a segment that already follows a parent's segment never
+			// takes one, so the label reads "3.1.6.1" rather than "3.1.6.1.0".
+			return hasDeeperSegment || hasShallowerSegment ? String(ownIndex) : `${ownIndex}.0`;
 		case '1.1':
 			return dottedPath(pathIndices);
 		case 'I':
@@ -126,7 +128,7 @@ export function computeLabel(levelFormats: readonly LevelFormat[], node: Outline
 				break;
 			}
 		}
-		const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment);
+		const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment, segments.length > 0);
 		if (segment === '') continue;
 		const prefix = segments.length === 0 ? '' : format.separator;
 		segments.push(prefix + segment);
