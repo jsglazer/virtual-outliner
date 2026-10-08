@@ -25,107 +25,6 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian7 = require("obsidian");
 
-// src/core/label.ts
-var ROMAN_TABLE = [
-  [1e3, "M"],
-  [900, "CM"],
-  [500, "D"],
-  [400, "CD"],
-  [100, "C"],
-  [90, "XC"],
-  [50, "L"],
-  [40, "XL"],
-  [10, "X"],
-  [9, "IX"],
-  [5, "V"],
-  [4, "IV"],
-  [1, "I"]
-];
-function toRoman(n) {
-  if (n <= 0) return String(n);
-  let value = n;
-  let out = "";
-  for (const [amount, numeral] of ROMAN_TABLE) {
-    while (value >= amount) {
-      out += numeral;
-      value -= amount;
-    }
-  }
-  return out;
-}
-function toAlpha(n) {
-  if (n <= 0) return String(n);
-  let value = n;
-  let out = "";
-  while (value > 0) {
-    const rem = (value - 1) % 26;
-    out = String.fromCharCode(65 + rem) + out;
-    value = Math.floor((value - 1) / 26);
-  }
-  return out;
-}
-function dottedPath(indices) {
-  return indices.join(".");
-}
-function segmentFor(style, ownIndex, pathIndices, hasDeeperSegment, hasShallowerSegment) {
-  switch (style) {
-    case "1":
-      return String(ownIndex);
-    case "1.0":
-      return hasDeeperSegment || hasShallowerSegment ? String(ownIndex) : `${ownIndex}.0`;
-    case "1.1":
-      return dottedPath(pathIndices);
-    case "I":
-      return toRoman(ownIndex);
-    case "i":
-      return toRoman(ownIndex).toLowerCase();
-    case "A":
-      return toAlpha(ownIndex);
-    case "a":
-      return toAlpha(ownIndex).toLowerCase();
-    case "bullet":
-      return "\u2022";
-    case "none":
-      return "";
-  }
-}
-function ancestorChain(node2) {
-  const chain = [];
-  let cur = node2;
-  while (cur) {
-    chain.unshift(cur);
-    cur = cur.parent;
-  }
-  return chain;
-}
-function computeLabel(levelFormats, node2) {
-  const chain = ancestorChain(node2);
-  const pathIndices = chain.map((n) => n.siblingIndex);
-  const formats = chain.map((n) => {
-    var _a, _b;
-    return (_b = (_a = levelFormats[n.level - 1]) != null ? _a : levelFormats[levelFormats.length - 1]) != null ? _b : null;
-  });
-  const segments = [];
-  for (let i = 0; i < chain.length; i++) {
-    const ancestor = chain[i];
-    const format = formats[i];
-    if (!ancestor || !format) continue;
-    let hasDeeperSegment = false;
-    for (let j = i + 1; j < chain.length; j++) {
-      const deeper = formats[j];
-      if (deeper && deeper.style !== "none") {
-        hasDeeperSegment = true;
-        break;
-      }
-    }
-    const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment, segments.length > 0);
-    if (segment === "") continue;
-    const prefix = segments.length === 0 ? "" : format.separator;
-    segments.push(prefix + segment);
-  }
-  return segments.join("");
-}
-
 // src/core/metadata.ts
 var BLOCK_OPEN = "%%md-outline";
 var BLOCK_CLOSE = "%%";
@@ -323,6 +222,245 @@ function isRiskySigil(char) {
   return RISKY_SIGILS.has(char) || /[0-9]/.test(char) || /\s/.test(char);
 }
 
+// src/core/exportBody.ts
+var FENCE_RE = /^\s*(`{3,}|~{3,})/;
+function nextFenceState(line, open) {
+  var _a;
+  const m = FENCE_RE.exec(line);
+  if (!m) return open;
+  const marker = (_a = m[1]) != null ? _a : "";
+  if (open === null) return marker;
+  return marker[0] === open[0] && marker.length >= open.length ? null : open;
+}
+function stripFrontmatter(doc) {
+  var _a, _b;
+  const lines = doc.split("\n");
+  if (((_a = lines[0]) != null ? _a : "").trimEnd() !== "---") return doc;
+  for (let i = 1; i < lines.length; i++) {
+    const t = ((_b = lines[i]) != null ? _b : "").trimEnd();
+    if (t === "---" || t === "...") return lines.slice(i + 1).join("\n");
+  }
+  return doc;
+}
+var FOOTNOTE_RE = /\[\^[^\]\s]+\]|\^\[/;
+var EMBED_RE = /!\[\[/;
+var WIKILINK_RE = /(^|[^!])\[\[/;
+var MD_LINK_RE = /(^|[^!])\[[^\]]*\]\([^)]+\)/;
+function lostKinds(entryText) {
+  const kinds = [];
+  if (FOOTNOTE_RE.test(entryText)) kinds.push("footnote");
+  if (collectCiteKeys(entryText).length > 0) kinds.push("citation");
+  if (WIKILINK_RE.test(entryText) || MD_LINK_RE.test(entryText)) kinds.push("link");
+  if (EMBED_RE.test(entryText)) kinds.push("embed");
+  return kinds;
+}
+var BLOCK_START_RE = /^(?:\s{4,}|\t|#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||:{1,3}(?:\s|$)|`{3,}|~{3,}|(?:[-*_]\s*){3,}$)/;
+function isPlainProse(line) {
+  return line.trim() !== "" && !BLOCK_START_RE.test(line);
+}
+function anchor(sourceLine) {
+  return `\`\\voline{${sourceLine}}\`{=latex}`;
+}
+function extractBody(doc, sigilChar, options = {}) {
+  var _a, _b, _c, _d;
+  const full = parseMetaDocument(doc).body;
+  const stripped = stripFrontmatter(full);
+  const frontmatterLines = full.split("\n").length - stripped.split("\n").length;
+  const lines = stripped.split("\n");
+  const entryRe = outlineLineRegex(sigilChar);
+  const out = [];
+  const lost = [];
+  let fence = null;
+  let lastBlank = true;
+  let lastText = "";
+  let dropped = false;
+  let forceBreak = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = (_a = lines[i]) != null ? _a : "";
+    if (fence === null && isOutlineLine(line, sigilChar)) {
+      const entryText = ((_c = (_b = entryRe.exec(line)) == null ? void 0 : _b[2]) != null ? _c : "").trim();
+      const kinds = lostKinds(entryText);
+      if (kinds.length > 0) lost.push({ line: i, text: entryText, kinds });
+      dropped = true;
+      if (hasParagraphFlag(line, sigilChar)) forceBreak = true;
+      continue;
+    }
+    if (fence === null && isCommentLine(line, sigilChar)) continue;
+    const blank = fence === null && line.trim() === "";
+    if (dropped && !blank && !lastBlank && (forceBreak || !isPlainProse(lastText) || !isPlainProse(line))) {
+      out.push("");
+      lastBlank = true;
+    }
+    dropped = false;
+    forceBreak = false;
+    if (fence !== null || FENCE_RE.test(line)) {
+      fence = nextFenceState(line, fence);
+      out.push(line);
+      lastBlank = false;
+      lastText = line;
+      continue;
+    }
+    if (blank && lastBlank) continue;
+    const numbered = options.lineNumbers === true && !blank && isPlainProse(line);
+    out.push(blank ? "" : numbered ? anchor(i + frontmatterLines + 1) + line : line);
+    lastBlank = blank;
+    if (!blank) lastText = line;
+  }
+  while (out.length > 0 && ((_d = out[out.length - 1]) != null ? _d : "").trim() === "") out.pop();
+  const body = out.join("\n");
+  return { body, lost, isEmpty: body.trim() === "" };
+}
+var CITE_RE = /(^|[^A-Za-z0-9_@.\\])-?@(\{[^}]+\}|[A-Za-z0-9_À-ɏ][A-Za-z0-9_À-ɏ:.#$%&+?<>~/-]*)/g;
+function trimKey(raw) {
+  if (raw.startsWith("{")) return raw.slice(1, -1).trim();
+  return raw.replace(/[^A-Za-z0-9_À-ɏ]+$/, "");
+}
+function stripInlineCode(line) {
+  return line.replace(/(`+)[\s\S]*?\1/g, " ");
+}
+function collectCiteKeys(markdown) {
+  var _a;
+  const keys = [];
+  const seen = /* @__PURE__ */ new Set();
+  let fence = null;
+  for (const line of markdown.split("\n")) {
+    if (fence !== null || FENCE_RE.test(line)) {
+      fence = nextFenceState(line, fence);
+      continue;
+    }
+    const scan = stripInlineCode(line);
+    CITE_RE.lastIndex = 0;
+    let m;
+    while ((m = CITE_RE.exec(scan)) !== null) {
+      const key = trimKey((_a = m[2]) != null ? _a : "");
+      if (key !== "" && !seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+  }
+  return keys;
+}
+function groupKeysByLibrary(keys, known) {
+  var _a;
+  const libraryOf = /* @__PURE__ */ new Map();
+  for (const k of known) if (!libraryOf.has(k.citekey)) libraryOf.set(k.citekey, k.libraryID);
+  const byLibrary = /* @__PURE__ */ new Map();
+  const unknown = [];
+  for (const key of keys) {
+    const lib = libraryOf.get(key);
+    if (lib === void 0) {
+      unknown.push(key);
+      continue;
+    }
+    const list = (_a = byLibrary.get(lib)) != null ? _a : [];
+    list.push(key);
+    byLibrary.set(lib, list);
+  }
+  return { byLibrary, unknown };
+}
+
+// src/core/label.ts
+var ROMAN_TABLE = [
+  [1e3, "M"],
+  [900, "CM"],
+  [500, "D"],
+  [400, "CD"],
+  [100, "C"],
+  [90, "XC"],
+  [50, "L"],
+  [40, "XL"],
+  [10, "X"],
+  [9, "IX"],
+  [5, "V"],
+  [4, "IV"],
+  [1, "I"]
+];
+function toRoman(n) {
+  if (n <= 0) return String(n);
+  let value = n;
+  let out = "";
+  for (const [amount, numeral] of ROMAN_TABLE) {
+    while (value >= amount) {
+      out += numeral;
+      value -= amount;
+    }
+  }
+  return out;
+}
+function toAlpha(n) {
+  if (n <= 0) return String(n);
+  let value = n;
+  let out = "";
+  while (value > 0) {
+    const rem = (value - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    value = Math.floor((value - 1) / 26);
+  }
+  return out;
+}
+function dottedPath(indices) {
+  return indices.join(".");
+}
+function segmentFor(style, ownIndex, pathIndices, hasDeeperSegment, hasShallowerSegment) {
+  switch (style) {
+    case "1":
+      return String(ownIndex);
+    case "1.0":
+      return hasDeeperSegment || hasShallowerSegment ? String(ownIndex) : `${ownIndex}.0`;
+    case "1.1":
+      return dottedPath(pathIndices);
+    case "I":
+      return toRoman(ownIndex);
+    case "i":
+      return toRoman(ownIndex).toLowerCase();
+    case "A":
+      return toAlpha(ownIndex);
+    case "a":
+      return toAlpha(ownIndex).toLowerCase();
+    case "bullet":
+      return "\u2022";
+    case "none":
+      return "";
+  }
+}
+function ancestorChain(node2) {
+  const chain = [];
+  let cur = node2;
+  while (cur) {
+    chain.unshift(cur);
+    cur = cur.parent;
+  }
+  return chain;
+}
+function computeLabel(levelFormats, node2) {
+  const chain = ancestorChain(node2);
+  const pathIndices = chain.map((n) => n.siblingIndex);
+  const formats = chain.map((n) => {
+    var _a, _b;
+    return (_b = (_a = levelFormats[n.level - 1]) != null ? _a : levelFormats[levelFormats.length - 1]) != null ? _b : null;
+  });
+  const segments = [];
+  for (let i = 0; i < chain.length; i++) {
+    const ancestor = chain[i];
+    const format = formats[i];
+    if (!ancestor || !format) continue;
+    let hasDeeperSegment = false;
+    for (let j = i + 1; j < chain.length; j++) {
+      const deeper = formats[j];
+      if (deeper && deeper.style !== "none") {
+        hasDeeperSegment = true;
+        break;
+      }
+    }
+    const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment, segments.length > 0);
+    if (segment === "") continue;
+    const prefix = segments.length === 0 ? "" : format.separator;
+    segments.push(prefix + segment);
+  }
+  return segments.join("");
+}
+
 // src/core/parser.ts
 function parseOutline(body, sigilChar = DEFAULT_SIGIL_CHAR) {
   var _a, _b, _c, _d, _e, _f;
@@ -412,6 +550,373 @@ function nextSibling(parsed, node2) {
   return null;
 }
 
+// src/core/render.ts
+function mergeRanges(ranges) {
+  if (ranges.length === 0) return [];
+  const sorted = [...ranges].sort((a, b) => a.from - b.from);
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range.from <= last.to) {
+      last.to = Math.max(last.to, range.to);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+function isLineHidden(hidden, line) {
+  for (const range of hidden) {
+    if (line >= range.from && line < range.to) return true;
+  }
+  return false;
+}
+function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, indentBody = true) {
+  var _a, _b, _c, _d, _e;
+  const parsed = parseOutline(body, sigilChar);
+  const lines = body.split("\n");
+  const collapseRanges = [];
+  for (const node2 of parsed.flat) {
+    if (node2.id !== null && collapsedIds.has(node2.id) && node2.subtreeEnd > node2.entryLine + 1) {
+      collapseRanges.push({ from: node2.entryLine + 1, to: node2.subtreeEnd });
+    }
+  }
+  const viewStateRanges = [];
+  if (viewState === "outline") {
+    let runStart = null;
+    for (let i = 0; i < parsed.lineCount; i++) {
+      if (isOutlineLine((_a = lines[i]) != null ? _a : "", sigilChar)) {
+        if (runStart !== null) viewStateRanges.push({ from: runStart, to: i });
+        runStart = null;
+      } else if (runStart === null) {
+        runStart = i;
+      }
+    }
+    if (runStart !== null) viewStateRanges.push({ from: runStart, to: parsed.lineCount });
+  } else if (viewState === "body") {
+    for (const node2 of parsed.flat) {
+      viewStateRanges.push({ from: node2.entryLine, to: node2.entryLine + 1 });
+    }
+  }
+  const hiddenLineRanges = mergeRanges([...collapseRanges, ...viewStateRanges]);
+  const labels = /* @__PURE__ */ new Map();
+  const entryLevel2 = /* @__PURE__ */ new Map();
+  const indentLevel = /* @__PURE__ */ new Map();
+  const bodyIndentLevel = /* @__PURE__ */ new Map();
+  const bodyOwnerLine = /* @__PURE__ */ new Map();
+  const foldable = /* @__PURE__ */ new Map();
+  const paragraphBreak = /* @__PURE__ */ new Set();
+  const paragraphBreakBody = /* @__PURE__ */ new Set();
+  const commentLines = /* @__PURE__ */ new Set();
+  for (let i = 0; i < parsed.lineCount; i++) {
+    if (isCommentLine((_b = lines[i]) != null ? _b : "", sigilChar) && !isLineHidden(hiddenLineRanges, i)) commentLines.add(i);
+  }
+  const showLabels = viewState === "outline" || viewState === "both";
+  for (const node2 of parsed.flat) {
+    if (isLineHidden(hiddenLineRanges, node2.entryLine)) {
+      if (hasParagraphFlag((_c = lines[node2.entryLine]) != null ? _c : "", sigilChar)) {
+        for (let line = node2.entryLine + 1; line < node2.subtreeEnd; line++) {
+          if (isLineHidden(hiddenLineRanges, line) || ((_d = lines[line]) != null ? _d : "").trim() === "") continue;
+          paragraphBreakBody.add(line);
+          break;
+        }
+      }
+      continue;
+    }
+    entryLevel2.set(node2.entryLine, node2.level);
+    if (showLabels) labels.set(node2.entryLine, computeLabel(levels, node2));
+    indentLevel.set(node2.entryLine, node2.level);
+    if (hasParagraphFlag((_e = lines[node2.entryLine]) != null ? _e : "", sigilChar)) paragraphBreak.add(node2.entryLine);
+    if (hasFoldableContent(lines, node2)) {
+      foldable.set(node2.entryLine, node2.id !== null && collapsedIds.has(node2.id));
+    }
+  }
+  if (indentBody) {
+    for (const node2 of parsed.flat) {
+      for (let line = node2.ownBodyStart; line < node2.ownBodyEnd; line++) {
+        if (isLineHidden(hiddenLineRanges, line)) continue;
+        bodyIndentLevel.set(line, node2.level);
+        bodyOwnerLine.set(line, node2.entryLine);
+      }
+    }
+  }
+  return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel: entryLevel2, foldable, paragraphBreak, paragraphBreakBody, commentLines, hiddenLineRanges };
+}
+function hasFoldableContent(lines, node2) {
+  var _a;
+  for (let i = node2.entryLine + 1; i < node2.subtreeEnd; i++) {
+    if (((_a = lines[i]) != null ? _a : "").trim() !== "") return true;
+  }
+  return false;
+}
+
+// src/core/renderedExport.ts
+var LINE_ATTR = "data-vo-line";
+var GHOST_ATTR = "data-vo-ghost";
+function anchor2(line, ghost) {
+  return `<span ${LINE_ATTR}="${line}"${ghost ? ` ${GHOST_ATTR}=""` : ""}></span>`;
+}
+function prepareRenderedExport(doc, sigilChar, levels, viewState, collapsedIds, indentBody) {
+  var _a, _b;
+  const { body } = parseMetaDocument(doc);
+  const lines = body.split("\n");
+  if (!lines.some((line) => isOutlineLine(line, sigilChar) || isCommentLine(line, sigilChar))) return null;
+  const plan = computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, indentBody);
+  const nodeAt = new Map(plan.parsed.flat.map((node2) => [node2.entryLine, node2]));
+  const entryLevels = new Map(plan.parsed.flat.map((node2) => [node2.entryLine, node2.level]));
+  const out = [];
+  let fence = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = (_a = lines[i]) != null ? _a : "";
+    const inFence = fence !== null;
+    fence = nextFenceState(line, fence);
+    const node2 = nodeAt.get(i);
+    if (isLineHidden(plan.hiddenLineRanges, i)) {
+      if (node2 && !inFence) {
+        let bodyShowing = false;
+        for (let b = node2.ownBodyStart; b < node2.ownBodyEnd && !bodyShowing; b++) {
+          bodyShowing = !isLineHidden(plan.hiddenLineRanges, b) && ((_b = lines[b]) != null ? _b : "").trim() !== "";
+        }
+        if (bodyShowing) out.push(anchor2(i, true));
+      }
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+    if (isCommentLine(line, sigilChar)) continue;
+    if (node2) {
+      const segs = entrySegments(line, sigilChar);
+      if (segs) {
+        out.push(anchor2(i, false) + line.slice(segs.prefixEnd, segs.textEnd).trimEnd());
+        continue;
+      }
+    }
+    if (isOutlineLine(line, sigilChar)) continue;
+    out.push(line);
+  }
+  return { markdown: out.join("\n"), plan, entryLevels, indentBody };
+}
+
+// src/editor/renderedExport.ts
+var ANCHOR_SELECTOR = `span[${LINE_ATTR}]`;
+var SKIP_SELECTOR = ".frontmatter, .frontmatter-container, .metadata-container, section.footnotes, .footnotes";
+var RENDERED_CLASS = "markdown-rendered";
+var ENTRY_ATTR = "data-vo-entry-line";
+var OWNER_ATTR = "data-vo-owner-line";
+var LEVEL_ATTR = "data-vo-owner-level";
+function isElement(node2) {
+  return node2.nodeType === Node.ELEMENT_NODE;
+}
+function anchorLine(el) {
+  return Number(el.getAttribute(LINE_ATTR));
+}
+function isAnchor(node2) {
+  return isElement(node2) && node2.matches(ANCHOR_SELECTOR);
+}
+function splitByLineBreak(host) {
+  const segments = [{ nodes: [], br: null }];
+  for (const child of Array.from(host.childNodes)) {
+    const current = segments[segments.length - 1];
+    if (!current) continue;
+    if (child.nodeName === "BR") {
+      current.br = child;
+      segments.push({ nodes: [], br: null });
+    } else {
+      current.nodes.push(child);
+    }
+  }
+  return segments;
+}
+function isBlankRun(nodes) {
+  return nodes.every((node2) => {
+    var _a;
+    return !isElement(node2) && ((_a = node2.textContent) != null ? _a : "").trim() === "";
+  });
+}
+var Decorator = class {
+  constructor(root, prepared) {
+    this.root = root;
+    this.prepared = prepared;
+    this.owner = null;
+    this.doc = root.ownerDocument;
+  }
+  run() {
+    for (const child of Array.from(this.root.children)) {
+      if (child.matches(SKIP_SELECTOR)) continue;
+      const anchors = Array.from(child.querySelectorAll(ANCHOR_SELECTOR));
+      if (anchors.length === 0) {
+        this.markBody(child);
+        continue;
+      }
+      const hosts = [];
+      for (const a of anchors) {
+        const host = a.parentElement;
+        if (host && !hosts.includes(host)) hosts.push(host);
+      }
+      for (const host of hosts) this.decorateHost(host);
+    }
+  }
+  decorateHost(host) {
+    var _a;
+    const segments = splitByLineBreak(host);
+    if (segments.length === 1) {
+      const only = segments[0];
+      const a = only == null ? void 0 : only.nodes.find(isAnchor);
+      if (!only || !a) return;
+      if (a.hasAttribute(GHOST_ATTR)) {
+        this.owner = anchorLine(a);
+        a.remove();
+        if (isBlankRun(Array.from(host.childNodes))) host.remove();
+        return;
+      }
+      this.markEntry(host, a, only.nodes);
+      return;
+    }
+    for (const segment of segments) {
+      const a = segment.nodes.find(isAnchor);
+      if (a == null ? void 0 : a.hasAttribute(GHOST_ATTR)) {
+        this.owner = anchorLine(a);
+        for (const node2 of segment.nodes) node2.remove();
+        (_a = segment.br) == null ? void 0 : _a.remove();
+        continue;
+      }
+      if (segment.nodes.length === 0 || isBlankRun(segment.nodes)) continue;
+      if (a) {
+        this.markEntry(this.blockWrap(segment), a, segment.nodes);
+      } else if (this.bodyClasses() !== null) {
+        this.markBody(this.blockWrap(segment));
+      }
+    }
+    if (isBlankRun(Array.from(host.childNodes)) && host !== this.root) host.remove();
+  }
+  // One source line's run of inline nodes as a block of its own, so it can
+  // carry that line's indent and spacing. Its `<br>` goes: the block already
+  // breaks the line.
+  blockWrap(segment) {
+    var _a, _b;
+    const wrapper = this.doc.createElement("span");
+    wrapper.classList.add("vo-line");
+    const first = segment.nodes[0];
+    (_a = first == null ? void 0 : first.parentNode) == null ? void 0 : _a.insertBefore(wrapper, first);
+    for (const node2 of segment.nodes) wrapper.appendChild(node2);
+    (_b = segment.br) == null ? void 0 : _b.remove();
+    return wrapper;
+  }
+  markEntry(block, a, nodes) {
+    var _a, _b;
+    const line = anchorLine(a);
+    const { plan } = this.prepared;
+    const level = (_b = (_a = plan.entryLevel.get(line)) != null ? _a : this.prepared.entryLevels.get(line)) != null ? _b : 1;
+    this.owner = line;
+    block.classList.add(`vo-indent-l${level}`, `vo-entry-l${level}`);
+    block.setAttribute(ENTRY_ATTR, String(line));
+    block.setAttribute(LEVEL_ATTR, String(level));
+    const after = nodes.slice(nodes.indexOf(a) + 1);
+    const text2 = this.doc.createElement("span");
+    text2.className = `vo-text vo-l${level}`;
+    a.after(text2);
+    for (const node2 of after) text2.appendChild(node2);
+    const label = plan.labels.get(line);
+    if (label !== void 0) {
+      const span = this.doc.createElement("span");
+      span.className = `vo-label vo-l${level}`;
+      span.textContent = label;
+      text2.before(span);
+    }
+    a.remove();
+  }
+  bodyClasses() {
+    var _a;
+    if (!this.prepared.indentBody || this.owner === null) return null;
+    return (_a = this.prepared.entryLevels.get(this.owner)) != null ? _a : null;
+  }
+  markBody(block) {
+    const level = this.bodyClasses();
+    if (level === null || this.owner === null) return;
+    block.classList.add(`vo-body-indent-l${level}`);
+    block.setAttribute(OWNER_ATTR, String(this.owner));
+    block.setAttribute(LEVEL_ATTR, String(level));
+  }
+};
+function entryTextOffset(entry) {
+  var _a;
+  const rect = (_a = entry.querySelector(".vo-text")) == null ? void 0 : _a.getClientRects()[0];
+  if (!rect) return null;
+  return Math.round((rect.left - entry.getBoundingClientRect().left) * 10) / 10;
+}
+function alignBody(root) {
+  var _a, _b, _c, _d, _e;
+  const byLevel = /* @__PURE__ */ new Map();
+  const byLine = /* @__PURE__ */ new Map();
+  for (const entry of Array.from(root.querySelectorAll(`[${ENTRY_ATTR}]`))) {
+    const offset = entryTextOffset(entry);
+    if (offset === null) continue;
+    byLine.set((_a = entry.getAttribute(ENTRY_ATTR)) != null ? _a : "", offset);
+    byLevel.set((_b = entry.getAttribute(LEVEL_ATTR)) != null ? _b : "", offset);
+  }
+  for (const body of Array.from(root.querySelectorAll(`[${OWNER_ATTR}]`))) {
+    const offset = (_e = byLine.get((_c = body.getAttribute(OWNER_ATTR)) != null ? _c : "")) != null ? _e : byLevel.get((_d = body.getAttribute(LEVEL_ATTR)) != null ? _d : "");
+    if (offset !== void 0) body.setCssProps({ "--vo-body-text-offset": `${offset}px` });
+  }
+}
+var FONT_PROPERTIES = ["font-weight", "font-family", "font-style", "color"];
+function px(value) {
+  return Number.parseFloat(value) || 0;
+}
+function plannedStyle(el, view) {
+  const own = view.getComputedStyle(el);
+  const decls = [];
+  const cls = el.classList;
+  if (cls.contains("vo-line")) decls.push(`display: ${own.display}`);
+  if (cls.contains("vo-label")) {
+    decls.push(`margin-inline-end: ${own.getPropertyValue("margin-inline-end")}`, "white-space: pre");
+  }
+  if (el.hasAttribute(ENTRY_ATTR)) {
+    decls.push(
+      `padding-inline-start: ${own.getPropertyValue("padding-inline-start")}`,
+      `margin-top: ${own.marginTop}`,
+      "box-sizing: border-box"
+    );
+    const parent = el.parentElement ? view.getComputedStyle(el.parentElement) : null;
+    if (parent) {
+      const ratio = px(own.fontSize) / (px(parent.fontSize) || 1);
+      if (Math.abs(ratio - 1) > 1e-3) decls.push(`font-size: ${Math.round(ratio * 1e4) / 1e4}em`);
+      for (const prop of FONT_PROPERTIES) {
+        const value = own.getPropertyValue(prop);
+        if (value !== parent.getPropertyValue(prop)) decls.push(`${prop}: ${value}`);
+      }
+    }
+  }
+  if (el.hasAttribute(OWNER_ATTR)) decls.push(`margin-inline-start: ${own.getPropertyValue("margin-inline-start")}`);
+  return decls;
+}
+function freezeStyles(root) {
+  var _a;
+  const view = root.ownerDocument.defaultView;
+  if (!view) return;
+  const selector = `.vo-line, .vo-label, [${ENTRY_ATTR}], [${OWNER_ATTR}]`;
+  const plans = Array.from(root.querySelectorAll(selector)).map((el) => [el, plannedStyle(el, view)]);
+  for (const [el, decls] of plans) {
+    const existing = ((_a = el.getAttribute("style")) != null ? _a : "").trim();
+    const joined = decls.join("; ");
+    if (joined === "") continue;
+    el.setAttribute("style", existing === "" ? joined : `${existing.replace(/;?$/, ";")} ${joined}`);
+  }
+}
+function decorateRenderedExport(root, prepared) {
+  const scoped = !root.classList.contains(RENDERED_CLASS);
+  if (scoped) root.classList.add(RENDERED_CLASS);
+  try {
+    new Decorator(root, prepared).run();
+    alignBody(root);
+    freezeStyles(root);
+  } finally {
+    if (scoped) root.classList.remove(RENDERED_CLASS);
+  }
+}
+
 // src/api.ts
 function clone(v) {
   return structuredClone(v);
@@ -432,7 +937,7 @@ function summarize(doc, sigilChar, levels) {
     };
   });
 }
-function createApi(vault, sigilChar, levels) {
+function createApi(vault, sigilChar, levels, view) {
   return {
     async getOutline(path) {
       const file = vault.getFileByPath(path);
@@ -451,6 +956,21 @@ function createApi(vault, sigilChar, levels) {
         if (nodes.length > 0) out.push({ path: file.path, nodes });
       }
       return out;
+    },
+    prepareRenderedExport(path, markdown) {
+      const prepared = prepareRenderedExport(
+        markdown,
+        sigilChar(),
+        levels(),
+        view.viewState(path),
+        view.collapsedIds(path),
+        view.indentBody()
+      );
+      if (prepared === null) return null;
+      return {
+        markdown: prepared.markdown,
+        decorate: (root) => decorateRenderedExport(root, prepared)
+      };
     }
   };
 }
@@ -650,106 +1170,6 @@ function addBodyLine(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
   const offsets = lineStartOffsets(lines);
   const insertAt = ((_a = offsets[entryLine]) != null ? _a : 0) + line.length;
   return { from: insertAt, to: insertAt, insert: "\n" };
-}
-
-// src/core/render.ts
-function mergeRanges(ranges) {
-  if (ranges.length === 0) return [];
-  const sorted = [...ranges].sort((a, b) => a.from - b.from);
-  const merged = [];
-  for (const range of sorted) {
-    const last = merged[merged.length - 1];
-    if (last && range.from <= last.to) {
-      last.to = Math.max(last.to, range.to);
-    } else {
-      merged.push({ ...range });
-    }
-  }
-  return merged;
-}
-function isLineHidden(hidden, line) {
-  for (const range of hidden) {
-    if (line >= range.from && line < range.to) return true;
-  }
-  return false;
-}
-function computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds, indentBody = true) {
-  var _a, _b, _c, _d, _e;
-  const parsed = parseOutline(body, sigilChar);
-  const lines = body.split("\n");
-  const collapseRanges = [];
-  for (const node2 of parsed.flat) {
-    if (node2.id !== null && collapsedIds.has(node2.id) && node2.subtreeEnd > node2.entryLine + 1) {
-      collapseRanges.push({ from: node2.entryLine + 1, to: node2.subtreeEnd });
-    }
-  }
-  const viewStateRanges = [];
-  if (viewState === "outline") {
-    let runStart = null;
-    for (let i = 0; i < parsed.lineCount; i++) {
-      if (isOutlineLine((_a = lines[i]) != null ? _a : "", sigilChar)) {
-        if (runStart !== null) viewStateRanges.push({ from: runStart, to: i });
-        runStart = null;
-      } else if (runStart === null) {
-        runStart = i;
-      }
-    }
-    if (runStart !== null) viewStateRanges.push({ from: runStart, to: parsed.lineCount });
-  } else if (viewState === "body") {
-    for (const node2 of parsed.flat) {
-      viewStateRanges.push({ from: node2.entryLine, to: node2.entryLine + 1 });
-    }
-  }
-  const hiddenLineRanges = mergeRanges([...collapseRanges, ...viewStateRanges]);
-  const labels = /* @__PURE__ */ new Map();
-  const entryLevel2 = /* @__PURE__ */ new Map();
-  const indentLevel = /* @__PURE__ */ new Map();
-  const bodyIndentLevel = /* @__PURE__ */ new Map();
-  const bodyOwnerLine = /* @__PURE__ */ new Map();
-  const foldable = /* @__PURE__ */ new Map();
-  const paragraphBreak = /* @__PURE__ */ new Set();
-  const paragraphBreakBody = /* @__PURE__ */ new Set();
-  const commentLines = /* @__PURE__ */ new Set();
-  for (let i = 0; i < parsed.lineCount; i++) {
-    if (isCommentLine((_b = lines[i]) != null ? _b : "", sigilChar) && !isLineHidden(hiddenLineRanges, i)) commentLines.add(i);
-  }
-  const showLabels = viewState === "outline" || viewState === "both";
-  for (const node2 of parsed.flat) {
-    if (isLineHidden(hiddenLineRanges, node2.entryLine)) {
-      if (hasParagraphFlag((_c = lines[node2.entryLine]) != null ? _c : "", sigilChar)) {
-        for (let line = node2.entryLine + 1; line < node2.subtreeEnd; line++) {
-          if (isLineHidden(hiddenLineRanges, line) || ((_d = lines[line]) != null ? _d : "").trim() === "") continue;
-          paragraphBreakBody.add(line);
-          break;
-        }
-      }
-      continue;
-    }
-    entryLevel2.set(node2.entryLine, node2.level);
-    if (showLabels) labels.set(node2.entryLine, computeLabel(levels, node2));
-    indentLevel.set(node2.entryLine, node2.level);
-    if (hasParagraphFlag((_e = lines[node2.entryLine]) != null ? _e : "", sigilChar)) paragraphBreak.add(node2.entryLine);
-    if (hasFoldableContent(lines, node2)) {
-      foldable.set(node2.entryLine, node2.id !== null && collapsedIds.has(node2.id));
-    }
-  }
-  if (indentBody) {
-    for (const node2 of parsed.flat) {
-      for (let line = node2.ownBodyStart; line < node2.ownBodyEnd; line++) {
-        if (isLineHidden(hiddenLineRanges, line)) continue;
-        bodyIndentLevel.set(line, node2.level);
-        bodyOwnerLine.set(line, node2.entryLine);
-      }
-    }
-  }
-  return { parsed, labels, indentLevel, bodyIndentLevel, bodyOwnerLine, entryLevel: entryLevel2, foldable, paragraphBreak, paragraphBreakBody, commentLines, hiddenLineRanges };
-}
-function hasFoldableContent(lines, node2) {
-  var _a;
-  for (let i = node2.entryLine + 1; i < node2.subtreeEnd; i++) {
-    if (((_a = lines[i]) != null ? _a : "").trim() !== "") return true;
-  }
-  return false;
 }
 
 // src/core/exportFilter.ts
@@ -1677,7 +2097,7 @@ function inlineHost(el) {
     host = only;
   }
 }
-function splitByLineBreak(el) {
+function splitByLineBreak2(el) {
   const segments = [{ nodes: [], br: null }];
   for (const child of Array.from(el.childNodes)) {
     const current = segments[segments.length - 1];
@@ -1702,24 +2122,24 @@ function blockWrapSegment(segment, classes, doc) {
   (_b = segment.br) == null ? void 0 : _b.remove();
   return wrapper;
 }
-var ENTRY_ATTR = "data-vo-entry-line";
-var OWNER_ATTR = "data-vo-owner-line";
+var ENTRY_ATTR2 = "data-vo-entry-line";
+var OWNER_ATTR2 = "data-vo-owner-line";
 var OWNER_LEVEL_ATTR = "data-vo-owner-level";
 var levelOffsetCache = /* @__PURE__ */ new WeakMap();
 function tagForAlignment(el, plan, line) {
   const entryLevel2 = plan.entryLevel.get(line);
   if (entryLevel2 !== void 0) {
-    el.setAttribute(ENTRY_ATTR, String(line));
+    el.setAttribute(ENTRY_ATTR2, String(line));
     el.setAttribute(OWNER_LEVEL_ATTR, String(entryLevel2));
   }
   const owner = plan.bodyOwnerLine.get(line);
   const level = plan.bodyIndentLevel.get(line);
   if (owner !== void 0 && level !== void 0) {
-    el.setAttribute(OWNER_ATTR, String(owner));
+    el.setAttribute(OWNER_ATTR2, String(owner));
     el.setAttribute(OWNER_LEVEL_ATTR, String(level));
   }
 }
-function entryTextOffset(entry) {
+function entryTextOffset2(entry) {
   const text2 = entry.querySelector(".vo-text");
   const rect = text2 == null ? void 0 : text2.getClientRects()[0];
   if (!rect) return null;
@@ -1738,18 +2158,18 @@ function alignBodyIn(root) {
     cache = /* @__PURE__ */ new Map();
     levelOffsetCache.set(preview, cache);
   }
-  const bodies = new Set(blocksIn(root, `[${OWNER_ATTR}]`));
-  for (const entry of blocksIn(root, `[${ENTRY_ATTR}]`)) {
-    const offset = entryTextOffset(entry);
-    const line = entry.getAttribute(ENTRY_ATTR);
+  const bodies = new Set(blocksIn(root, `[${OWNER_ATTR2}]`));
+  for (const entry of blocksIn(root, `[${ENTRY_ATTR2}]`)) {
+    const offset = entryTextOffset2(entry);
+    const line = entry.getAttribute(ENTRY_ATTR2);
     if (offset === null || line === null) continue;
     cache.set(Number(entry.getAttribute(OWNER_LEVEL_ATTR)), offset);
-    for (const body of blocksIn(preview, `[${OWNER_ATTR}="${line}"]`)) bodies.add(body);
+    for (const body of blocksIn(preview, `[${OWNER_ATTR2}="${line}"]`)) bodies.add(body);
   }
   for (const body of bodies) {
-    const owner = body.getAttribute(OWNER_ATTR);
-    const entry = owner !== null ? preview.querySelector(`[${ENTRY_ATTR}="${owner}"]`) : null;
-    const offset = (_a = entry ? entryTextOffset(entry) : null) != null ? _a : cache.get(Number(body.getAttribute(OWNER_LEVEL_ATTR)));
+    const owner = body.getAttribute(OWNER_ATTR2);
+    const entry = owner !== null ? preview.querySelector(`[${ENTRY_ATTR2}="${owner}"]`) : null;
+    const offset = (_a = entry ? entryTextOffset2(entry) : null) != null ? _a : cache.get(Number(body.getAttribute(OWNER_LEVEL_ATTR)));
     if (offset !== null && offset !== void 0) body.setCssProps({ "--vo-body-text-offset": `${offset}px` });
   }
 }
@@ -1833,7 +2253,7 @@ function createReadingPostProcessor(host) {
       return;
     }
     const doc = el.ownerDocument;
-    const segments = splitByLineBreak(inlineHost(el));
+    const segments = splitByLineBreak2(inlineHost(el));
     if (segments.length !== lineEnd - lineStart + 1) {
       for (let line = lineStart; line <= lineEnd; line++) {
         if (isLineHidden(plan.hiddenLineRanges, line)) continue;
@@ -1878,144 +2298,6 @@ function createReadingPostProcessor(host) {
 
 // src/export/exporter.ts
 var import_obsidian3 = require("obsidian");
-
-// src/core/exportBody.ts
-var FENCE_RE = /^\s*(`{3,}|~{3,})/;
-function nextFenceState(line, open) {
-  var _a;
-  const m = FENCE_RE.exec(line);
-  if (!m) return open;
-  const marker = (_a = m[1]) != null ? _a : "";
-  if (open === null) return marker;
-  return marker[0] === open[0] && marker.length >= open.length ? null : open;
-}
-function stripFrontmatter(doc) {
-  var _a, _b;
-  const lines = doc.split("\n");
-  if (((_a = lines[0]) != null ? _a : "").trimEnd() !== "---") return doc;
-  for (let i = 1; i < lines.length; i++) {
-    const t = ((_b = lines[i]) != null ? _b : "").trimEnd();
-    if (t === "---" || t === "...") return lines.slice(i + 1).join("\n");
-  }
-  return doc;
-}
-var FOOTNOTE_RE = /\[\^[^\]\s]+\]|\^\[/;
-var EMBED_RE = /!\[\[/;
-var WIKILINK_RE = /(^|[^!])\[\[/;
-var MD_LINK_RE = /(^|[^!])\[[^\]]*\]\([^)]+\)/;
-function lostKinds(entryText) {
-  const kinds = [];
-  if (FOOTNOTE_RE.test(entryText)) kinds.push("footnote");
-  if (collectCiteKeys(entryText).length > 0) kinds.push("citation");
-  if (WIKILINK_RE.test(entryText) || MD_LINK_RE.test(entryText)) kinds.push("link");
-  if (EMBED_RE.test(entryText)) kinds.push("embed");
-  return kinds;
-}
-var BLOCK_START_RE = /^(?:\s{4,}|\t|#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||:{1,3}(?:\s|$)|`{3,}|~{3,}|(?:[-*_]\s*){3,}$)/;
-function isPlainProse(line) {
-  return line.trim() !== "" && !BLOCK_START_RE.test(line);
-}
-function anchor(sourceLine) {
-  return `\`\\voline{${sourceLine}}\`{=latex}`;
-}
-function extractBody(doc, sigilChar, options = {}) {
-  var _a, _b, _c, _d;
-  const full = parseMetaDocument(doc).body;
-  const stripped = stripFrontmatter(full);
-  const frontmatterLines = full.split("\n").length - stripped.split("\n").length;
-  const lines = stripped.split("\n");
-  const entryRe = outlineLineRegex(sigilChar);
-  const out = [];
-  const lost = [];
-  let fence = null;
-  let lastBlank = true;
-  let lastText = "";
-  let dropped = false;
-  let forceBreak = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = (_a = lines[i]) != null ? _a : "";
-    if (fence === null && isOutlineLine(line, sigilChar)) {
-      const entryText = ((_c = (_b = entryRe.exec(line)) == null ? void 0 : _b[2]) != null ? _c : "").trim();
-      const kinds = lostKinds(entryText);
-      if (kinds.length > 0) lost.push({ line: i, text: entryText, kinds });
-      dropped = true;
-      if (hasParagraphFlag(line, sigilChar)) forceBreak = true;
-      continue;
-    }
-    if (fence === null && isCommentLine(line, sigilChar)) continue;
-    const blank = fence === null && line.trim() === "";
-    if (dropped && !blank && !lastBlank && (forceBreak || !isPlainProse(lastText) || !isPlainProse(line))) {
-      out.push("");
-      lastBlank = true;
-    }
-    dropped = false;
-    forceBreak = false;
-    if (fence !== null || FENCE_RE.test(line)) {
-      fence = nextFenceState(line, fence);
-      out.push(line);
-      lastBlank = false;
-      lastText = line;
-      continue;
-    }
-    if (blank && lastBlank) continue;
-    const numbered = options.lineNumbers === true && !blank && isPlainProse(line);
-    out.push(blank ? "" : numbered ? anchor(i + frontmatterLines + 1) + line : line);
-    lastBlank = blank;
-    if (!blank) lastText = line;
-  }
-  while (out.length > 0 && ((_d = out[out.length - 1]) != null ? _d : "").trim() === "") out.pop();
-  const body = out.join("\n");
-  return { body, lost, isEmpty: body.trim() === "" };
-}
-var CITE_RE = /(^|[^A-Za-z0-9_@.\\])-?@(\{[^}]+\}|[A-Za-z0-9_À-ɏ][A-Za-z0-9_À-ɏ:.#$%&+?<>~/-]*)/g;
-function trimKey(raw) {
-  if (raw.startsWith("{")) return raw.slice(1, -1).trim();
-  return raw.replace(/[^A-Za-z0-9_À-ɏ]+$/, "");
-}
-function stripInlineCode(line) {
-  return line.replace(/(`+)[\s\S]*?\1/g, " ");
-}
-function collectCiteKeys(markdown) {
-  var _a;
-  const keys = [];
-  const seen = /* @__PURE__ */ new Set();
-  let fence = null;
-  for (const line of markdown.split("\n")) {
-    if (fence !== null || FENCE_RE.test(line)) {
-      fence = nextFenceState(line, fence);
-      continue;
-    }
-    const scan = stripInlineCode(line);
-    CITE_RE.lastIndex = 0;
-    let m;
-    while ((m = CITE_RE.exec(scan)) !== null) {
-      const key = trimKey((_a = m[2]) != null ? _a : "");
-      if (key !== "" && !seen.has(key)) {
-        seen.add(key);
-        keys.push(key);
-      }
-    }
-  }
-  return keys;
-}
-function groupKeysByLibrary(keys, known) {
-  var _a;
-  const libraryOf = /* @__PURE__ */ new Map();
-  for (const k of known) if (!libraryOf.has(k.citekey)) libraryOf.set(k.citekey, k.libraryID);
-  const byLibrary = /* @__PURE__ */ new Map();
-  const unknown = [];
-  for (const key of keys) {
-    const lib = libraryOf.get(key);
-    if (lib === void 0) {
-      unknown.push(key);
-      continue;
-    }
-    const list = (_a = byLibrary.get(lib)) != null ? _a : [];
-    list.push(key);
-    byLibrary.set(lib, list);
-  }
-  return { byLibrary, unknown };
-}
 
 // src/core/obsidianMarkdown.ts
 var MAX_EMBED_DEPTH = 5;
@@ -4451,7 +4733,12 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     this.api = createApi(
       this.app.vault,
       () => this.settings.sigil,
-      () => this.settings.levels
+      () => this.settings.levels,
+      {
+        viewState: (path) => this.viewStateFor(path),
+        collapsedIds: (path) => this.collapsedIdsFor(path),
+        indentBody: () => this.settings.indentBody
+      }
     );
     this.applyLevelCssVars();
     this.keymapHost = {

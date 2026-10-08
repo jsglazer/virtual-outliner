@@ -20,10 +20,13 @@
 
 import type { Vault } from 'obsidian';
 
+import { decorateRenderedExport } from './editor/renderedExport';
+import { prepareRenderedExport } from './core/renderedExport';
+
 import { computeLabel } from './core/label';
 import { BLOCK_OPEN, parseMetaDocument } from './core/metadata';
 import { parseOutline } from './core/parser';
-import type { LevelFormat } from './core/types';
+import type { LevelFormat, ViewState } from './core/types';
 
 export interface OutlineNodeSummary {
 	id: string | null;
@@ -41,9 +44,29 @@ export interface FileOutline {
 	nodes: OutlineNodeSummary[];
 }
 
+// For an exporter that renders a note with Obsidian's `MarkdownRenderer`
+// (multi-exporter): render `markdown` in place of the note's own text, then
+// call `decorate` on the element it was rendered into — once the render has
+// settled, while that element is still in the app's document. See
+// core/renderedExport.ts for why this needs both halves.
+export interface RenderedExport {
+	markdown: string;
+	decorate(root: HTMLElement): void;
+}
+
 export interface VirtualOutlinerAPI {
 	getOutline(path: string): Promise<OutlineNodeSummary[]>;
 	getAllOutlines(): Promise<FileOutline[]>;
+	// Null when the note has no outline: render it as it is.
+	prepareRenderedExport(path: string, markdown: string): RenderedExport | null;
+}
+
+// What an export of one note follows: that note's own view and folds, as on
+// screen.
+export interface ExportViewHost {
+	viewState(path: string): ViewState;
+	collapsedIds(path: string): ReadonlySet<string>;
+	indentBody(): boolean;
 }
 
 function clone<T>(v: T): T {
@@ -68,6 +91,7 @@ export function createApi(
 	vault: Vault,
 	sigilChar: () => string,
 	levels: () => readonly LevelFormat[],
+	view: ExportViewHost,
 ): VirtualOutlinerAPI {
 	return {
 		async getOutline(path: string): Promise<OutlineNodeSummary[]> {
@@ -88,6 +112,22 @@ export function createApi(
 				if (nodes.length > 0) out.push({ path: file.path, nodes });
 			}
 			return out;
+		},
+
+		prepareRenderedExport(path: string, markdown: string): RenderedExport | null {
+			const prepared = prepareRenderedExport(
+				markdown,
+				sigilChar(),
+				levels(),
+				view.viewState(path),
+				view.collapsedIds(path),
+				view.indentBody(),
+			);
+			if (prepared === null) return null;
+			return {
+				markdown: prepared.markdown,
+				decorate: (root: HTMLElement) => decorateRenderedExport(root, prepared),
+			};
 		},
 	};
 }

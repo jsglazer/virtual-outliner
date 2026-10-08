@@ -103,6 +103,11 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			this.app.vault,
 			() => this.settings.sigil,
 			() => this.settings.levels,
+			{
+				viewState: (path) => this.viewStateFor(path),
+				collapsedIds: (path) => this.collapsedIdsFor(path),
+				indentBody: () => this.settings.indentBody,
+			},
 		);
 
 		this.applyLevelCssVars();
