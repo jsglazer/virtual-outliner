@@ -28,6 +28,7 @@ Outline-first authoring for Obsidian: lay down a full multi-level outline, then 
 - **Per-node metadata** (Status, Note, or any fields you configure) stored out-of-band in a single `%%md-outline` block at the end of the file, exposed read-only to Dataview/Datacore.
 - **Generate filtered copy** — a command that produces a new file containing only what the current view state shows, with labels materialized into literal text.
 - **Export to PDF** (desktop) — typesets the note's **body text only** into a PDF via pandoc and LaTeX: every outline entry, label, hidden id, and the metadata block are left out, whatever is folded or showing. See [Export to PDF](#export-to-pdf).
+- **Prints outlined through [Multi Exporter](https://github.com/jsglazer/multi-exporter)** — that plugin's paged PDF export shows the outline as it reads on screen: labels, indents, level typography, the note's current view and folds. Comment lines never print. See [Exporting through other plugins](#exporting-through-other-plugins).
 - Full desktop **and** mobile/iPad support.
 
 ## Syntax
@@ -71,6 +72,19 @@ const api = app.plugins.plugins['virtual-outliner'].api;
 const nodes = await api.getOutline(dv.current().file.path);
 dv.table(['Label', 'Text', 'Status'], nodes.map(n => [n.label, n.text, n.meta?.Status ?? '']));
 ```
+
+## Exporting through other plugins
+
+Obsidian's off-screen renderer (`MarkdownRenderer.render`, which exporters such as Multi Exporter use) gives post-processors no section info, so the Reading-view rendering cannot run there and the raw sigils would print. The public API offers the same work in two halves instead:
+
+```js
+const api = app.plugins.plugins['virtual-outliner'].api;
+const prepared = api.prepareRenderedExport(file.path, markdown); // null if the note has no outline
+await MarkdownRenderer.render(app, prepared?.markdown ?? markdown, el, file.path, component);
+prepared?.decorate(el); // once the render has settled, while `el` is still in the app's document
+```
+
+`markdown` replaces each entry's sigils with an invisible line anchor and drops whatever the note's current view and folds hide, as well as comment lines. Code fences are left as written. `decorate` adds the labels, gives each source line its own block, and applies entry and body indent. It then writes the resolved styles inline, only what this plugin sets, so the result prints the same in a document that has none of its CSS.
 
 ## Export to PDF
 
