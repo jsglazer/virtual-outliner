@@ -12,9 +12,11 @@
 // element's own child nodes. A section spanning multiple source lines
 // (entries typed with no blank line between them, which Obsidian renders as
 // ONE paragraph joined by `<br>`) is split back into per-line node segments
-// on those `<br>` boundaries so each line still gets its own label; if that
-// split doesn't land exactly one segment per line (an Obsidian rendering
-// shape this module doesn't recognize), the section is left untouched rather
+// on those `<br>` boundaries so each line still gets its own label. Segments
+// are matched to lines by their leading text (core/lineAlign.ts), so a line
+// break swallowed by an unclosed `$` costs only that line its label; if the
+// segments can't be matched at all (an Obsidian rendering shape this module
+// doesn't recognize), the section is left untouched rather
 // than risk mis-splicing DOM the plugin doesn't fully control — it is still
 // hidden wholesale when every line in it is hidden.
 //
@@ -25,6 +27,7 @@
 import type { MarkdownPostProcessorContext } from 'obsidian';
 import { setIcon } from 'obsidian';
 
+import { alignRunsToLines } from '../core/lineAlign';
 import { parseMetaDocument } from '../core/metadata';
 import { computeRenderPlan, isLineHidden } from '../core/render';
 import type { RenderPlan } from '../core/render';
@@ -402,8 +405,18 @@ export function createReadingPostProcessor(host: ReadingHost) {
 
 		const doc = el.ownerDocument;
 		const segments = splitByLineBreak(inlineHost(el));
+		const lines = body.split('\n');
 
-		if (segments.length !== lineEnd - lineStart + 1) {
+		// Usually one segment per source line, but an inline construct that
+		// spans a line break (an unclosed `$`) merges two lines into one
+		// segment; match segments to lines by their text so one typo costs
+		// only the swallowed line its label, not the whole paragraph.
+		const alignment = alignRunsToLines(
+			segments.map((segment) => segment.nodes.map((node) => node.textContent ?? '').join('')),
+			lines.slice(lineStart, lineEnd + 1),
+		);
+
+		if (!alignment) {
 			// An Obsidian rendering shape this module doesn't recognize —
 			// leave the DOM alone rather than risk mis-splicing it, and fall
 			// back to indenting the whole block by its first visible line.
@@ -419,11 +432,11 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			return;
 		}
 
-		const lines = body.split('\n');
 		for (let i = 0; i < segments.length; i++) {
 			const segment = segments[i];
-			if (!segment) continue;
-			const line = lineStart + i;
+			const offset = alignment[i];
+			if (!segment || offset === undefined) continue;
+			const line = lineStart + offset;
 			const hidden = isLineHidden(plan.hiddenLineRanges, line);
 
 			if (segment.nodes.length === 0) {

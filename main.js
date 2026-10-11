@@ -1990,6 +1990,55 @@ function buildOutlineKeymap(host) {
 
 // src/editor/readingView.ts
 var import_obsidian2 = require("obsidian");
+
+// src/core/lineAlign.ts
+var MARKUP = /[[\]*_`$<>&\\=~%!^|]/;
+function literalLead(line) {
+  const trimmed = line.trimStart();
+  const cut = trimmed.search(MARKUP);
+  return (cut < 0 ? trimmed : trimmed.slice(0, cut)).replace(/\s+/g, " ").trimEnd();
+}
+function normalizeRunText(text2) {
+  return text2.replace(/\s+/g, " ").trimStart();
+}
+function alignRunsToLines(runTexts, lines) {
+  var _a, _b;
+  if (runTexts.length > lines.length) return null;
+  if (runTexts.length === lines.length) return runTexts.map((_, i) => i);
+  if (runTexts.length === 0) return null;
+  const leads = lines.map(literalLead);
+  const matches = (run, line) => {
+    const lead = leads[line];
+    if (lead === void 0) return false;
+    if (lead === "") return "weak";
+    return run.startsWith(lead) ? "strong" : false;
+  };
+  const deficit = lines.length - runTexts.length;
+  const out = [0];
+  let skipped = 0;
+  for (let i = 1; i < runTexts.length; i++) {
+    const prev = (_a = out[i - 1]) != null ? _a : 0;
+    const run = normalizeRunText((_b = runTexts[i]) != null ? _b : "");
+    const next = prev + 1;
+    if (run === "") {
+      out.push(next);
+      continue;
+    }
+    const lastCandidate = Math.min(next + (deficit - skipped), lines.length - (runTexts.length - i));
+    let chosen = null;
+    if (matches(run, next) === "strong") chosen = next;
+    for (let line = next + 1; chosen === null && line <= lastCandidate; line++) {
+      if (matches(run, line) === "strong") chosen = line;
+    }
+    if (chosen === null && matches(run, next) === "weak") chosen = next;
+    if (chosen === null) return null;
+    skipped += chosen - next;
+    out.push(chosen);
+  }
+  return out;
+}
+
+// src/editor/readingView.ts
 function foldClickTarget(el, fold) {
   el.addEventListener("click", (evt) => {
     evt.preventDefault();
@@ -2254,7 +2303,15 @@ function createReadingPostProcessor(host) {
     }
     const doc = el.ownerDocument;
     const segments = splitByLineBreak2(inlineHost(el));
-    if (segments.length !== lineEnd - lineStart + 1) {
+    const lines = body.split("\n");
+    const alignment = alignRunsToLines(
+      segments.map((segment) => segment.nodes.map((node2) => {
+        var _a2;
+        return (_a2 = node2.textContent) != null ? _a2 : "";
+      }).join("")),
+      lines.slice(lineStart, lineEnd + 1)
+    );
+    if (!alignment) {
       for (let line = lineStart; line <= lineEnd; line++) {
         if (isLineHidden(plan.hiddenLineRanges, line)) continue;
         const classes = levelClasses(plan, line);
@@ -2266,11 +2323,11 @@ function createReadingPostProcessor(host) {
       }
       return;
     }
-    const lines = body.split("\n");
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
-      if (!segment) continue;
-      const line = lineStart + i;
+      const offset = alignment[i];
+      if (!segment || offset === void 0) continue;
+      const line = lineStart + offset;
       const hidden = isLineHidden(plan.hiddenLineRanges, line);
       if (segment.nodes.length === 0) {
         if (hidden) (_b = segment.br) == null ? void 0 : _b.remove();
