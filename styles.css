@@ -374,7 +374,34 @@
 	color: var(--text-muted);
 }
 
-.markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-entry-l'],
+/* Space above (Update010). In the editor it is PADDING, not margin: Obsidian's
+   app.css zeroes every editor line's margin with `.cm-content > * { margin: 0
+   !important }`, so the old `margin-top` here always computed to 0px and the
+   setting did nothing in Live Preview. Padding also stays inside the line box
+   CM6 measures, where a margin would throw off its height map. */
+.markdown-source-view.mod-cm6 .cm-content .cm-line[class*='vo-entry-l'] {
+	padding-top: var(--vo-spacing, 0px) !important;
+}
+
+/* Reading view: in an outlined note (`vo-ol`, readingView.ts) the vertical
+   gaps are this plugin's, not the paragraph's. Each `<p>`'s own --p-spacing
+   margins collapsed with an entry's margin-top, so any Space above smaller
+   than the paragraph spacing showed no change at all. A section keeps the
+   paragraph spacing above it, an entry replaces it with Space above, and a
+   block that opens with an entry (`vo-ol-lead`) hands its top margin to that
+   entry's line. */
+.markdown-rendered .vo-ol {
+	margin-block: var(--p-spacing) 0;
+}
+
+.markdown-rendered .vo-ol > p {
+	margin-block: 0;
+}
+
+.markdown-rendered .vo-ol.vo-ol-lead {
+	margin-block-start: 0;
+}
+
 .markdown-rendered [class*='vo-entry-l'] {
 	margin-top: var(--vo-spacing, 0px);
 }

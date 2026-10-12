@@ -348,3 +348,29 @@ describe('body text alignment (Update006 follow-up)', () => {
 		expect(sameTextOffsets(new Map([[0, 30]]), new Map())).toBe(false);
 	});
 });
+
+describe('outlined-line class (Update010)', () => {
+	function outlinedLines(doc: string, viewState: 'outline' | 'both'): number[] {
+		const state = EditorState.create({ doc });
+		const plan = computeRenderPlan(doc, SIGIL, LEVELS, viewState, new Set(), false);
+		const deco = buildOutlineDecorations(fakeView(state), plan, SIGIL);
+		const out: number[] = [];
+		for (const iter = deco.iter(); iter.value !== null; iter.next()) {
+			const cls = (iter.value.spec as { class?: string }).class;
+			if (cls === 'vo-ol') out.push(state.doc.lineAt(iter.from).number);
+		}
+		return out;
+	}
+
+	it('tags every line of an outlined note, blank lines included', () => {
+		expect(outlinedLines(['@ Thesis', '', 'body', '@@ Detail'].join('\n'), 'both')).toEqual([1, 2, 3, 4]);
+	});
+
+	it('skips lines that are hidden', () => {
+		expect(outlinedLines(DOC, 'outline')).toEqual([1, 3]);
+	});
+
+	it('leaves a note with no entries alone', () => {
+		expect(outlinedLines('just prose\nmore prose', 'both')).toEqual([]);
+	});
+});

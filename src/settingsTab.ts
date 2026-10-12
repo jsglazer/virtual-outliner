@@ -607,6 +607,16 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 		);
 		this.addTextRow(
 			containerEl,
+			'Line height',
+			'Line height for every line of an outlined note, e.g. 1.2 (Obsidian\'s default is 1.5). Lower it to pack lines closer together; leave blank to keep Obsidian\'s.',
+			this.plugin.settings.lineHeight,
+			async (value) => {
+				this.plugin.settings.lineHeight = value;
+				await this.plugin.saveSettings();
+			},
+		);
+		this.addTextRow(
+			containerEl,
 			'Label gap',
 			'A CSS length between the number and the entry text.',
 			format.labelGap,

@@ -442,6 +442,20 @@ export function buildOutlineDecorations(
 		}
 	}
 
+	// Every visible line of an outlined note — entries, body, blank lines —
+	// carries `vo-ol`, the hook the Line height setting hangs off. Hidden lines
+	// are skipped: they sit inside a block replacement and have no DOM.
+	if (plan.parsed.flat.length > 0) {
+		let r = 0;
+		for (let lineIndex = 0; lineIndex < lineCount; lineIndex++) {
+			while (r < plan.hiddenLineRanges.length && (plan.hiddenLineRanges[r]?.to ?? 0) <= lineIndex) r++;
+			const range = plan.hiddenLineRanges[r];
+			if (range && range.from <= lineIndex) continue;
+			const line = doc.line(lineIndex + 1);
+			items.push({ from: line.from, to: line.from, deco: Decoration.line({ class: 'vo-ol' }) });
+		}
+	}
+
 	for (const [lineIndex, level] of plan.indentLevel) {
 		if (lineIndex >= lineCount) continue;
 		const line = doc.line(lineIndex + 1);

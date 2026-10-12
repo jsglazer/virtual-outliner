@@ -81,6 +81,9 @@ export interface OutlineSettings {
 	// default, so the markers are never invisible.
 	paragraphColor: string;
 	commentColor: string;
+	// Line height for every line of an outlined note (e.g. '1.2'). '' leaves
+	// Obsidian's own line height alone.
+	lineHeight: string;
 	pdfExport: PdfExportSettings;
 }
 
@@ -176,6 +179,7 @@ export function defaultSettings(): OutlineSettings {
 		toolbarHighlights: defaultToolbarHighlights(),
 		paragraphColor: DEFAULT_PARAGRAPH_COLOR,
 		commentColor: DEFAULT_COMMENT_COLOR,
+		lineHeight: '',
 		pdfExport: defaultPdfExportSettings(),
 	};
 }
@@ -312,6 +316,7 @@ export function normalizeSettings(raw: unknown): OutlineSettings {
 		toolbarHighlights: readToolbarHighlights(raw.toolbarHighlights),
 		paragraphColor: readColor(raw.paragraphColor, fallback.paragraphColor),
 		commentColor: readColor(raw.commentColor, fallback.commentColor),
+		lineHeight: readString(raw.lineHeight, fallback.lineHeight),
 		pdfExport: readPdfExport(raw.pdfExport),
 	};
 }
@@ -363,6 +368,24 @@ export function levelCssVars(levels: readonly LevelFormat[]): Record<string, str
 		vars[`--vo-l${n}-body-indent`] = `calc(${vars[`--vo-l${n}-indent`] ?? '0px'} + ${step})`;
 	}
 	return vars;
+}
+
+// The rule that applies the Line height setting to an outlined note's lines
+// (`vo-ol`, set by both shells), or '' when the setting is blank. It is a
+// whole rule rather than a custom property because a blank setting must leave
+// Obsidian's own line heights — headings included — untouched, which a
+// property-with-fallback can't express. `!important` for the editor for the
+// same reason the indent rules need it: Obsidian's `.cm-line` rules outrank a
+// bare class.
+export function lineHeightCss(settings: OutlineSettings): string {
+	const value = cssValue(settings.lineHeight);
+	if (value === '') return '';
+	return [
+		'.markdown-source-view.mod-cm6 .cm-content .cm-line.vo-ol,',
+		'.markdown-rendered .vo-ol {',
+		`\tline-height: ${value} !important;`,
+		'}',
+	].join('\n');
 }
 
 // Defensive: a free-text CSS value field could contain something that breaks

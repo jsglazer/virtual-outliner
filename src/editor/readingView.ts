@@ -360,6 +360,9 @@ export function createReadingPostProcessor(host: ReadingHost) {
 		);
 
 		const { lineStart, lineEnd } = section;
+		// Only a note that has outline entries is restyled (`vo-ol`: the Line
+		// height hook, and the paragraph-margin reset in styles.css).
+		const outlined = plan.parsed.flat.length > 0;
 		const foldFor = (line: number): FoldControl | null => {
 			const collapsed = plan.foldable.get(line);
 			if (collapsed === undefined) return null;
@@ -371,6 +374,7 @@ export function createReadingPostProcessor(host: ReadingHost) {
 				el.addClass('vo-hidden');
 				return;
 			}
+			if (outlined) el.addClass('vo-ol');
 			for (const cls of levelClasses(plan, lineStart)) {
 				el.addClass(cls);
 			}
@@ -402,6 +406,7 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			el.addClass('vo-hidden');
 			return;
 		}
+		if (outlined) el.addClass('vo-ol');
 
 		const doc = el.ownerDocument;
 		const segments = splitByLineBreak(inlineHost(el));
@@ -432,6 +437,18 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			return;
 		}
 
+		// A block whose first visible line is an entry leaves its own top
+		// margin to that entry's line, so the gap above is exactly Space above
+		// rather than the larger of it and the paragraph spacing.
+		for (let i = 0; i < segments.length; i++) {
+			const segment = segments[i];
+			const offset = alignment[i];
+			if (!segment || offset === undefined || segment.nodes.length === 0) continue;
+			const line = lineStart + offset;
+			if (isLineHidden(plan.hiddenLineRanges, line)) continue;
+			if (outlined && plan.entryLevel.has(line)) el.addClass('vo-ol-lead');
+			break;
+		}
 		for (let i = 0; i < segments.length; i++) {
 			const segment = segments[i];
 			const offset = alignment[i];

@@ -26,6 +26,10 @@ const RENDERED_CLASS = 'markdown-rendered';
 const ENTRY_ATTR = 'data-vo-entry-line';
 const OWNER_ATTR = 'data-vo-owner-line';
 const LEVEL_ATTR = 'data-vo-owner-level';
+// A block of an outlined note, and one whose first line is an entry — the
+// Reading-view classes that carry Line height and the paragraph-margin reset.
+const OUTLINED_CLASS = 'vo-ol';
+const LEAD_CLASS = 'vo-ol-lead';
 
 interface Segment {
 	nodes: ChildNode[];
@@ -79,6 +83,8 @@ class Decorator {
 			if (child.matches(SKIP_SELECTOR)) continue;
 			const anchors = Array.from(child.querySelectorAll(ANCHOR_SELECTOR));
 			if (anchors.length === 0) {
+				// Paragraphs only: a heading or table keeps the exporter's margins.
+				if (child.tagName === 'P') child.classList.add(OUTLINED_CLASS);
 				this.markBody(child);
 				continue;
 			}
@@ -92,6 +98,7 @@ class Decorator {
 	}
 
 	private decorateHost(host: Element): void {
+		host.classList.add(OUTLINED_CLASS);
 		const segments = splitByLineBreak(host);
 		if (segments.length === 1) {
 			const only = segments[0];
@@ -105,6 +112,15 @@ class Decorator {
 			}
 			this.markEntry(host, a, only.nodes);
 			return;
+		}
+		// A block that opens with an entry leaves its top margin to that entry's
+		// line (see `.vo-ol-lead` in styles.css).
+		for (const segment of segments) {
+			if (segment.nodes.length === 0 || isBlankRun(segment.nodes)) continue;
+			const a = segment.nodes.find(isAnchor);
+			if (a?.hasAttribute(GHOST_ATTR)) continue;
+			if (a) host.classList.add(LEAD_CLASS);
+			break;
 		}
 		for (const segment of segments) {
 			const a = segment.nodes.find(isAnchor);
@@ -239,6 +255,20 @@ function plannedStyle(el: HTMLElement, view: Window): string[] {
 			}
 		}
 	}
+	if (cls.contains(OUTLINED_CLASS)) {
+		// The bottom margin goes so an entry's margin-top is the whole gap
+		// above it instead of collapsing into the paragraph spacing; a body
+		// paragraph keeps the exporter's own top margin.
+		decls.push('margin-bottom: 0');
+		if (cls.contains(LEAD_CLASS)) decls.push('margin-top: 0');
+		// Line height as a ratio of the font size, so it scales with whatever
+		// size the exporter prints at; written only when the setting changed it.
+		const parent = el.parentElement ? view.getComputedStyle(el.parentElement) : null;
+		const lineHeight = px(own.lineHeight);
+		if (parent && lineHeight > 0 && own.lineHeight !== parent.lineHeight) {
+			decls.push(`line-height: ${Math.round((lineHeight / (px(own.fontSize) || 1)) * 1000) / 1000}`);
+		}
+	}
 	if (el.hasAttribute(OWNER_ATTR)) decls.push(`margin-inline-start: ${own.getPropertyValue('margin-inline-start')}`);
 	return decls;
 }
@@ -246,7 +276,7 @@ function plannedStyle(el: HTMLElement, view: Window): string[] {
 function freezeStyles(root: HTMLElement): void {
 	const view = root.ownerDocument.defaultView;
 	if (!view) return;
-	const selector = `.vo-line, .vo-label, [${ENTRY_ATTR}], [${OWNER_ATTR}]`;
+	const selector = `.vo-line, .vo-label, .${OUTLINED_CLASS}, [${ENTRY_ATTR}], [${OWNER_ATTR}]`;
 	// Read everything before writing anything: an inline style changes what
 	// its descendants compute.
 	const plans = Array.from(root.querySelectorAll<HTMLElement>(selector)).map((el) => [el, plannedStyle(el, view)] as const);

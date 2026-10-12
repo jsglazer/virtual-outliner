@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	defaultSettings,
 	levelCssVars,
+	lineHeightCss,
 	makeToolbarHighlight,
 	normalizeSettings,
 	toolbarHighlightColor,
@@ -135,5 +136,29 @@ describe('normalizeSettings — PDF export', () => {
 	it('repairs an impossible font size and a blank style', () => {
 		const s = normalizeSettings({ pdfExport: { lastFontSize: '13', cite: ' ', notes: 'x' } }).pdfExport;
 		expect([s.lastFontSize, s.cite, s.notes]).toEqual(['12', 'MLA', 'f']);
+	});
+});
+
+describe('lineHeightCss (Update010)', () => {
+	it('emits no rule when Line height is blank, leaving Obsidian\'s own line heights alone', () => {
+		expect(lineHeightCss(defaultSettings())).toBe('');
+		expect(lineHeightCss({ ...defaultSettings(), lineHeight: '   ' })).toBe('');
+	});
+
+	it('applies a set Line height to outlined lines in both views', () => {
+		const css = lineHeightCss({ ...defaultSettings(), lineHeight: '1.2' });
+		expect(css).toContain('.cm-line.vo-ol');
+		expect(css).toContain('.markdown-rendered .vo-ol');
+		expect(css).toContain('line-height: 1.2 !important;');
+	});
+
+	it('cannot break out of its declaration', () => {
+		const css = lineHeightCss({ ...defaultSettings(), lineHeight: '1.2; } body { color: red' });
+		expect(css.match(/[{}]/g)).toEqual(['{', '}']);
+	});
+
+	it('round-trips through normalizeSettings', () => {
+		expect(normalizeSettings({ lineHeight: '1.3' }).lineHeight).toBe('1.3');
+		expect(normalizeSettings({ lineHeight: 7 }).lineHeight).toBe('');
 	});
 });

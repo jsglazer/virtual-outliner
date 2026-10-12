@@ -706,6 +706,8 @@ var RENDERED_CLASS = "markdown-rendered";
 var ENTRY_ATTR = "data-vo-entry-line";
 var OWNER_ATTR = "data-vo-owner-line";
 var LEVEL_ATTR = "data-vo-owner-level";
+var OUTLINED_CLASS = "vo-ol";
+var LEAD_CLASS = "vo-ol-lead";
 function isElement(node2) {
   return node2.nodeType === Node.ELEMENT_NODE;
 }
@@ -747,6 +749,7 @@ var Decorator = class {
       if (child.matches(SKIP_SELECTOR)) continue;
       const anchors = Array.from(child.querySelectorAll(ANCHOR_SELECTOR));
       if (anchors.length === 0) {
+        if (child.tagName === "P") child.classList.add(OUTLINED_CLASS);
         this.markBody(child);
         continue;
       }
@@ -760,6 +763,7 @@ var Decorator = class {
   }
   decorateHost(host) {
     var _a;
+    host.classList.add(OUTLINED_CLASS);
     const segments = splitByLineBreak(host);
     if (segments.length === 1) {
       const only = segments[0];
@@ -773,6 +777,13 @@ var Decorator = class {
       }
       this.markEntry(host, a, only.nodes);
       return;
+    }
+    for (const segment of segments) {
+      if (segment.nodes.length === 0 || isBlankRun(segment.nodes)) continue;
+      const a = segment.nodes.find(isAnchor);
+      if (a == null ? void 0 : a.hasAttribute(GHOST_ATTR)) continue;
+      if (a) host.classList.add(LEAD_CLASS);
+      break;
     }
     for (const segment of segments) {
       const a = segment.nodes.find(isAnchor);
@@ -889,6 +900,15 @@ function plannedStyle(el, view) {
       }
     }
   }
+  if (cls.contains(OUTLINED_CLASS)) {
+    decls.push("margin-bottom: 0");
+    if (cls.contains(LEAD_CLASS)) decls.push("margin-top: 0");
+    const parent = el.parentElement ? view.getComputedStyle(el.parentElement) : null;
+    const lineHeight = px(own.lineHeight);
+    if (parent && lineHeight > 0 && own.lineHeight !== parent.lineHeight) {
+      decls.push(`line-height: ${Math.round(lineHeight / (px(own.fontSize) || 1) * 1e3) / 1e3}`);
+    }
+  }
   if (el.hasAttribute(OWNER_ATTR)) decls.push(`margin-inline-start: ${own.getPropertyValue("margin-inline-start")}`);
   return decls;
 }
@@ -896,7 +916,7 @@ function freezeStyles(root) {
   var _a;
   const view = root.ownerDocument.defaultView;
   if (!view) return;
-  const selector = `.vo-line, .vo-label, [${ENTRY_ATTR}], [${OWNER_ATTR}]`;
+  const selector = `.vo-line, .vo-label, .${OUTLINED_CLASS}, [${ENTRY_ATTR}], [${OWNER_ATTR}]`;
   const plans = Array.from(root.querySelectorAll(selector)).map((el) => [el, plannedStyle(el, view)]);
   for (const [el, decls] of plans) {
     const existing = ((_a = el.getAttribute("style")) != null ? _a : "").trim();
@@ -1407,6 +1427,7 @@ function defaultSettings() {
     toolbarHighlights: defaultToolbarHighlights(),
     paragraphColor: DEFAULT_PARAGRAPH_COLOR,
     commentColor: DEFAULT_COMMENT_COLOR,
+    lineHeight: "",
     pdfExport: defaultPdfExportSettings()
   };
 }
@@ -1517,6 +1538,7 @@ function normalizeSettings(raw) {
     toolbarHighlights: readToolbarHighlights(raw.toolbarHighlights),
     paragraphColor: readColor(raw.paragraphColor, fallback.paragraphColor),
     commentColor: readColor(raw.commentColor, fallback.commentColor),
+    lineHeight: readString(raw.lineHeight, fallback.lineHeight),
     pdfExport: readPdfExport(raw.pdfExport)
   };
 }
@@ -1550,6 +1572,16 @@ function levelCssVars(levels) {
     vars[`--vo-l${n}-body-indent`] = `calc(${(_b = vars[`--vo-l${n}-indent`]) != null ? _b : "0px"} + ${step})`;
   }
   return vars;
+}
+function lineHeightCss(settings) {
+  const value = cssValue(settings.lineHeight);
+  if (value === "") return "";
+  return [
+    ".markdown-source-view.mod-cm6 .cm-content .cm-line.vo-ol,",
+    ".markdown-rendered .vo-ol {",
+    `	line-height: ${value} !important;`,
+    "}"
+  ].join("\n");
 }
 function cssValue(v) {
   return v.replace(/[;{}<>]/g, "").trim();
@@ -1734,7 +1766,7 @@ var FoldPlaceholderWidget = class extends import_view.WidgetType {
   }
 };
 function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null, textOffsets = /* @__PURE__ */ new Map()) {
-  var _a, _b, _c;
+  var _a, _b, _c, _d, _e;
   const doc = view.state.doc;
   const lineCount = doc.lines;
   const builder = new import_state.RangeSetBuilder();
@@ -1794,6 +1826,16 @@ function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null, tex
       items.push({ from: line.from + segs.textEnd, to: line.to, deco: import_view.Decoration.replace({}) });
     }
   }
+  if (plan.parsed.flat.length > 0) {
+    let r = 0;
+    for (let lineIndex = 0; lineIndex < lineCount; lineIndex++) {
+      while (r < plan.hiddenLineRanges.length && ((_d = (_c = plan.hiddenLineRanges[r]) == null ? void 0 : _c.to) != null ? _d : 0) <= lineIndex) r++;
+      const range = plan.hiddenLineRanges[r];
+      if (range && range.from <= lineIndex) continue;
+      const line = doc.line(lineIndex + 1);
+      items.push({ from: line.from, to: line.from, deco: import_view.Decoration.line({ class: "vo-ol" }) });
+    }
+  }
   for (const [lineIndex, level] of plan.indentLevel) {
     if (lineIndex >= lineCount) continue;
     const line = doc.line(lineIndex + 1);
@@ -1804,7 +1846,7 @@ function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null, tex
     if (lineIndex >= lineCount) continue;
     const line = doc.line(lineIndex + 1);
     const owner = plan.bodyOwnerLine.get(lineIndex);
-    const offset = (_c = owner !== void 0 ? textOffsets.get(owner) : void 0) != null ? _c : offsetByLevel.get(level);
+    const offset = (_e = owner !== void 0 ? textOffsets.get(owner) : void 0) != null ? _e : offsetByLevel.get(level);
     items.push({
       from: line.from,
       to: line.from,
@@ -2261,6 +2303,7 @@ function createReadingPostProcessor(host) {
       host.indentBody(ctx.sourcePath)
     );
     const { lineStart, lineEnd } = section;
+    const outlined = plan.parsed.flat.length > 0;
     const foldFor = (line) => {
       const collapsed = plan.foldable.get(line);
       if (collapsed === void 0) return null;
@@ -2271,6 +2314,7 @@ function createReadingPostProcessor(host) {
         el.addClass("vo-hidden");
         return;
       }
+      if (outlined) el.addClass("vo-ol");
       for (const cls of levelClasses(plan, lineStart)) {
         el.addClass(cls);
       }
@@ -2301,6 +2345,7 @@ function createReadingPostProcessor(host) {
       el.addClass("vo-hidden");
       return;
     }
+    if (outlined) el.addClass("vo-ol");
     const doc = el.ownerDocument;
     const segments = splitByLineBreak2(inlineHost(el));
     const lines = body.split("\n");
@@ -2322,6 +2367,15 @@ function createReadingPostProcessor(host) {
         break;
       }
       return;
+    }
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+      const offset = alignment[i];
+      if (!segment || offset === void 0 || segment.nodes.length === 0) continue;
+      const line = lineStart + offset;
+      if (isLineHidden(plan.hiddenLineRanges, line)) continue;
+      if (outlined && plan.entryLevel.has(line)) el.addClass("vo-ol-lead");
+      break;
     }
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
@@ -4410,6 +4464,16 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
     );
     this.addTextRow(
       containerEl,
+      "Line height",
+      "Line height for every line of an outlined note, e.g. 1.2 (Obsidian's default is 1.5). Lower it to pack lines closer together; leave blank to keep Obsidian's.",
+      this.plugin.settings.lineHeight,
+      async (value) => {
+        this.plugin.settings.lineHeight = value;
+        await this.plugin.saveSettings();
+      }
+    );
+    this.addTextRow(
+      containerEl,
       "Label gap",
       "A CSS length between the number and the entry text.",
       format.labelGap,
@@ -5249,9 +5313,11 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
   applyLevelCssVars() {
     const vars = { ...levelCssVars(this.settings.levels), ...markerCssVars(this.settings) };
     const body = Object.entries(vars).map(([key, value]) => `	${key}: ${value};`).join("\n");
+    const lineHeight = lineHeightCss(this.settings);
     const css = `:root {
 ${body}
-}`;
+}${lineHeight !== "" ? `
+${lineHeight}` : ""}`;
     for (const doc of this.cssVarTargetDocuments()) {
       let el = doc.getElementById(CSS_VAR_STYLE_ID);
       if (!(el instanceof HTMLStyleElement)) {

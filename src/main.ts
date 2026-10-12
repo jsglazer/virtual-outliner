@@ -23,7 +23,7 @@ import { computeRenderPlan, hasFoldableContent } from './core/render';
 import { generateFilteredCopy } from './core/exportFilter';
 import { hasParagraphFlag, isCommentLine, setComment, setParagraphFlag } from './core/sigil';
 import type { OutlineSettings } from './core/settings';
-import { levelCssVars, markerCssVars, normalizeSettings } from './core/settings';
+import { levelCssVars, lineHeightCss, markerCssVars, normalizeSettings } from './core/settings';
 import type { OutlineNode, ViewState } from './core/types';
 import {
 	buildEditorExtension,
@@ -625,7 +625,8 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		const body = Object.entries(vars)
 			.map(([key, value]) => `\t${key}: ${value};`)
 			.join('\n');
-		const css = `:root {\n${body}\n}`;
+		const lineHeight = lineHeightCss(this.settings);
+		const css = `:root {\n${body}\n}${lineHeight !== '' ? `\n${lineHeight}` : ''}`;
 		for (const doc of this.cssVarTargetDocuments()) {
 			let el = doc.getElementById(CSS_VAR_STYLE_ID);
 			if (!(el instanceof HTMLStyleElement)) {
