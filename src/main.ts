@@ -19,7 +19,7 @@ import { appendId, ID_SUFFIX_RE, mintId } from './core/id';
 import { parseMetaDocument, pruneOrphaned } from './core/metadata';
 import { parseOutline } from './core/parser';
 import { ownerNodeAtLine } from './core/ops';
-import { computeRenderPlan, hasFoldableContent } from './core/render';
+import { computeRenderPlan, foldableDescendants, hasFoldableContent } from './core/render';
 import { generateFilteredCopy } from './core/exportFilter';
 import { hasParagraphFlag, isCommentLine, setComment, setParagraphFlag } from './core/sigil';
 import type { OutlineSettings } from './core/settings';
@@ -221,6 +221,24 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		};
 		foldAllCommand('collapse-all-entries', 'Collapse all outline entries', (path) => this.collapseAll(path));
 		foldAllCommand('expand-all-entries', 'Expand all outline entries', (path) => this.expandAll(path));
+
+		const foldInsideCommand = (id: string, name: string, collapse: boolean): void => {
+			this.addCommand({
+				id,
+				name,
+				checkCallback: (checking) => {
+					const view = this.activeEditorView();
+					const path = view ? editorViewPath(view) : null;
+					if (!view || path === null) return false;
+					if (checking) return true;
+					const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
+					this.foldInsideAtLine(path, line, view, collapse);
+					return true;
+				},
+			});
+		};
+		foldInsideCommand('collapse-all-inside-entry', 'Collapse all inside current outline entry', true);
+		foldInsideCommand('expand-all-inside-entry', 'Expand all inside current outline entry', false);
 
 		this.addCommand({
 			id: 'toggle-enter-behavior',
@@ -742,9 +760,19 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	collapseAll(path: string): void {
 		const state = this.states.get(path);
 		if (!state) return;
-		const entry = this.fileStateEntry(path);
 		const eligible = state.parsed.flat.filter((n) => n.children.length > 0 || n.ownBodyStart < n.ownBodyEnd);
-		const view = this.editorFor(path);
+		const missingIdSkipped = this.addCollapsed(path, eligible, this.editorFor(path));
+		void this.persist();
+		this.decorateAllFor(path);
+		this.notifyChange();
+		if (missingIdSkipped) new Notice("Open this note to fold every entry — some don't have a stable ID yet.");
+	}
+
+	// Marks `nodes` collapsed, minting an id (in one edit) for any that has none
+	// yet. Without an editor nothing can be minted, so those are skipped and
+	// true is returned. The caller persists and redecorates.
+	private addCollapsed(path: string, nodes: readonly OutlineNode[], view: EditorView | null): boolean {
+		const entry = this.fileStateEntry(path);
 		let missingIdSkipped = false;
 
 		if (view) {
@@ -754,7 +782,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			const offsets = lineStartOffsets(lines);
 			const changes: { from: number; to: number; insert: string }[] = [];
 			const mintedIds: string[] = [];
-			for (const node of eligible) {
+			for (const node of nodes) {
 				if (node.id !== null) {
 					entry.collapsedIds.add(node.id);
 					continue;
@@ -772,20 +800,57 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			}
 			for (const id of mintedIds) entry.collapsedIds.add(id);
 		} else {
-			for (const node of eligible) {
+			for (const node of nodes) {
 				if (node.id !== null) entry.collapsedIds.add(node.id);
 				else missingIdSkipped = true;
 			}
 		}
-
-		void this.persist();
-		this.decorateAllFor(path);
-		this.notifyChange();
-		if (missingIdSkipped) new Notice("Open this note to fold every entry — some don't have a stable ID yet.");
+		return missingIdSkipped;
 	}
 
 	expandAll(path: string): void {
 		this.fileStateEntry(path).collapsedIds.clear();
+		void this.persist();
+		this.decorateAllFor(path);
+		this.notifyChange();
+	}
+
+	// "Collapse/Expand all inside current outline entry": the document-wide
+	// commands scoped to the subtree of the entry the caret is in (from a body
+	// line, the entry that body belongs to). Collapsing folds every nested
+	// entry but leaves the current one open, so its children show as folded
+	// lines; expanding unfolds the current entry and everything under it.
+	foldInsideAtLine(path: string, lineIndex: number, caretView: EditorView, collapse: boolean): void {
+		const { body } = parseMetaDocument(caretView.state.doc.toString());
+		const flat = parseOutline(body, this.settings.sigil).flat;
+		const node = ownerNodeAtLine(body, lineIndex, this.settings.sigil);
+		if (!node) {
+			new Notice('Put the cursor on an outline entry or its body to fold what is inside it.');
+			return;
+		}
+		const inside = foldableDescendants(flat, node);
+		const entry = this.fileStateEntry(path);
+		if (collapse) {
+			if (inside.length === 0) {
+				new Notice('No nested entries to collapse under this entry.');
+				return;
+			}
+			if (node.id !== null) entry.collapsedIds.delete(node.id);
+			// A caret inside a section about to be hidden would sit in an atomic
+			// block with no rendered position (see toggleFoldAtLine), so it moves
+			// to the end of the outermost such entry's visible text. Appending
+			// ids never shifts lines, so the entry line is still valid after.
+			const caretLine = caretView.state.doc.lineAt(caretView.state.selection.main.head).number - 1;
+			const hiding = inside.find((n) => caretLine > n.entryLine && caretLine < n.subtreeEnd);
+			this.addCollapsed(path, inside, caretView);
+			if (hiding) {
+				const line = caretView.state.doc.line(hiding.entryLine + 1);
+				const idMatch = ID_SUFFIX_RE.exec(line.text);
+				caretView.dispatch({ selection: { anchor: line.from + (idMatch ? idMatch.index : line.text.length) } });
+			}
+		} else {
+			for (const n of [node, ...inside]) if (n.id !== null) entry.collapsedIds.delete(n.id);
+		}
 		void this.persist();
 		this.decorateAllFor(path);
 		this.notifyChange();

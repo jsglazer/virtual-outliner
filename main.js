@@ -649,6 +649,11 @@ function hasFoldableContent(lines, node2) {
   }
   return false;
 }
+function foldableDescendants(flat, node2) {
+  return flat.filter(
+    (n) => n.entryLine > node2.entryLine && n.entryLine < node2.subtreeEnd && (n.children.length > 0 || n.ownBodyStart < n.ownBodyEnd)
+  );
+}
 
 // src/core/renderedExport.ts
 var LINE_ATTR = "data-vo-line";
@@ -4958,6 +4963,23 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     };
     foldAllCommand("collapse-all-entries", "Collapse all outline entries", (path) => this.collapseAll(path));
     foldAllCommand("expand-all-entries", "Expand all outline entries", (path) => this.expandAll(path));
+    const foldInsideCommand = (id, name, collapse) => {
+      this.addCommand({
+        id,
+        name,
+        checkCallback: (checking) => {
+          const view = this.activeEditorView();
+          const path = view ? editorViewPath(view) : null;
+          if (!view || path === null) return false;
+          if (checking) return true;
+          const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
+          this.foldInsideAtLine(path, line, view, collapse);
+          return true;
+        }
+      });
+    };
+    foldInsideCommand("collapse-all-inside-entry", "Collapse all inside current outline entry", true);
+    foldInsideCommand("expand-all-inside-entry", "Expand all inside current outline entry", false);
     this.addCommand({
       id: "toggle-enter-behavior",
       name: "Toggle new entry on next line vs after section",
@@ -5421,12 +5443,21 @@ ${lineHeight}` : ""}`;
     this.flipCollapse(path, id);
   }
   collapseAll(path) {
-    var _a, _b;
     const state = this.states.get(path);
     if (!state) return;
-    const entry = this.fileStateEntry(path);
     const eligible = state.parsed.flat.filter((n) => n.children.length > 0 || n.ownBodyStart < n.ownBodyEnd);
-    const view = this.editorFor(path);
+    const missingIdSkipped = this.addCollapsed(path, eligible, this.editorFor(path));
+    void this.persist();
+    this.decorateAllFor(path);
+    this.notifyChange();
+    if (missingIdSkipped) new import_obsidian7.Notice("Open this note to fold every entry \u2014 some don't have a stable ID yet.");
+  }
+  // Marks `nodes` collapsed, minting an id (in one edit) for any that has none
+  // yet. Without an editor nothing can be minted, so those are skipped and
+  // true is returned. The caller persists and redecorates.
+  addCollapsed(path, nodes, view) {
+    var _a, _b;
+    const entry = this.fileStateEntry(path);
     let missingIdSkipped = false;
     if (view) {
       const doc = view.state.doc.toString();
@@ -5435,7 +5466,7 @@ ${lineHeight}` : ""}`;
       const offsets = lineStartOffsets(lines);
       const changes = [];
       const mintedIds = [];
-      for (const node2 of eligible) {
+      for (const node2 of nodes) {
         if (node2.id !== null) {
           entry.collapsedIds.add(node2.id);
           continue;
@@ -5453,18 +5484,51 @@ ${lineHeight}` : ""}`;
       }
       for (const id of mintedIds) entry.collapsedIds.add(id);
     } else {
-      for (const node2 of eligible) {
+      for (const node2 of nodes) {
         if (node2.id !== null) entry.collapsedIds.add(node2.id);
         else missingIdSkipped = true;
       }
     }
-    void this.persist();
-    this.decorateAllFor(path);
-    this.notifyChange();
-    if (missingIdSkipped) new import_obsidian7.Notice("Open this note to fold every entry \u2014 some don't have a stable ID yet.");
+    return missingIdSkipped;
   }
   expandAll(path) {
     this.fileStateEntry(path).collapsedIds.clear();
+    void this.persist();
+    this.decorateAllFor(path);
+    this.notifyChange();
+  }
+  // "Collapse/Expand all inside current outline entry": the document-wide
+  // commands scoped to the subtree of the entry the caret is in (from a body
+  // line, the entry that body belongs to). Collapsing folds every nested
+  // entry but leaves the current one open, so its children show as folded
+  // lines; expanding unfolds the current entry and everything under it.
+  foldInsideAtLine(path, lineIndex, caretView, collapse) {
+    const { body } = parseMetaDocument(caretView.state.doc.toString());
+    const flat = parseOutline(body, this.settings.sigil).flat;
+    const node2 = ownerNodeAtLine(body, lineIndex, this.settings.sigil);
+    if (!node2) {
+      new import_obsidian7.Notice("Put the cursor on an outline entry or its body to fold what is inside it.");
+      return;
+    }
+    const inside = foldableDescendants(flat, node2);
+    const entry = this.fileStateEntry(path);
+    if (collapse) {
+      if (inside.length === 0) {
+        new import_obsidian7.Notice("No nested entries to collapse under this entry.");
+        return;
+      }
+      if (node2.id !== null) entry.collapsedIds.delete(node2.id);
+      const caretLine = caretView.state.doc.lineAt(caretView.state.selection.main.head).number - 1;
+      const hiding = inside.find((n) => caretLine > n.entryLine && caretLine < n.subtreeEnd);
+      this.addCollapsed(path, inside, caretView);
+      if (hiding) {
+        const line = caretView.state.doc.line(hiding.entryLine + 1);
+        const idMatch = ID_SUFFIX_RE.exec(line.text);
+        caretView.dispatch({ selection: { anchor: line.from + (idMatch ? idMatch.index : line.text.length) } });
+      }
+    } else {
+      for (const n of [node2, ...inside]) if (n.id !== null) entry.collapsedIds.delete(n.id);
+    }
     void this.persist();
     this.decorateAllFor(path);
     this.notifyChange();

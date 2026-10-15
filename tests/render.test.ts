@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeRenderPlan, isLineHidden } from '../src/core/render';
+import { parseOutline } from '../src/core/parser';
+import { computeRenderPlan, foldableDescendants, isLineHidden } from '../src/core/render';
 import { defaultLevelFormat } from '../src/core/settings';
 import type { LevelFormat } from '../src/core/types';
 
@@ -163,5 +164,20 @@ describe('comment lines in the plan', () => {
 		const doc = ['@ A', '@% a note'].join('\n');
 		expect([...computeRenderPlan(doc, '@', levels(), 'outline', new Set()).commentLines]).toEqual([]);
 		expect([...computeRenderPlan(doc, '@', levels(), 'body', new Set()).commentLines]).toEqual([1]);
+	});
+});
+
+describe('foldableDescendants (Update011)', () => {
+	const doc = ['@ A', 'A body', '@@ A.1', '@@@ A.1.a', 'A.1.a body', '@@@ A.1.b', '@@ A.2', 'A.2 body', '@ B', 'B body'].join('\n');
+	const flat = parseOutline(doc, '@').flat;
+	const byText = (t: string) => flat.find((n) => n.text === t)!;
+
+	it('returns foldable entries nested under the node, outer before inner, excluding the node itself', () => {
+		expect(foldableDescendants(flat, byText('A')).map((n) => n.text)).toEqual(['A.1', 'A.1.a', 'A.2']);
+	});
+
+	it('stops at the end of the subtree and skips leaf entries with no body', () => {
+		expect(foldableDescendants(flat, byText('A.1')).map((n) => n.text)).toEqual(['A.1.a']);
+		expect(foldableDescendants(flat, byText('B'))).toEqual([]);
 	});
 });

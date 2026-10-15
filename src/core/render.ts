@@ -201,6 +201,19 @@ export function hasFoldableContent(lines: readonly string[], node: OutlineNode):
 	return false;
 }
 
+// Every entry nested under `node` (not `node` itself) that has something to
+// fold — child entries or body text of its own — in document order, so an
+// outer entry always comes before the entries inside it. `flat` is the
+// parsed outline's document-order node list.
+export function foldableDescendants(flat: readonly OutlineNode[], node: OutlineNode): OutlineNode[] {
+	return flat.filter(
+		(n) =>
+			n.entryLine > node.entryLine &&
+			n.entryLine < node.subtreeEnd &&
+			(n.children.length > 0 || n.ownBodyStart < n.ownBodyEnd),
+	);
+}
+
 export function collapsibleAncestorIds(node: OutlineNode): string[] {
 	const ids: string[] = [];
 	let cur: OutlineNode | null = node.parent;
