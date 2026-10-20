@@ -23,7 +23,7 @@ import { computeRenderPlan, foldableDescendants, hasFoldableContent } from './co
 import { generateFilteredCopy } from './core/exportFilter';
 import { hasParagraphFlag, isCommentLine, setComment, setParagraphFlag } from './core/sigil';
 import type { OutlineSettings } from './core/settings';
-import { levelCssVars, lineHeightCss, markerCssVars, normalizeSettings } from './core/settings';
+import { levelCssVars, lineHeightCss, markerCssVars, nonBreakColorVars, normalizeSettings } from './core/settings';
 import type { OutlineNode, ViewState } from './core/types';
 import {
 	buildEditorExtension,
@@ -646,7 +646,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	}
 
 	private applyLevelCssVars(): void {
-		const vars = { ...levelCssVars(this.settings.levels), ...markerCssVars(this.settings) };
+		const vars = { ...levelCssVars(this.settings.levels), ...nonBreakColorVars(this.settings), ...markerCssVars(this.settings) };
 		const body = Object.entries(vars)
 			.map(([key, value]) => `\t${key}: ${value};`)
 			.join('\n');

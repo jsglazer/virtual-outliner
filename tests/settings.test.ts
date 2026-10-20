@@ -5,6 +5,7 @@ import {
 	levelCssVars,
 	lineHeightCss,
 	makeToolbarHighlight,
+	nonBreakColorVars,
 	normalizeSettings,
 	toolbarHighlightColor,
 } from '../src/core/settings';
@@ -174,5 +175,30 @@ describe('paragraph break and suffix settings', () => {
 		const s = normalizeSettings({ pdfExport: { breaks: { auto: false, maxLevel: 9, ignoreManual: false }, devSuffix: '' } }).pdfExport;
 		expect(s.breaks).toEqual({ auto: false, maxLevel: 6, ignoreManual: false });
 		expect(s.devSuffix).toBe('');
+	});
+});
+
+describe('nonBreakColorVars', () => {
+	const withColor = (auto: boolean, maxLevel: number, enabled = true) => {
+		const s = defaultSettings();
+		s.pdfExport.breaks = { auto, maxLevel, ignoreManual: true };
+		s.nonBreakColor = { enabled, color: '#123456' };
+		return s;
+	};
+
+	it('colours only the levels past Break at levels', () => {
+		const vars = nonBreakColorVars(withColor(true, 2));
+		expect(Object.keys(vars)).toEqual(['--vo-l3-color', '--vo-l4-color', '--vo-l5-color', '--vo-l6-color']);
+		expect(vars['--vo-l3-color']).toBe('#123456');
+	});
+
+	it('does nothing while automatic breaks or the colour are off', () => {
+		expect(nonBreakColorVars(withColor(false, 1))).toEqual({});
+		expect(nonBreakColorVars(withColor(true, 1, false))).toEqual({});
+		expect(nonBreakColorVars(defaultSettings())).toEqual({});
+	});
+
+	it('round-trips through normalizeSettings', () => {
+		expect(normalizeSettings({ nonBreakColor: { enabled: true, color: '#abcdef' } }).nonBreakColor).toEqual({ enabled: true, color: '#abcdef' });
 	});
 });

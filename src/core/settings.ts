@@ -91,6 +91,10 @@ export interface OutlineSettings {
 	// Line height for every line of an outlined note (e.g. '1.2'). '' leaves
 	// Obsidian's own line height alone.
 	lineHeight: string;
+	// A second outline colour for the entries the automatic paragraph-break
+	// rule does NOT reach (levels deeper than Break at levels). Applied only
+	// while that rule is on; see nonBreakColorVars.
+	nonBreakColor: ColorOption;
 	pdfExport: PdfExportSettings;
 }
 
@@ -107,6 +111,18 @@ export function markerCssVars(settings: OutlineSettings): Record<string, string>
 		'--vo-paragraph-color': readColor(settings.paragraphColor, DEFAULT_PARAGRAPH_COLOR),
 		'--vo-comment-color': readColor(settings.commentColor, DEFAULT_COMMENT_COLOR),
 	};
+}
+
+// Overrides levelCssVars' --vo-lN-color for every level past Break at levels,
+// so the entries that will not break read differently from those that will.
+// Nothing while automatic breaks are off or the colour is switched off.
+export function nonBreakColorVars(settings: OutlineSettings): Record<string, string> {
+	const { breaks } = settings.pdfExport;
+	const opt = settings.nonBreakColor;
+	if (!breaks.auto || !opt.enabled || !/^#[0-9a-fA-F]{6}$/.test(opt.color)) return {};
+	const vars: Record<string, string> = {};
+	for (let n = breaks.maxLevel + 1; n <= MAX_LEVEL; n++) vars[`--vo-l${n}-color`] = opt.color;
+	return vars;
 }
 
 export function defaultParagraphBreaks(): ParagraphBreaks {
@@ -205,6 +221,7 @@ export function defaultSettings(): OutlineSettings {
 		paragraphColor: DEFAULT_PARAGRAPH_COLOR,
 		commentColor: DEFAULT_COMMENT_COLOR,
 		lineHeight: '',
+		nonBreakColor: colorOption(),
 		pdfExport: defaultPdfExportSettings(),
 	};
 }
@@ -345,6 +362,7 @@ export function normalizeSettings(raw: unknown): OutlineSettings {
 		paragraphColor: readColor(raw.paragraphColor, fallback.paragraphColor),
 		commentColor: readColor(raw.commentColor, fallback.commentColor),
 		lineHeight: readString(raw.lineHeight, fallback.lineHeight),
+		nonBreakColor: readColorOption(raw.nonBreakColor),
 		pdfExport: readPdfExport(raw.pdfExport),
 	};
 }

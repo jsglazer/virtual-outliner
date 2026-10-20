@@ -270,12 +270,32 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 					breaks.auto = v;
 					levelSetting.settingEl.hidden = !v;
 					manualSetting.settingEl.hidden = !v;
+					colorSetting.settingEl.hidden = !v;
+					await this.plugin.saveSettings();
+				}),
+			);
+		const nonBreak = this.plugin.settings.nonBreakColor;
+		const colorSetting = new Setting(containerEl)
+			.setName('Colour of entries that don\'t break')
+			.setDesc('A second outline colour, in the editor and in prints, for entries deeper than the break levels above — the ones the automatic rule leaves joined. Off: every level keeps its own colour.')
+			.addToggle((t) =>
+				t.setValue(nonBreak.enabled).onChange(async (v) => {
+					nonBreak.enabled = v;
+					if (v && !isValidHex(nonBreak.color)) nonBreak.color = '#888888';
+					await this.plugin.saveSettings();
+				}),
+			)
+			.addColorPicker((picker) =>
+				picker.setValue(isValidHex(nonBreak.color) ? nonBreak.color : '#888888').onChange(async (v) => {
+					nonBreak.color = v;
 					await this.plugin.saveSettings();
 				}),
 			);
 		levelSetting.settingEl.before(autoSetting.settingEl);
+		manualSetting.settingEl.after(colorSetting.settingEl);
 		levelSetting.settingEl.hidden = !breaks.auto;
 		manualSetting.settingEl.hidden = !breaks.auto;
+		colorSetting.settingEl.hidden = !breaks.auto;
 		new Setting(containerEl)
 			.setName('Open PDF after export')
 			.addToggle((t) =>
