@@ -162,3 +162,17 @@ describe('lineHeightCss (Update010)', () => {
 		expect(normalizeSettings({ lineHeight: 7 }).lineHeight).toBe('');
 	});
 });
+
+describe('paragraph break and suffix settings', () => {
+	it('defaults to automatic level-1 breaks that ignore manual ones, and a -Dev suffix', () => {
+		const s = normalizeSettings({}).pdfExport;
+		expect(s.breaks).toEqual({ auto: true, maxLevel: 1, ignoreManual: true });
+		expect([s.devSuffix, s.submitSuffix, s.includeOutline]).toEqual(['-Dev', '-Submit', false]);
+	});
+
+	it('clamps the max level and keeps saved values', () => {
+		const s = normalizeSettings({ pdfExport: { breaks: { auto: false, maxLevel: 9, ignoreManual: false }, devSuffix: '' } }).pdfExport;
+		expect(s.breaks).toEqual({ auto: false, maxLevel: 6, ignoreManual: false });
+		expect(s.devSuffix).toBe('');
+	});
+});

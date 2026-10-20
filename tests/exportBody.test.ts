@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { collectCiteKeys, extractBody, groupKeysByLibrary, stripFrontmatter } from '../src/core/exportBody';
+import { breaksBefore, collectCiteKeys, extractBody, groupKeysByLibrary, stripFrontmatter } from '../src/core/exportBody';
+import { defaultLevelFormat } from '../src/core/settings';
 
 describe('extractBody', () => {
 	it('joins prose across a dropped entry into one paragraph', () => {
@@ -176,5 +177,67 @@ describe('comment lines', () => {
 	it('is ordinary text inside a fenced code block', () => {
 		const doc = ['```', '@% not a comment here', '```'].join('\n');
 		expect(extractBody(doc, '@').body).toContain('@% not a comment here');
+	});
+});
+
+describe('automatic paragraph breaks', () => {
+	const auto = { auto: true, maxLevel: 2, ignoreManual: true };
+	const keepManual = { ...auto, ignoreManual: false };
+
+	it('breaks at entries down to the max level, and only those', () => {
+		expect(breaksBefore('@ One', '@', auto)).toBe(true);
+		expect(breaksBefore('@@ Two', '@', auto)).toBe(true);
+		expect(breaksBefore('@@@ Three', '@', auto)).toBe(false);
+		expect(breaksBefore('Prose', '@', auto)).toBe(false);
+	});
+
+	it('ignores the p flag when told to, and honours it otherwise', () => {
+		expect(breaksBefore('@@@p Three', '@', auto)).toBe(false);
+		expect(breaksBefore('@@@p Three', '@', keepManual)).toBe(true);
+		expect(breaksBefore('@@@p Three', '@', { ...auto, auto: false })).toBe(true);
+		expect(breaksBefore('@@@p Three', '@')).toBe(true);
+	});
+
+	it('joins and breaks the body by level', () => {
+		const doc = ['@ One', 'A', '@@@p Deep', 'B', '@@ Two', 'C'].join('\n');
+		expect(extractBody(doc, '@', { breaks: auto }).body).toBe(['A', 'B', '', 'C'].join('\n'));
+		expect(extractBody(doc, '@', { breaks: keepManual }).body).toBe(['A', '', 'B', '', 'C'].join('\n'));
+	});
+});
+
+describe('extractBody with the outline printed', () => {
+	const levels = [1, 2, 3, 4, 5, 6].map((l) => defaultLevelFormat(l));
+	const breaks = { auto: true, maxLevel: 1, ignoreManual: true };
+
+	it('prints each entry as its own labelled paragraph, gap only where it breaks', () => {
+		const doc = ['@ Intro ^o-aaaaaaaa', 'Prose A', '@@ Sub', 'Prose B'].join('\n');
+		const out = extractBody(doc, '@', { outline: { levels }, breaks });
+		expect(out.body).toBe(
+			[
+				'`\\voentry{1}{0em}{\\bfseries}{1.0}`{=latex}Intro`\\voentryend{}`{=latex}',
+				'',
+				'Prose A',
+				'',
+				'`\\voentry{0}{1.5em}{}{1.1}`{=latex}Sub`\\voentryend{}`{=latex}',
+				'',
+				'Prose B',
+			].join('\n'),
+		);
+	});
+
+	it('loses nothing written on entries, and still drops bare entries and comments', () => {
+		const out = extractBody(['@ See [[Other]]', '@@ ', '@% note to self', 'Body'].join('\n'), '@', { outline: { levels } });
+		expect(out.lost).toEqual([]);
+		expect(out.body).not.toContain('note to self');
+		expect(out.body.split('\n').filter((l) => l.includes('voentry{')).length).toBe(1);
+	});
+
+	it('is not empty for a note that is all outline', () => {
+		expect(extractBody('@ A\n@@ B', '@', { outline: { levels } }).isEmpty).toBe(false);
+	});
+
+	it('escapes LaTeX in labels and anchors entry line numbers', () => {
+		const out = extractBody(['---', 'a: 1', '---', '@ A'].join('\n'), '@', { outline: { levels }, lineNumbers: true });
+		expect(out.body).toContain('`\\voline{4}`{=latex}A');
 	});
 });

@@ -4,6 +4,7 @@
 // regenerated <style> element by the shell rather than duplicated per
 // decoration (Decision #12's per-level typography approach).
 
+import type { ParagraphBreaks } from './exportBody';
 import type { NotesMode } from './exportOptions';
 import { CITE_STYLES, FONT_SIZES } from './exportOptions';
 import { DEFAULT_SIGIL_CHAR, MAX_LEVEL } from './sigil';
@@ -58,9 +59,15 @@ export interface PdfExportSettings {
 	notes: NotesMode;
 	cite: string;
 	lastFontSize: string;
-	// What a Submit export offers to append to the file name — remembered from
-	// the last export, so the usual suffix is one keystroke away.
+	// What each version appends to the file name, filled in for real in the
+	// dialog and remembered from the last export of that version.
 	submitSuffix: string;
+	devSuffix: string;
+	// Print the outline entries along with the body (the dialog's default).
+	includeOutline: boolean;
+	// Automatic paragraph breaks at outline entries, also followed by the
+	// multi-exporter render (core/renderedExport.ts).
+	breaks: ParagraphBreaks;
 	keepBuildFiles: boolean;
 	openAfterExport: boolean;
 }
@@ -102,6 +109,21 @@ export function markerCssVars(settings: OutlineSettings): Record<string, string>
 	};
 }
 
+export function defaultParagraphBreaks(): ParagraphBreaks {
+	return { auto: true, maxLevel: 1, ignoreManual: true };
+}
+
+function readParagraphBreaks(v: unknown): ParagraphBreaks {
+	const fallback = defaultParagraphBreaks();
+	if (!isRecord(v)) return fallback;
+	const level = typeof v.maxLevel === 'number' && Number.isInteger(v.maxLevel) ? v.maxLevel : fallback.maxLevel;
+	return {
+		auto: readBool(v.auto, fallback.auto),
+		maxLevel: Math.min(Math.max(level, 1), MAX_LEVEL),
+		ignoreManual: readBool(v.ignoreManual, fallback.ignoreManual),
+	};
+}
+
 export function defaultPdfExportSettings(): PdfExportSettings {
 	return {
 		preamble: '',
@@ -112,6 +134,9 @@ export function defaultPdfExportSettings(): PdfExportSettings {
 		cite: 'MLA',
 		lastFontSize: '12',
 		submitSuffix: '-Submit',
+		devSuffix: '-Dev',
+		includeOutline: false,
+		breaks: defaultParagraphBreaks(),
 		keepBuildFiles: false,
 		openAfterExport: false,
 	};
@@ -279,6 +304,9 @@ function readPdfExport(v: unknown): PdfExportSettings {
 		cite: cite !== '' ? cite : CITE_STYLES[0] ?? 'MLA',
 		lastFontSize: FONT_SIZES.includes(size) ? size : fallback.lastFontSize,
 		submitSuffix: readString(v.submitSuffix, fallback.submitSuffix),
+		devSuffix: readString(v.devSuffix, fallback.devSuffix),
+		includeOutline: readBool(v.includeOutline, fallback.includeOutline),
+		breaks: readParagraphBreaks(v.breaks),
 		keepBuildFiles: readBool(v.keepBuildFiles, fallback.keepBuildFiles),
 		openAfterExport: readBool(v.openAfterExport, fallback.openAfterExport),
 	};

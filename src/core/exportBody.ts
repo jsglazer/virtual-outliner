@@ -17,9 +17,33 @@
 // misread as lazy continuation of the block before it.
 //
 // Comment lines (`@% …`) are dropped outright, in every variant.
+//
+// Automatic paragraph breaks (Update012): with `breaks.auto` on, every entry
+// at level 1..`breaks.maxLevel` breaks as if it carried the flag, and
+// `breaks.ignoreManual` decides whether the flags the note does carry still
+// count. With the outline printed too, the break sits BEFORE the entry line.
 
+import { computeLabel } from './label';
 import { parseMetaDocument } from './metadata';
-import { hasParagraphFlag, isCommentLine, isOutlineLine, outlineLineRegex } from './sigil';
+import { parseOutline } from './parser';
+import { hasParagraphFlag, isCommentLine, isOutlineLine, MAX_LEVEL, outlineLineRegex } from './sigil';
+import type { LevelFormat } from './types';
+
+export interface ParagraphBreaks {
+	auto: boolean;
+	maxLevel: number; // 1..MAX_LEVEL
+	ignoreManual: boolean;
+}
+
+// Whether an entry line starts a new paragraph. No `breaks` means the note's
+// own flags alone, as before automatic breaks existed.
+export function breaksBefore(line: string, sigilChar: string, breaks?: ParagraphBreaks): boolean {
+	const manual = hasParagraphFlag(line, sigilChar);
+	if (!breaks?.auto) return manual;
+	const level = outlineLineRegex(sigilChar).exec(line)?.[1]?.length ?? 0;
+	const auto = level > 0 && level <= Math.min(Math.max(breaks.maxLevel, 1), MAX_LEVEL);
+	return auto || (!breaks.ignoreManual && manual);
+}
 
 export type LostKind = 'footnote' | 'citation' | 'link' | 'embed';
 
@@ -95,6 +119,36 @@ function anchor(sourceLine: number): string {
 export interface ExtractOptions {
 	// Prefix each plain-prose line with its editor line number (Dev exports).
 	lineNumbers?: boolean;
+	// Where entries start a new paragraph; see breaksBefore.
+	breaks?: ParagraphBreaks;
+	// Print the outline too: each entry line becomes a paragraph of its own,
+	// labelled and styled by its level (renderer/job.py ENTRY_TEX).
+	outline?: { levels: readonly LevelFormat[] };
+}
+
+function latexEscape(text: string): string {
+	return text.replace(/[\\&%$#_{}~^]/g, (ch) => {
+		if (ch === '\\') return '\\textbackslash{}';
+		if (ch === '~') return '\\textasciitilde{}';
+		if (ch === '^') return '\\textasciicircum{}';
+		return `\\${ch}`;
+	});
+}
+
+function isBold(weight: string): boolean {
+	const w = weight.trim().toLowerCase();
+	return w === 'bold' || w === 'bolder' || Number(w) >= 600;
+}
+
+// One printed entry: `\voentry{gap}{indent}{font}{label}` opens it and
+// `\voentryend` closes it, as raw LaTeX either side of the entry's own text
+// so pandoc still converts that text's Markdown. gap 1 keeps the paragraph
+// space above it (a break), gap 0 sets it tight against what came before.
+function entryParagraph(level: number, label: string, text: string, gap: boolean, format: LevelFormat | undefined, lineAnchor: string): string {
+	const font = `${format && isBold(format.fontWeight) ? '\\bfseries' : ''}${format?.italic ? '\\itshape' : ''}`;
+	const indent = `${(level - 1) * 1.5}em`;
+	const open = `\\voentry{${gap ? 1 : 0}}{${indent}}{${font}}{${latexEscape(label)}}`;
+	return `\`${open}\`{=latex}${lineAnchor}${text}\`\\voentryend{}\`{=latex}`;
 }
 
 export function extractBody(doc: string, sigilChar: string, options: ExtractOptions = {}): BodyExtraction {
@@ -111,16 +165,31 @@ export function extractBody(doc: string, sigilChar: string, options: ExtractOpti
 	let lastBlank = true; // suppresses leading blank lines too
 	let lastText = ''; // the last non-blank line emitted
 	let dropped = false; // an entry line was removed since the last body line
-	let forceBreak = false; // …and at least one of them carried the flag
+	let forceBreak = false; // …and at least one of them breaks the paragraph
+	// Printed entries, by line: parseOutline already skips fences and bare
+	// `@@ ` lines, so a line found here is one the PDF shows.
+	const printed = options.outline ? new Map(parseOutline(stripped, sigilChar).flat.map((n) => [n.entryLine, n] as const)) : null;
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i] ?? '';
+		const node = fence === null ? printed?.get(i) : undefined;
+		if (node && options.outline) {
+			if (!lastBlank) out.push('');
+			const lineAnchor = options.lineNumbers === true ? anchor(i + frontmatterLines + 1) : '';
+			const format = options.outline.levels[node.level - 1];
+			const gap = breaksBefore(line, sigilChar, options.breaks);
+			out.push(entryParagraph(node.level, computeLabel(options.outline.levels, node), node.text, gap, format, lineAnchor), '');
+			lastBlank = true;
+			dropped = false;
+			forceBreak = false;
+			continue;
+		}
 		if (fence === null && isOutlineLine(line, sigilChar)) {
 			const entryText = (entryRe.exec(line)?.[2] ?? '').trim();
 			const kinds = lostKinds(entryText);
-			if (kinds.length > 0) lost.push({ line: i, text: entryText, kinds });
+			if (kinds.length > 0 && !printed) lost.push({ line: i, text: entryText, kinds });
 			dropped = true;
-			if (hasParagraphFlag(line, sigilChar)) forceBreak = true;
+			if (breaksBefore(line, sigilChar, options.breaks)) forceBreak = true;
 			continue;
 		}
 		// A comment line leaves no trace: unlike an entry line it does not even

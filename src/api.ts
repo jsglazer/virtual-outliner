@@ -21,6 +21,7 @@
 import type { Vault } from 'obsidian';
 
 import { decorateRenderedExport } from './editor/renderedExport';
+import type { ParagraphBreaks } from './core/exportBody';
 import { prepareRenderedExport } from './core/renderedExport';
 
 import { computeLabel } from './core/label';
@@ -67,6 +68,7 @@ export interface ExportViewHost {
 	viewState(path: string): ViewState;
 	collapsedIds(path: string): ReadonlySet<string>;
 	indentBody(): boolean;
+	paragraphBreaks(): ParagraphBreaks;
 }
 
 function clone<T>(v: T): T {
@@ -122,6 +124,7 @@ export function createApi(
 				view.viewState(path),
 				view.collapsedIds(path),
 				view.indentBody(),
+				view.paragraphBreaks(),
 			);
 			if (prepared === null) return null;
 			return {

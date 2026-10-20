@@ -25,6 +25,107 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian7 = require("obsidian");
 
+// src/core/label.ts
+var ROMAN_TABLE = [
+  [1e3, "M"],
+  [900, "CM"],
+  [500, "D"],
+  [400, "CD"],
+  [100, "C"],
+  [90, "XC"],
+  [50, "L"],
+  [40, "XL"],
+  [10, "X"],
+  [9, "IX"],
+  [5, "V"],
+  [4, "IV"],
+  [1, "I"]
+];
+function toRoman(n) {
+  if (n <= 0) return String(n);
+  let value = n;
+  let out = "";
+  for (const [amount, numeral] of ROMAN_TABLE) {
+    while (value >= amount) {
+      out += numeral;
+      value -= amount;
+    }
+  }
+  return out;
+}
+function toAlpha(n) {
+  if (n <= 0) return String(n);
+  let value = n;
+  let out = "";
+  while (value > 0) {
+    const rem = (value - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    value = Math.floor((value - 1) / 26);
+  }
+  return out;
+}
+function dottedPath(indices) {
+  return indices.join(".");
+}
+function segmentFor(style, ownIndex, pathIndices, hasDeeperSegment, hasShallowerSegment) {
+  switch (style) {
+    case "1":
+      return String(ownIndex);
+    case "1.0":
+      return hasDeeperSegment || hasShallowerSegment ? String(ownIndex) : `${ownIndex}.0`;
+    case "1.1":
+      return dottedPath(pathIndices);
+    case "I":
+      return toRoman(ownIndex);
+    case "i":
+      return toRoman(ownIndex).toLowerCase();
+    case "A":
+      return toAlpha(ownIndex);
+    case "a":
+      return toAlpha(ownIndex).toLowerCase();
+    case "bullet":
+      return "\u2022";
+    case "none":
+      return "";
+  }
+}
+function ancestorChain(node2) {
+  const chain = [];
+  let cur = node2;
+  while (cur) {
+    chain.unshift(cur);
+    cur = cur.parent;
+  }
+  return chain;
+}
+function computeLabel(levelFormats, node2) {
+  const chain = ancestorChain(node2);
+  const pathIndices = chain.map((n) => n.siblingIndex);
+  const formats = chain.map((n) => {
+    var _a, _b;
+    return (_b = (_a = levelFormats[n.level - 1]) != null ? _a : levelFormats[levelFormats.length - 1]) != null ? _b : null;
+  });
+  const segments = [];
+  for (let i = 0; i < chain.length; i++) {
+    const ancestor = chain[i];
+    const format = formats[i];
+    if (!ancestor || !format) continue;
+    let hasDeeperSegment = false;
+    for (let j = i + 1; j < chain.length; j++) {
+      const deeper = formats[j];
+      if (deeper && deeper.style !== "none") {
+        hasDeeperSegment = true;
+        break;
+      }
+    }
+    const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment, segments.length > 0);
+    if (segment === "") continue;
+    const prefix = segments.length === 0 ? "" : format.separator;
+    segments.push(prefix + segment);
+  }
+  return segments.join("");
+}
+
 // src/core/metadata.ts
 var BLOCK_OPEN = "%%md-outline";
 var BLOCK_CLOSE = "%%";
@@ -222,245 +323,6 @@ function isRiskySigil(char) {
   return RISKY_SIGILS.has(char) || /[0-9]/.test(char) || /\s/.test(char);
 }
 
-// src/core/exportBody.ts
-var FENCE_RE = /^\s*(`{3,}|~{3,})/;
-function nextFenceState(line, open) {
-  var _a;
-  const m = FENCE_RE.exec(line);
-  if (!m) return open;
-  const marker = (_a = m[1]) != null ? _a : "";
-  if (open === null) return marker;
-  return marker[0] === open[0] && marker.length >= open.length ? null : open;
-}
-function stripFrontmatter(doc) {
-  var _a, _b;
-  const lines = doc.split("\n");
-  if (((_a = lines[0]) != null ? _a : "").trimEnd() !== "---") return doc;
-  for (let i = 1; i < lines.length; i++) {
-    const t = ((_b = lines[i]) != null ? _b : "").trimEnd();
-    if (t === "---" || t === "...") return lines.slice(i + 1).join("\n");
-  }
-  return doc;
-}
-var FOOTNOTE_RE = /\[\^[^\]\s]+\]|\^\[/;
-var EMBED_RE = /!\[\[/;
-var WIKILINK_RE = /(^|[^!])\[\[/;
-var MD_LINK_RE = /(^|[^!])\[[^\]]*\]\([^)]+\)/;
-function lostKinds(entryText) {
-  const kinds = [];
-  if (FOOTNOTE_RE.test(entryText)) kinds.push("footnote");
-  if (collectCiteKeys(entryText).length > 0) kinds.push("citation");
-  if (WIKILINK_RE.test(entryText) || MD_LINK_RE.test(entryText)) kinds.push("link");
-  if (EMBED_RE.test(entryText)) kinds.push("embed");
-  return kinds;
-}
-var BLOCK_START_RE = /^(?:\s{4,}|\t|#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||:{1,3}(?:\s|$)|`{3,}|~{3,}|(?:[-*_]\s*){3,}$)/;
-function isPlainProse(line) {
-  return line.trim() !== "" && !BLOCK_START_RE.test(line);
-}
-function anchor(sourceLine) {
-  return `\`\\voline{${sourceLine}}\`{=latex}`;
-}
-function extractBody(doc, sigilChar, options = {}) {
-  var _a, _b, _c, _d;
-  const full = parseMetaDocument(doc).body;
-  const stripped = stripFrontmatter(full);
-  const frontmatterLines = full.split("\n").length - stripped.split("\n").length;
-  const lines = stripped.split("\n");
-  const entryRe = outlineLineRegex(sigilChar);
-  const out = [];
-  const lost = [];
-  let fence = null;
-  let lastBlank = true;
-  let lastText = "";
-  let dropped = false;
-  let forceBreak = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = (_a = lines[i]) != null ? _a : "";
-    if (fence === null && isOutlineLine(line, sigilChar)) {
-      const entryText = ((_c = (_b = entryRe.exec(line)) == null ? void 0 : _b[2]) != null ? _c : "").trim();
-      const kinds = lostKinds(entryText);
-      if (kinds.length > 0) lost.push({ line: i, text: entryText, kinds });
-      dropped = true;
-      if (hasParagraphFlag(line, sigilChar)) forceBreak = true;
-      continue;
-    }
-    if (fence === null && isCommentLine(line, sigilChar)) continue;
-    const blank = fence === null && line.trim() === "";
-    if (dropped && !blank && !lastBlank && (forceBreak || !isPlainProse(lastText) || !isPlainProse(line))) {
-      out.push("");
-      lastBlank = true;
-    }
-    dropped = false;
-    forceBreak = false;
-    if (fence !== null || FENCE_RE.test(line)) {
-      fence = nextFenceState(line, fence);
-      out.push(line);
-      lastBlank = false;
-      lastText = line;
-      continue;
-    }
-    if (blank && lastBlank) continue;
-    const numbered = options.lineNumbers === true && !blank && isPlainProse(line);
-    out.push(blank ? "" : numbered ? anchor(i + frontmatterLines + 1) + line : line);
-    lastBlank = blank;
-    if (!blank) lastText = line;
-  }
-  while (out.length > 0 && ((_d = out[out.length - 1]) != null ? _d : "").trim() === "") out.pop();
-  const body = out.join("\n");
-  return { body, lost, isEmpty: body.trim() === "" };
-}
-var CITE_RE = /(^|[^A-Za-z0-9_@.\\])-?@(\{[^}]+\}|[A-Za-z0-9_À-ɏ][A-Za-z0-9_À-ɏ:.#$%&+?<>~/-]*)/g;
-function trimKey(raw) {
-  if (raw.startsWith("{")) return raw.slice(1, -1).trim();
-  return raw.replace(/[^A-Za-z0-9_À-ɏ]+$/, "");
-}
-function stripInlineCode(line) {
-  return line.replace(/(`+)[\s\S]*?\1/g, " ");
-}
-function collectCiteKeys(markdown) {
-  var _a;
-  const keys = [];
-  const seen = /* @__PURE__ */ new Set();
-  let fence = null;
-  for (const line of markdown.split("\n")) {
-    if (fence !== null || FENCE_RE.test(line)) {
-      fence = nextFenceState(line, fence);
-      continue;
-    }
-    const scan = stripInlineCode(line);
-    CITE_RE.lastIndex = 0;
-    let m;
-    while ((m = CITE_RE.exec(scan)) !== null) {
-      const key = trimKey((_a = m[2]) != null ? _a : "");
-      if (key !== "" && !seen.has(key)) {
-        seen.add(key);
-        keys.push(key);
-      }
-    }
-  }
-  return keys;
-}
-function groupKeysByLibrary(keys, known) {
-  var _a;
-  const libraryOf = /* @__PURE__ */ new Map();
-  for (const k of known) if (!libraryOf.has(k.citekey)) libraryOf.set(k.citekey, k.libraryID);
-  const byLibrary = /* @__PURE__ */ new Map();
-  const unknown = [];
-  for (const key of keys) {
-    const lib = libraryOf.get(key);
-    if (lib === void 0) {
-      unknown.push(key);
-      continue;
-    }
-    const list = (_a = byLibrary.get(lib)) != null ? _a : [];
-    list.push(key);
-    byLibrary.set(lib, list);
-  }
-  return { byLibrary, unknown };
-}
-
-// src/core/label.ts
-var ROMAN_TABLE = [
-  [1e3, "M"],
-  [900, "CM"],
-  [500, "D"],
-  [400, "CD"],
-  [100, "C"],
-  [90, "XC"],
-  [50, "L"],
-  [40, "XL"],
-  [10, "X"],
-  [9, "IX"],
-  [5, "V"],
-  [4, "IV"],
-  [1, "I"]
-];
-function toRoman(n) {
-  if (n <= 0) return String(n);
-  let value = n;
-  let out = "";
-  for (const [amount, numeral] of ROMAN_TABLE) {
-    while (value >= amount) {
-      out += numeral;
-      value -= amount;
-    }
-  }
-  return out;
-}
-function toAlpha(n) {
-  if (n <= 0) return String(n);
-  let value = n;
-  let out = "";
-  while (value > 0) {
-    const rem = (value - 1) % 26;
-    out = String.fromCharCode(65 + rem) + out;
-    value = Math.floor((value - 1) / 26);
-  }
-  return out;
-}
-function dottedPath(indices) {
-  return indices.join(".");
-}
-function segmentFor(style, ownIndex, pathIndices, hasDeeperSegment, hasShallowerSegment) {
-  switch (style) {
-    case "1":
-      return String(ownIndex);
-    case "1.0":
-      return hasDeeperSegment || hasShallowerSegment ? String(ownIndex) : `${ownIndex}.0`;
-    case "1.1":
-      return dottedPath(pathIndices);
-    case "I":
-      return toRoman(ownIndex);
-    case "i":
-      return toRoman(ownIndex).toLowerCase();
-    case "A":
-      return toAlpha(ownIndex);
-    case "a":
-      return toAlpha(ownIndex).toLowerCase();
-    case "bullet":
-      return "\u2022";
-    case "none":
-      return "";
-  }
-}
-function ancestorChain(node2) {
-  const chain = [];
-  let cur = node2;
-  while (cur) {
-    chain.unshift(cur);
-    cur = cur.parent;
-  }
-  return chain;
-}
-function computeLabel(levelFormats, node2) {
-  const chain = ancestorChain(node2);
-  const pathIndices = chain.map((n) => n.siblingIndex);
-  const formats = chain.map((n) => {
-    var _a, _b;
-    return (_b = (_a = levelFormats[n.level - 1]) != null ? _a : levelFormats[levelFormats.length - 1]) != null ? _b : null;
-  });
-  const segments = [];
-  for (let i = 0; i < chain.length; i++) {
-    const ancestor = chain[i];
-    const format = formats[i];
-    if (!ancestor || !format) continue;
-    let hasDeeperSegment = false;
-    for (let j = i + 1; j < chain.length; j++) {
-      const deeper = formats[j];
-      if (deeper && deeper.style !== "none") {
-        hasDeeperSegment = true;
-        break;
-      }
-    }
-    const segment = segmentFor(format.style, ancestor.siblingIndex, pathIndices.slice(0, i + 1), hasDeeperSegment, segments.length > 0);
-    if (segment === "") continue;
-    const prefix = segments.length === 0 ? "" : format.separator;
-    segments.push(prefix + segment);
-  }
-  return segments.join("");
-}
-
 // src/core/parser.ts
 function parseOutline(body, sigilChar = DEFAULT_SIGIL_CHAR) {
   var _a, _b, _c, _d, _e, _f;
@@ -548,6 +410,183 @@ function nextSibling(parsed, node2) {
     if (candidate.level === node2.level) return candidate;
   }
   return null;
+}
+
+// src/core/exportBody.ts
+function breaksBefore(line, sigilChar, breaks) {
+  var _a, _b, _c;
+  const manual = hasParagraphFlag(line, sigilChar);
+  if (!(breaks == null ? void 0 : breaks.auto)) return manual;
+  const level = (_c = (_b = (_a = outlineLineRegex(sigilChar).exec(line)) == null ? void 0 : _a[1]) == null ? void 0 : _b.length) != null ? _c : 0;
+  const auto = level > 0 && level <= Math.min(Math.max(breaks.maxLevel, 1), MAX_LEVEL);
+  return auto || !breaks.ignoreManual && manual;
+}
+var FENCE_RE = /^\s*(`{3,}|~{3,})/;
+function nextFenceState(line, open) {
+  var _a;
+  const m = FENCE_RE.exec(line);
+  if (!m) return open;
+  const marker = (_a = m[1]) != null ? _a : "";
+  if (open === null) return marker;
+  return marker[0] === open[0] && marker.length >= open.length ? null : open;
+}
+function stripFrontmatter(doc) {
+  var _a, _b;
+  const lines = doc.split("\n");
+  if (((_a = lines[0]) != null ? _a : "").trimEnd() !== "---") return doc;
+  for (let i = 1; i < lines.length; i++) {
+    const t = ((_b = lines[i]) != null ? _b : "").trimEnd();
+    if (t === "---" || t === "...") return lines.slice(i + 1).join("\n");
+  }
+  return doc;
+}
+var FOOTNOTE_RE = /\[\^[^\]\s]+\]|\^\[/;
+var EMBED_RE = /!\[\[/;
+var WIKILINK_RE = /(^|[^!])\[\[/;
+var MD_LINK_RE = /(^|[^!])\[[^\]]*\]\([^)]+\)/;
+function lostKinds(entryText) {
+  const kinds = [];
+  if (FOOTNOTE_RE.test(entryText)) kinds.push("footnote");
+  if (collectCiteKeys(entryText).length > 0) kinds.push("citation");
+  if (WIKILINK_RE.test(entryText) || MD_LINK_RE.test(entryText)) kinds.push("link");
+  if (EMBED_RE.test(entryText)) kinds.push("embed");
+  return kinds;
+}
+var BLOCK_START_RE = /^(?:\s{4,}|\t|#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||:{1,3}(?:\s|$)|`{3,}|~{3,}|(?:[-*_]\s*){3,}$)/;
+function isPlainProse(line) {
+  return line.trim() !== "" && !BLOCK_START_RE.test(line);
+}
+function anchor(sourceLine) {
+  return `\`\\voline{${sourceLine}}\`{=latex}`;
+}
+function latexEscape(text2) {
+  return text2.replace(/[\\&%$#_{}~^]/g, (ch) => {
+    if (ch === "\\") return "\\textbackslash{}";
+    if (ch === "~") return "\\textasciitilde{}";
+    if (ch === "^") return "\\textasciicircum{}";
+    return `\\${ch}`;
+  });
+}
+function isBold(weight) {
+  const w = weight.trim().toLowerCase();
+  return w === "bold" || w === "bolder" || Number(w) >= 600;
+}
+function entryParagraph(level, label, text2, gap, format, lineAnchor) {
+  const font = `${format && isBold(format.fontWeight) ? "\\bfseries" : ""}${(format == null ? void 0 : format.italic) ? "\\itshape" : ""}`;
+  const indent = `${(level - 1) * 1.5}em`;
+  const open = `\\voentry{${gap ? 1 : 0}}{${indent}}{${font}}{${latexEscape(label)}}`;
+  return `\`${open}\`{=latex}${lineAnchor}${text2}\`\\voentryend{}\`{=latex}`;
+}
+function extractBody(doc, sigilChar, options = {}) {
+  var _a, _b, _c, _d;
+  const full = parseMetaDocument(doc).body;
+  const stripped = stripFrontmatter(full);
+  const frontmatterLines = full.split("\n").length - stripped.split("\n").length;
+  const lines = stripped.split("\n");
+  const entryRe = outlineLineRegex(sigilChar);
+  const out = [];
+  const lost = [];
+  let fence = null;
+  let lastBlank = true;
+  let lastText = "";
+  let dropped = false;
+  let forceBreak = false;
+  const printed = options.outline ? new Map(parseOutline(stripped, sigilChar).flat.map((n) => [n.entryLine, n])) : null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = (_a = lines[i]) != null ? _a : "";
+    const node2 = fence === null ? printed == null ? void 0 : printed.get(i) : void 0;
+    if (node2 && options.outline) {
+      if (!lastBlank) out.push("");
+      const lineAnchor = options.lineNumbers === true ? anchor(i + frontmatterLines + 1) : "";
+      const format = options.outline.levels[node2.level - 1];
+      const gap = breaksBefore(line, sigilChar, options.breaks);
+      out.push(entryParagraph(node2.level, computeLabel(options.outline.levels, node2), node2.text, gap, format, lineAnchor), "");
+      lastBlank = true;
+      dropped = false;
+      forceBreak = false;
+      continue;
+    }
+    if (fence === null && isOutlineLine(line, sigilChar)) {
+      const entryText = ((_c = (_b = entryRe.exec(line)) == null ? void 0 : _b[2]) != null ? _c : "").trim();
+      const kinds = lostKinds(entryText);
+      if (kinds.length > 0 && !printed) lost.push({ line: i, text: entryText, kinds });
+      dropped = true;
+      if (breaksBefore(line, sigilChar, options.breaks)) forceBreak = true;
+      continue;
+    }
+    if (fence === null && isCommentLine(line, sigilChar)) continue;
+    const blank = fence === null && line.trim() === "";
+    if (dropped && !blank && !lastBlank && (forceBreak || !isPlainProse(lastText) || !isPlainProse(line))) {
+      out.push("");
+      lastBlank = true;
+    }
+    dropped = false;
+    forceBreak = false;
+    if (fence !== null || FENCE_RE.test(line)) {
+      fence = nextFenceState(line, fence);
+      out.push(line);
+      lastBlank = false;
+      lastText = line;
+      continue;
+    }
+    if (blank && lastBlank) continue;
+    const numbered = options.lineNumbers === true && !blank && isPlainProse(line);
+    out.push(blank ? "" : numbered ? anchor(i + frontmatterLines + 1) + line : line);
+    lastBlank = blank;
+    if (!blank) lastText = line;
+  }
+  while (out.length > 0 && ((_d = out[out.length - 1]) != null ? _d : "").trim() === "") out.pop();
+  const body = out.join("\n");
+  return { body, lost, isEmpty: body.trim() === "" };
+}
+var CITE_RE = /(^|[^A-Za-z0-9_@.\\])-?@(\{[^}]+\}|[A-Za-z0-9_À-ɏ][A-Za-z0-9_À-ɏ:.#$%&+?<>~/-]*)/g;
+function trimKey(raw) {
+  if (raw.startsWith("{")) return raw.slice(1, -1).trim();
+  return raw.replace(/[^A-Za-z0-9_À-ɏ]+$/, "");
+}
+function stripInlineCode(line) {
+  return line.replace(/(`+)[\s\S]*?\1/g, " ");
+}
+function collectCiteKeys(markdown) {
+  var _a;
+  const keys = [];
+  const seen = /* @__PURE__ */ new Set();
+  let fence = null;
+  for (const line of markdown.split("\n")) {
+    if (fence !== null || FENCE_RE.test(line)) {
+      fence = nextFenceState(line, fence);
+      continue;
+    }
+    const scan = stripInlineCode(line);
+    CITE_RE.lastIndex = 0;
+    let m;
+    while ((m = CITE_RE.exec(scan)) !== null) {
+      const key = trimKey((_a = m[2]) != null ? _a : "");
+      if (key !== "" && !seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+  }
+  return keys;
+}
+function groupKeysByLibrary(keys, known) {
+  var _a;
+  const libraryOf = /* @__PURE__ */ new Map();
+  for (const k of known) if (!libraryOf.has(k.citekey)) libraryOf.set(k.citekey, k.libraryID);
+  const byLibrary = /* @__PURE__ */ new Map();
+  const unknown = [];
+  for (const key of keys) {
+    const lib = libraryOf.get(key);
+    if (lib === void 0) {
+      unknown.push(key);
+      continue;
+    }
+    const list = (_a = byLibrary.get(lib)) != null ? _a : [];
+    list.push(key);
+    byLibrary.set(lib, list);
+  }
+  return { byLibrary, unknown };
 }
 
 // src/core/render.ts
@@ -661,7 +700,7 @@ var GHOST_ATTR = "data-vo-ghost";
 function anchor2(line, ghost) {
   return `<span ${LINE_ATTR}="${line}"${ghost ? ` ${GHOST_ATTR}=""` : ""}></span>`;
 }
-function prepareRenderedExport(doc, sigilChar, levels, viewState, collapsedIds, indentBody) {
+function prepareRenderedExport(doc, sigilChar, levels, viewState, collapsedIds, indentBody, breaks) {
   var _a, _b;
   const { body } = parseMetaDocument(doc);
   const lines = body.split("\n");
@@ -670,36 +709,44 @@ function prepareRenderedExport(doc, sigilChar, levels, viewState, collapsedIds, 
   const nodeAt = new Map(plan.parsed.flat.map((node2) => [node2.entryLine, node2]));
   const entryLevels = new Map(plan.parsed.flat.map((node2) => [node2.entryLine, node2.level]));
   const out = [];
+  let pendingBreak = false;
+  const push = (text2) => {
+    var _a2;
+    if (pendingBreak && text2.trim() !== "" && out.length > 0 && ((_a2 = out[out.length - 1]) != null ? _a2 : "").trim() !== "") out.push("");
+    if (text2.trim() !== "") pendingBreak = false;
+    out.push(text2);
+  };
   let fence = null;
   for (let i = 0; i < lines.length; i++) {
     const line = (_a = lines[i]) != null ? _a : "";
     const inFence = fence !== null;
     fence = nextFenceState(line, fence);
     const node2 = nodeAt.get(i);
+    if (breaks && node2 && !inFence && breaksBefore(line, sigilChar, breaks)) pendingBreak = true;
     if (isLineHidden(plan.hiddenLineRanges, i)) {
       if (node2 && !inFence) {
         let bodyShowing = false;
         for (let b = node2.ownBodyStart; b < node2.ownBodyEnd && !bodyShowing; b++) {
           bodyShowing = !isLineHidden(plan.hiddenLineRanges, b) && ((_b = lines[b]) != null ? _b : "").trim() !== "";
         }
-        if (bodyShowing) out.push(anchor2(i, true));
+        if (bodyShowing) push(anchor2(i, true));
       }
       continue;
     }
     if (inFence) {
-      out.push(line);
+      push(line);
       continue;
     }
     if (isCommentLine(line, sigilChar)) continue;
     if (node2) {
       const segs = entrySegments(line, sigilChar);
       if (segs) {
-        out.push(anchor2(i, false) + line.slice(segs.prefixEnd, segs.textEnd).trimEnd());
+        push(anchor2(i, false) + line.slice(segs.prefixEnd, segs.textEnd).trimEnd());
         continue;
       }
     }
     if (isOutlineLine(line, sigilChar)) continue;
-    out.push(line);
+    push(line);
   }
   return { markdown: out.join("\n"), plan, entryLevels, indentBody };
 }
@@ -989,7 +1036,8 @@ function createApi(vault, sigilChar, levels, view) {
         levels(),
         view.viewState(path),
         view.collapsedIds(path),
-        view.indentBody()
+        view.indentBody(),
+        view.paragraphBreaks()
       );
       if (prepared === null) return null;
       return {
@@ -1361,6 +1409,19 @@ function markerCssVars(settings) {
     "--vo-comment-color": readColor(settings.commentColor, DEFAULT_COMMENT_COLOR)
   };
 }
+function defaultParagraphBreaks() {
+  return { auto: true, maxLevel: 1, ignoreManual: true };
+}
+function readParagraphBreaks(v) {
+  const fallback = defaultParagraphBreaks();
+  if (!isRecord2(v)) return fallback;
+  const level = typeof v.maxLevel === "number" && Number.isInteger(v.maxLevel) ? v.maxLevel : fallback.maxLevel;
+  return {
+    auto: readBool(v.auto, fallback.auto),
+    maxLevel: Math.min(Math.max(level, 1), MAX_LEVEL),
+    ignoreManual: readBool(v.ignoreManual, fallback.ignoreManual)
+  };
+}
 function defaultPdfExportSettings() {
   return {
     preamble: "",
@@ -1371,6 +1432,9 @@ function defaultPdfExportSettings() {
     cite: "MLA",
     lastFontSize: "12",
     submitSuffix: "-Submit",
+    devSuffix: "-Dev",
+    includeOutline: false,
+    breaks: defaultParagraphBreaks(),
     keepBuildFiles: false,
     openAfterExport: false
   };
@@ -1518,6 +1582,9 @@ function readPdfExport(v) {
     cite: cite !== "" ? cite : (_a = CITE_STYLES[0]) != null ? _a : "MLA",
     lastFontSize: FONT_SIZES.includes(size) ? size : fallback.lastFontSize,
     submitSuffix: readString(v.submitSuffix, fallback.submitSuffix),
+    devSuffix: readString(v.devSuffix, fallback.devSuffix),
+    includeOutline: readBool(v.includeOutline, fallback.includeOutline),
+    breaks: readParagraphBreaks(v.breaks),
     keepBuildFiles: readBool(v.keepBuildFiles, fallback.keepBuildFiles),
     openAfterExport: readBool(v.openAfterExport, fallback.openAfterExport)
   };
@@ -2899,6 +2966,20 @@ LINENUMBERS_TEX = "\\n".join([
     "\\\\makeatother",
 ])
 
+# Printed outline entries ("Include outline"). The plugin writes each entry as
+# its own paragraph: \\voentry{gap}{indent}{font}{label} <entry text> \\voentryend.
+# gap 1 keeps the paragraph space above the entry (a paragraph break), gap 0
+# cancels it so the entry sits tight under the text before it. The entry text
+# is grouped with its level's font and indent; the paragraph space after it is
+# cancelled and a page break there is forbidden, so an entry is never left at
+# the foot of a page without the first line of its body.
+ENTRY_TEX = "\\n".join([
+    "\\\\newcommand{\\\\voentry}[4]{\\\\par\\\\ifnum#1=0 \\\\vspace{-\\\\parskip}\\\\fi",
+    "  \\\\begingroup\\\\leftskip=#2\\\\relax\\\\noindent#3%",
+    "  \\\\if\\\\relax\\\\detokenize{#4}\\\\relax\\\\else#4\\\\enspace\\\\fi}",
+    "\\\\newcommand{\\\\voentryend}{\\\\par\\\\endgroup\\\\nobreak\\\\vspace{-\\\\parskip}}",
+])
+
 SUBMIT_TEX = "\\n".join([
     "% Written by job.py \u2014 the Submit variant's footer.",
     "\\\\fancyfoot{}",
@@ -2950,6 +3031,7 @@ def cmd_prepare(job_path, work_md, meta_tex, variant_tex):
         parts.append(LINENUMBERS_TEX)
     else:
         parts.append("\\\\newcommand{\\\\voline}[1]{}")
+    parts.append(ENTRY_TEX)
     with open(variant_tex, "w", encoding="utf-8") as fh:
         fh.write("\\n".join(parts) + "\\n")
 
@@ -3696,7 +3778,10 @@ var PdfExporter = class {
     const { fs, path, os } = node();
     const settings = this.host.settings();
     const extraction = extractBody(doc, this.host.sigilChar());
-    if (extraction.isEmpty) return `${file.basename} has no body text to export yet \u2014 only outline entries.`;
+    const outlineOnly = extraction.isEmpty;
+    if (outlineOnly && extractBody(doc, this.host.sigilChar(), { outline: { levels: this.host.levels() } }).isEmpty) {
+      return `${file.basename} has nothing to export yet.`;
+    }
     const fm = (_a = this.host.app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter;
     const options = resolveExportOptions(
       fm,
@@ -3714,6 +3799,8 @@ var PdfExporter = class {
       fontsize: (_d = options.fontsize) != null ? _d : settings.lastFontSize,
       variant: "dev",
       lineNumbers: false,
+      includeOutline: settings.includeOutline || outlineOnly,
+      breaks: { ...settings.breaks },
       nameSuffix: "",
       baseOutputPath: target,
       doc,
@@ -3796,7 +3883,13 @@ var PdfExporter = class {
         return rel;
       }
     };
-    const body = plan.lineNumbers && plan.variant === "dev" ? extractBody(plan.doc, this.host.sigilChar(), { lineNumbers: true }).body : plan.extraction.body;
+    const extracted = extractBody(plan.doc, this.host.sigilChar(), {
+      lineNumbers: plan.lineNumbers && plan.variant === "dev",
+      breaks: plan.breaks,
+      outline: plan.includeOutline ? { levels: this.host.levels() } : void 0
+    });
+    if (extracted.isEmpty) return fail("convert", `${plan.file.basename} has no body text to export \u2014 only outline entries. Turn on "Include outline" to print them.`);
+    const body = extracted.body;
     const converted = await toPandocMarkdown(body, plan.file.path, this.host.sigilChar(), resolver);
     for (const [vaultPath, rel] of staged) {
       await fs.promises.copyFile(path.join(base, vaultPath), path.join(buildDir, rel));
@@ -4119,7 +4212,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
     containerEl.createEl("p", {
       cls: "vo-fixture-note",
       // eslint-disable-next-line obsidianmd/ui/sentence-case -- headnum, TOC, notes, cite, pdf-output are literal frontmatter keys
-      text: "Export to PDF typesets only the body text, never the outline. These are the defaults; a note's frontmatter (headnum, TOC, notes, cite, pdf-output) overrides them."
+      text: `Export to PDF typesets the body text, and the outline too when "Include outline" is on. These are the defaults; a note's frontmatter (headnum, TOC, notes, cite, pdf-output) overrides them, and the export dialog can change any of them for one export.`
     });
     new import_obsidian4.Setting(containerEl).setName("Author").setDesc("Shown in the running header. Frontmatter: author.").addText(
       (text2) => text2.setValue(pdf.author).onChange(async (value) => {
@@ -4152,6 +4245,37 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
         await this.plugin.saveSettings();
       });
     });
+    new import_obsidian4.Setting(containerEl).setName("Include outline").setDesc("Print the outline entries, numbered, each above its own body. Off: the body text alone.").addToggle(
+      (t) => t.setValue(pdf.includeOutline).onChange(async (v) => {
+        pdf.includeOutline = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    const breaks = pdf.breaks;
+    const levelSetting = new import_obsidian4.Setting(containerEl).setName("Break at levels").setDesc("Entries at these levels start a new paragraph \u2014 before the entry, when the outline is printed.").addDropdown((dd) => {
+      for (let l = 1; l <= MAX_LEVEL; l++) dd.addOption(String(l), l === 1 ? "Level 1" : `Levels 1\u2013${l}`);
+      dd.setValue(String(breaks.maxLevel)).onChange(async (v) => {
+        breaks.maxLevel = Number(v);
+        await this.plugin.saveSettings();
+      });
+    });
+    const manualSetting = new import_obsidian4.Setting(containerEl).setName("Ignore manual breaks").setDesc("Leave out the \xB6 breaks set on entries, so only the automatic ones apply.").addToggle(
+      (t) => t.setValue(breaks.ignoreManual).onChange(async (v) => {
+        breaks.ignoreManual = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    const autoSetting = new import_obsidian4.Setting(containerEl).setName("Automatic paragraph breaks").setDesc("Start a new paragraph at outline entries by level, in this export and in multi-exporter's. Off: only the \xB6 breaks set on entries apply.").addToggle(
+      (t) => t.setValue(breaks.auto).onChange(async (v) => {
+        breaks.auto = v;
+        levelSetting.settingEl.hidden = !v;
+        manualSetting.settingEl.hidden = !v;
+        await this.plugin.saveSettings();
+      })
+    );
+    levelSetting.settingEl.before(autoSetting.settingEl);
+    levelSetting.settingEl.hidden = !breaks.auto;
+    manualSetting.settingEl.hidden = !breaks.auto;
     new import_obsidian4.Setting(containerEl).setName("Open PDF after export").addToggle(
       (t) => t.setValue(pdf.openAfterExport).onChange(async (v) => {
         pdf.openAfterExport = v;
@@ -4555,36 +4679,35 @@ var LOST_LABELS = {
   embed: "embed"
 };
 var ExportPdfModal = class extends import_obsidian5.Modal {
-  constructor(app, plan, onSubmit, retarget, defaultSuffix) {
+  constructor(app, plan, onSubmit, retarget, suffixes) {
     super(app);
     this.plan = plan;
     this.onSubmit = onSubmit;
     this.retarget = retarget;
-    this.defaultSuffix = defaultSuffix;
+    this.suffixes = suffixes;
     this.submitted = false;
     // Rebuilt whenever the output path changes, so the path line and the
     // "already exists" warning always describe the file that will be written.
     this.whereEl = null;
+    this.warnEl = null;
   }
   onOpen() {
     const { contentEl, plan } = this;
     this.setTitle(`Export "${plan.file.basename}" to PDF`);
     contentEl.addClass("vo-export-modal");
     let suffixInput = null;
-    const suffixSetting = new import_obsidian5.Setting(contentEl).setName("Append to file name").setDesc('A Submit copy usually wants a name of its own \u2014 this is added before ".pdf".').addText((text2) => {
-      text2.setPlaceholder("-Submit").setValue(plan.nameSuffix).onChange((v) => {
+    const suffixSetting = new import_obsidian5.Setting(contentEl).setName("Append to file name").setDesc('Added before ".pdf"; each version remembers its own. Clear it for the plain name.').addText((text2) => {
+      text2.setValue(plan.nameSuffix).onChange((v) => {
+        this.suffixes[plan.variant] = v;
         this.retarget(v);
         this.renderWhere();
       });
       suffixInput = text2;
     });
-    suffixSetting.settingEl.hidden = plan.variant !== "submit";
     const versionSetting = new import_obsidian5.Setting(contentEl).setName("Version").setDesc("Dev keeps the date/time stamp; Submit drops it and centres the page count").addDropdown(
       (dd) => dd.addOption("dev", "Dev").addOption("submit", "Submit").setValue(plan.variant).onChange((v) => {
         plan.variant = v === "submit" ? "submit" : "dev";
-        const submit = plan.variant === "submit";
-        suffixSetting.settingEl.hidden = !submit;
-        const suffix = submit ? plan.nameSuffix !== "" ? plan.nameSuffix : this.defaultSuffix : "";
+        const suffix = this.suffixes[plan.variant];
         suffixInput == null ? void 0 : suffixInput.setValue(suffix);
         this.retarget(suffix);
         this.renderWhere();
@@ -4592,6 +4715,27 @@ var ExportPdfModal = class extends import_obsidian5.Modal {
     );
     versionSetting.settingEl.after(suffixSetting.settingEl);
     new import_obsidian5.Setting(contentEl).setName("Line numbers").setDesc("Dev only: each body line's editor line number, in the left margin").addToggle((t) => t.setValue(plan.lineNumbers).onChange((v) => plan.lineNumbers = v));
+    new import_obsidian5.Setting(contentEl).setName("Include outline").setDesc("Print the outline entries, numbered, each above its own body").addToggle(
+      (t) => t.setValue(plan.includeOutline).onChange((v) => {
+        plan.includeOutline = v;
+        if (this.warnEl) this.warnEl.hidden = v;
+      })
+    );
+    const levelSetting = new import_obsidian5.Setting(contentEl).setName("Break at levels").setDesc("Entries at these levels start a new paragraph").addDropdown((dd) => {
+      for (let l = 1; l <= MAX_LEVEL; l++) dd.addOption(String(l), l === 1 ? "Level 1" : `Levels 1\u2013${l}`);
+      dd.setValue(String(plan.breaks.maxLevel)).onChange((v) => plan.breaks.maxLevel = Number(v));
+    });
+    const manualSetting = new import_obsidian5.Setting(contentEl).setName("Ignore manual breaks").setDesc("Leave out the \xB6 breaks set on entries, so only the automatic ones apply").addToggle((t) => t.setValue(plan.breaks.ignoreManual).onChange((v) => plan.breaks.ignoreManual = v));
+    const autoSetting = new import_obsidian5.Setting(contentEl).setName("Automatic paragraph breaks").setDesc("Off: only the \xB6 breaks set on entries apply").addToggle(
+      (t) => t.setValue(plan.breaks.auto).onChange((v) => {
+        plan.breaks.auto = v;
+        levelSetting.settingEl.hidden = !v;
+        manualSetting.settingEl.hidden = !v;
+      })
+    );
+    levelSetting.settingEl.before(autoSetting.settingEl);
+    levelSetting.settingEl.hidden = !plan.breaks.auto;
+    manualSetting.settingEl.hidden = !plan.breaks.auto;
     new import_obsidian5.Setting(contentEl).setName("Font size").addDropdown((dd) => {
       for (const size of FONT_SIZES) dd.addOption(size, `${size} pt`);
       dd.setValue(plan.fontsize).onChange((v) => plan.fontsize = v);
@@ -4613,6 +4757,8 @@ var ExportPdfModal = class extends import_obsidian5.Modal {
     this.renderWhere();
     if (plan.extraction.lost.length > 0) {
       const warn = contentEl.createDiv({ cls: "vo-export-warnings" });
+      warn.hidden = plan.includeOutline;
+      this.warnEl = warn;
       warn.createDiv({ text: "Written on outline entries, so left out of the PDF:", cls: "vo-export-label" });
       const list = warn.createEl("ul");
       for (const item of plan.extraction.lost) {
@@ -4863,7 +5009,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       {
         viewState: (path) => this.viewStateFor(path),
         collapsedIds: (path) => this.collapsedIdsFor(path),
-        indentBody: () => this.settings.indentBody
+        indentBody: () => this.settings.indentBody,
+        paragraphBreaks: () => this.settings.pdfExport.breaks
       }
     );
     this.applyLevelCssVars();
@@ -5022,6 +5169,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         app: this.app,
         pluginVersion: this.manifest.version,
         sigilChar: () => this.settings.sigil,
+        levels: () => this.settings.levels,
         settings: () => this.settings.pdfExport
       });
       this.addCommand({
@@ -5224,12 +5372,14 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       new import_obsidian7.Notice(plan);
       return;
     }
+    const { devSuffix, submitSuffix } = this.settings.pdfExport;
+    exporter.retarget(plan, devSuffix);
     new ExportPdfModal(
       this.app,
       plan,
       (finalPlan) => void this.runExport(exporter, finalPlan),
       (suffix) => exporter.retarget(plan, suffix),
-      this.settings.pdfExport.submitSuffix
+      { dev: devSuffix, submit: submitSuffix }
     ).open();
   }
   async runExport(exporter, plan) {
@@ -5237,10 +5387,12 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     this.exportRunning = true;
     const progress = new import_obsidian7.Notice("Exporting PDF\u2026", 0);
     try {
-      const suffix = plan.variant === "submit" ? plan.nameSuffix.trim() : this.settings.pdfExport.submitSuffix;
-      if (plan.fontsize !== this.settings.pdfExport.lastFontSize || suffix !== this.settings.pdfExport.submitSuffix) {
-        this.settings.pdfExport.lastFontSize = plan.fontsize;
-        this.settings.pdfExport.submitSuffix = suffix;
+      const pdf = this.settings.pdfExport;
+      const suffixKey = plan.variant === "submit" ? "submitSuffix" : "devSuffix";
+      const suffix = plan.nameSuffix.trim();
+      if (plan.fontsize !== pdf.lastFontSize || suffix !== pdf[suffixKey]) {
+        pdf.lastFontSize = plan.fontsize;
+        pdf[suffixKey] = suffix;
         await this.persist();
       }
       const outcome = await exporter.run(plan, (msg) => progress.setMessage(msg));

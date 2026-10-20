@@ -107,6 +107,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				viewState: (path) => this.viewStateFor(path),
 				collapsedIds: (path) => this.collapsedIdsFor(path),
 				indentBody: () => this.settings.indentBody,
+				paragraphBreaks: () => this.settings.pdfExport.breaks,
 			},
 		);
 
@@ -287,6 +288,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				app: this.app,
 				pluginVersion: this.manifest.version,
 				sigilChar: () => this.settings.sigil,
+				levels: () => this.settings.levels,
 				settings: () => this.settings.pdfExport,
 			});
 			this.addCommand({
@@ -536,12 +538,15 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			new Notice(plan);
 			return;
 		}
+		// The dialog opens on Dev, so its suffix is already in the name.
+		const { devSuffix, submitSuffix } = this.settings.pdfExport;
+		exporter.retarget(plan, devSuffix);
 		new ExportPdfModal(
 			this.app,
 			plan,
 			(finalPlan) => void this.runExport(exporter, finalPlan),
 			(suffix) => exporter.retarget(plan, suffix),
-			this.settings.pdfExport.submitSuffix,
+			{ dev: devSuffix, submit: submitSuffix },
 		).open();
 	}
 
@@ -549,10 +554,12 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		this.exportRunning = true;
 		const progress = new Notice('Exporting PDF…', 0);
 		try {
-			const suffix = plan.variant === 'submit' ? plan.nameSuffix.trim() : this.settings.pdfExport.submitSuffix;
-			if (plan.fontsize !== this.settings.pdfExport.lastFontSize || suffix !== this.settings.pdfExport.submitSuffix) {
-				this.settings.pdfExport.lastFontSize = plan.fontsize;
-				this.settings.pdfExport.submitSuffix = suffix;
+			const pdf = this.settings.pdfExport;
+			const suffixKey = plan.variant === 'submit' ? 'submitSuffix' : 'devSuffix';
+			const suffix = plan.nameSuffix.trim();
+			if (plan.fontsize !== pdf.lastFontSize || suffix !== pdf[suffixKey]) {
+				pdf.lastFontSize = plan.fontsize;
+				pdf[suffixKey] = suffix;
 				await this.persist();
 			}
 			const outcome = await exporter.run(plan, (msg) => progress.setMessage(msg));

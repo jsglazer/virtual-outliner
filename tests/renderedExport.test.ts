@@ -62,3 +62,25 @@ describe('prepareRenderedExport', () => {
 		expect(out?.markdown).not.toContain('md-outline');
 	});
 });
+
+describe('prepareRenderedExport paragraph breaks', () => {
+	const breaks = { auto: true, maxLevel: 1, ignoreManual: true };
+
+	it('puts a blank line before each breaking entry', () => {
+		const out = prepareRenderedExport('@ A\nBody\n@@p B\nMore\n@ C\n', '@', levels, 'both', none, true, breaks);
+		expect(out?.markdown).toBe(
+			'<span data-vo-line="0"></span>A\nBody\n<span data-vo-line="2"></span>B\nMore\n\n<span data-vo-line="4"></span>C\n',
+		);
+	});
+
+	it('honours the p flag when automatic breaks are off', () => {
+		const out = prepareRenderedExport('@ A\nBody\n@@p B\n', '@', levels, 'both', none, true, { ...breaks, auto: false });
+		expect(out?.markdown).toBe('<span data-vo-line="0"></span>A\nBody\n\n<span data-vo-line="2"></span>B\n');
+	});
+
+	it('passes a hidden entry\'s break on to the body that prints next', () => {
+		const out = prepareRenderedExport('@ A\nOne\n@ B\nTwo\n', '@', levels, 'body', none, true, breaks);
+		expect(out?.markdown.split('\n')).toContain('');
+		expect(out?.markdown.indexOf('\n\n')).toBeLessThan(out?.markdown.indexOf('Two') ?? 0);
+	});
+});

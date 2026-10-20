@@ -17,8 +17,14 @@
 // An entry line hidden by Body-only view leaves a GHOST anchor behind when its
 // own body is still showing: it prints nothing, but it is how the DOM pass
 // knows whose body the following prose is, and so how far to indent it.
+//
+// Paragraph breaks follow the same rule as the pandoc export (breaksBefore):
+// a breaking entry gets a blank line before it, so the renderer starts a new
+// paragraph there. An entry the view hides passes its break on to whatever
+// prints next. Without `breaks` (older callers) nothing breaks.
 
-import { nextFenceState } from './exportBody';
+import type { ParagraphBreaks } from './exportBody';
+import { breaksBefore, nextFenceState } from './exportBody';
 import { parseMetaDocument } from './metadata';
 import { computeRenderPlan, isLineHidden } from './render';
 import type { RenderPlan } from './render';
@@ -51,6 +57,7 @@ export function prepareRenderedExport(
 	viewState: ViewState,
 	collapsedIds: ReadonlySet<string>,
 	indentBody: boolean,
+	breaks?: ParagraphBreaks,
 ): PreparedRenderedExport | null {
 	const { body } = parseMetaDocument(doc);
 	const lines = body.split('\n');
@@ -61,12 +68,19 @@ export function prepareRenderedExport(
 	const entryLevels = new Map(plan.parsed.flat.map((node) => [node.entryLine, node.level] as const));
 
 	const out: string[] = [];
+	let pendingBreak = false;
+	const push = (text: string): void => {
+		if (pendingBreak && text.trim() !== '' && out.length > 0 && (out[out.length - 1] ?? '').trim() !== '') out.push('');
+		if (text.trim() !== '') pendingBreak = false;
+		out.push(text);
+	};
 	let fence: string | null = null;
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i] ?? '';
 		const inFence = fence !== null;
 		fence = nextFenceState(line, fence);
 		const node = nodeAt.get(i);
+		if (breaks && node && !inFence && breaksBefore(line, sigilChar, breaks)) pendingBreak = true;
 
 		if (isLineHidden(plan.hiddenLineRanges, i)) {
 			if (node && !inFence) {
@@ -74,24 +88,24 @@ export function prepareRenderedExport(
 				for (let b = node.ownBodyStart; b < node.ownBodyEnd && !bodyShowing; b++) {
 					bodyShowing = !isLineHidden(plan.hiddenLineRanges, b) && (lines[b] ?? '').trim() !== '';
 				}
-				if (bodyShowing) out.push(anchor(i, true));
+				if (bodyShowing) push(anchor(i, true));
 			}
 			continue;
 		}
 		if (inFence) {
-			out.push(line);
+			push(line);
 			continue;
 		}
 		if (isCommentLine(line, sigilChar)) continue;
 		if (node) {
 			const segs = entrySegments(line, sigilChar);
 			if (segs) {
-				out.push(anchor(i, false) + line.slice(segs.prefixEnd, segs.textEnd).trimEnd());
+				push(anchor(i, false) + line.slice(segs.prefixEnd, segs.textEnd).trimEnd());
 				continue;
 			}
 		}
 		if (isOutlineLine(line, sigilChar)) continue;
-		out.push(line);
+		push(line);
 	}
 
 	return { markdown: out.join('\n'), plan, entryLevels, indentBody };

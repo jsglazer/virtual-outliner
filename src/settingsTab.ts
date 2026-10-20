@@ -5,7 +5,7 @@ import { checkPreamble, CITE_STYLES } from './core/exportOptions';
 
 import type { ColorOption, ToolbarHighlight } from './core/settings';
 import { DEFAULT_COMMENT_COLOR, DEFAULT_PARAGRAPH_COLOR } from './core/settings';
-import { isRiskySigil } from './core/sigil';
+import { isRiskySigil, MAX_LEVEL } from './core/sigil';
 import type { EnterBehavior, LabelStyle, LevelFormat, ViewState } from './core/types';
 import type VirtualOutlinerPlugin from './main';
 import {
@@ -185,7 +185,7 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 		containerEl.createEl('p', {
 			cls: 'vo-fixture-note',
 			// eslint-disable-next-line obsidianmd/ui/sentence-case -- headnum, TOC, notes, cite, pdf-output are literal frontmatter keys
-			text: 'Export to PDF typesets only the body text, never the outline. These are the defaults; a note\'s frontmatter (headnum, TOC, notes, cite, pdf-output) overrides them.',
+			text: 'Export to PDF typesets the body text, and the outline too when "Include outline" is on. These are the defaults; a note\'s frontmatter (headnum, TOC, notes, cite, pdf-output) overrides them, and the export dialog can change any of them for one export.',
 		});
 
 		new Setting(containerEl)
@@ -233,6 +233,49 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				});
 			});
+		new Setting(containerEl)
+			.setName('Include outline')
+			.setDesc('Print the outline entries, numbered, each above its own body. Off: the body text alone.')
+			.addToggle((t) =>
+				t.setValue(pdf.includeOutline).onChange(async (v) => {
+					pdf.includeOutline = v;
+					await this.plugin.saveSettings();
+				}),
+			);
+		const breaks = pdf.breaks;
+		const levelSetting = new Setting(containerEl)
+			.setName('Break at levels')
+			.setDesc('Entries at these levels start a new paragraph — before the entry, when the outline is printed.')
+			.addDropdown((dd) => {
+				for (let l = 1; l <= MAX_LEVEL; l++) dd.addOption(String(l), l === 1 ? 'Level 1' : `Levels 1–${l}`);
+				dd.setValue(String(breaks.maxLevel)).onChange(async (v) => {
+					breaks.maxLevel = Number(v);
+					await this.plugin.saveSettings();
+				});
+			});
+		const manualSetting = new Setting(containerEl)
+			.setName('Ignore manual breaks')
+			.setDesc('Leave out the ¶ breaks set on entries, so only the automatic ones apply.')
+			.addToggle((t) =>
+				t.setValue(breaks.ignoreManual).onChange(async (v) => {
+					breaks.ignoreManual = v;
+					await this.plugin.saveSettings();
+				}),
+			);
+		const autoSetting = new Setting(containerEl)
+			.setName('Automatic paragraph breaks')
+			.setDesc('Start a new paragraph at outline entries by level, in this export and in multi-exporter\'s. Off: only the ¶ breaks set on entries apply.')
+			.addToggle((t) =>
+				t.setValue(breaks.auto).onChange(async (v) => {
+					breaks.auto = v;
+					levelSetting.settingEl.hidden = !v;
+					manualSetting.settingEl.hidden = !v;
+					await this.plugin.saveSettings();
+				}),
+			);
+		levelSetting.settingEl.before(autoSetting.settingEl);
+		levelSetting.settingEl.hidden = !breaks.auto;
+		manualSetting.settingEl.hidden = !breaks.auto;
 		new Setting(containerEl)
 			.setName('Open PDF after export')
 			.addToggle((t) =>

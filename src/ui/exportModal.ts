@@ -8,7 +8,8 @@ import { Modal, Setting } from 'obsidian';
 
 import type { LostKind } from '../core/exportBody';
 import { CITE_STYLES, FONT_SIZES } from '../core/exportOptions';
-import type { ExportPlan } from '../export/exporter';
+import { MAX_LEVEL } from '../core/sigil';
+import type { ExportPlan, ExportVariant } from '../export/exporter';
 
 const LOST_LABELS: Record<LostKind, string> = {
 	footnote: 'footnote',
@@ -23,6 +24,7 @@ export class ExportPdfModal extends Modal {
 	// Rebuilt whenever the output path changes, so the path line and the
 	// "already exists" warning always describe the file that will be written.
 	private whereEl: HTMLElement | null = null;
+	private warnEl: HTMLElement | null = null;
 
 	constructor(
 		app: App,
@@ -31,8 +33,9 @@ export class ExportPdfModal extends Modal {
 		// Points the plan at `<name><suffix>.pdf` and re-answers the collision
 		// question for that name (PdfExporter.retarget).
 		private retarget: (suffix: string) => void,
-		// What a Submit export offers to append, remembered from last time.
-		private defaultSuffix: string,
+		// What each version appends, remembered from its last export; edits
+		// made here follow the version they were typed for.
+		private suffixes: Record<ExportVariant, string>,
 	) {
 		super(app);
 	}
@@ -47,20 +50,15 @@ export class ExportPdfModal extends Modal {
 		let suffixInput: { setValue: (v: string) => void } | null = null;
 		const suffixSetting = new Setting(contentEl)
 			.setName('Append to file name')
-			.setDesc('A Submit copy usually wants a name of its own — this is added before ".pdf".')
+			.setDesc('Added before ".pdf"; each version remembers its own. Clear it for the plain name.')
 			.addText((text) => {
-				// Not UI prose but a literal file-name suffix, so it keeps its
-				// capital S — the sentence-case rule does not apply.
-				// eslint-disable-next-line obsidianmd/ui/sentence-case
-				text.setPlaceholder('-Submit')
-					.setValue(plan.nameSuffix)
-					.onChange((v) => {
-						this.retarget(v);
-						this.renderWhere();
-					});
+				text.setValue(plan.nameSuffix).onChange((v) => {
+					this.suffixes[plan.variant] = v;
+					this.retarget(v);
+					this.renderWhere();
+				});
 				suffixInput = text;
 			});
-		suffixSetting.settingEl.hidden = plan.variant !== 'submit';
 
 		const versionSetting = new Setting(contentEl)
 			.setName('Version')
@@ -72,11 +70,7 @@ export class ExportPdfModal extends Modal {
 					.setValue(plan.variant)
 					.onChange((v) => {
 						plan.variant = v === 'submit' ? 'submit' : 'dev';
-						const submit = plan.variant === 'submit';
-						suffixSetting.settingEl.hidden = !submit;
-						// Switching to Submit offers the remembered suffix;
-						// switching back to Dev writes the plain name again.
-						const suffix = submit ? (plan.nameSuffix !== '' ? plan.nameSuffix : this.defaultSuffix) : '';
+						const suffix = this.suffixes[plan.variant];
 						suffixInput?.setValue(suffix);
 						this.retarget(suffix);
 						this.renderWhere();
@@ -88,6 +82,40 @@ export class ExportPdfModal extends Modal {
 			.setName('Line numbers')
 			.setDesc('Dev only: each body line\'s editor line number, in the left margin')
 			.addToggle((t) => t.setValue(plan.lineNumbers).onChange((v) => (plan.lineNumbers = v)));
+		new Setting(contentEl)
+			.setName('Include outline')
+			.setDesc('Print the outline entries, numbered, each above its own body')
+			.addToggle((t) =>
+				t.setValue(plan.includeOutline).onChange((v) => {
+					plan.includeOutline = v;
+					if (this.warnEl) this.warnEl.hidden = v;
+				}),
+			);
+		const levelSetting = new Setting(contentEl)
+			.setName('Break at levels')
+			.setDesc('Entries at these levels start a new paragraph')
+			.addDropdown((dd) => {
+				for (let l = 1; l <= MAX_LEVEL; l++) dd.addOption(String(l), l === 1 ? 'Level 1' : `Levels 1–${l}`);
+				dd.setValue(String(plan.breaks.maxLevel)).onChange((v) => (plan.breaks.maxLevel = Number(v)));
+			});
+		const manualSetting = new Setting(contentEl)
+			.setName('Ignore manual breaks')
+			.setDesc('Leave out the ¶ breaks set on entries, so only the automatic ones apply')
+			.addToggle((t) => t.setValue(plan.breaks.ignoreManual).onChange((v) => (plan.breaks.ignoreManual = v)));
+		const autoSetting = new Setting(contentEl)
+			.setName('Automatic paragraph breaks')
+			.setDesc('Off: only the ¶ breaks set on entries apply')
+			.addToggle((t) =>
+				t.setValue(plan.breaks.auto).onChange((v) => {
+					plan.breaks.auto = v;
+					levelSetting.settingEl.hidden = !v;
+					manualSetting.settingEl.hidden = !v;
+				}),
+			);
+		// Built after the two it shows and hides, shown before them.
+		levelSetting.settingEl.before(autoSetting.settingEl);
+		levelSetting.settingEl.hidden = !plan.breaks.auto;
+		manualSetting.settingEl.hidden = !plan.breaks.auto;
 		new Setting(contentEl).setName('Font size').addDropdown((dd) => {
 			for (const size of FONT_SIZES) dd.addOption(size, `${size} pt`);
 			dd.setValue(plan.fontsize).onChange((v) => (plan.fontsize = v));
@@ -127,6 +155,9 @@ export class ExportPdfModal extends Modal {
 
 		if (plan.extraction.lost.length > 0) {
 			const warn = contentEl.createDiv({ cls: 'vo-export-warnings' });
+			// Printing the outline prints these too.
+			warn.hidden = plan.includeOutline;
+			this.warnEl = warn;
 			warn.createDiv({ text: 'Written on outline entries, so left out of the PDF:', cls: 'vo-export-label' });
 			const list = warn.createEl('ul');
 			for (const item of plan.extraction.lost) {

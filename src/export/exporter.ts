@@ -14,13 +14,14 @@
 import type { App, TFile } from 'obsidian';
 import { FileSystemAdapter, TFolder } from 'obsidian';
 
-import type { BodyExtraction } from '../core/exportBody';
+import type { BodyExtraction, ParagraphBreaks } from '../core/exportBody';
 import { collectCiteKeys, extractBody } from '../core/exportBody';
 import type { ExportOptions } from '../core/exportOptions';
 import { numberedPdfPath, suffixedPdfPath, resolveExportOptions, resolvePdfOutput } from '../core/exportOptions';
 import type { ConversionIssue, ExportResolver } from '../core/obsidianMarkdown';
 import { toPandocMarkdown } from '../core/obsidianMarkdown';
 import type { PdfExportSettings } from '../core/settings';
+import type { LevelFormat } from '../core/types';
 import { buildRoot, ensureRenderer, missingTools, SEARCH_PATH } from './installer';
 import { node } from './node';
 import { DEFAULT_PREAMBLE } from './rendererFiles';
@@ -33,6 +34,7 @@ export interface ExporterHost {
 	app: App;
 	pluginVersion: string;
 	sigilChar(): string;
+	levels(): readonly LevelFormat[];
 	settings(): PdfExportSettings;
 }
 
@@ -50,14 +52,18 @@ export interface ExportPlan {
 	variant: ExportVariant;
 	// Dev only: print each body line's editor line number in the left margin.
 	lineNumbers: boolean;
-	// Appended to the PDF's file name (Submit exports offer one). The dialog
+	// Print the outline entries too, each above its own body.
+	includeOutline: boolean;
+	// This export's paragraph breaks, seeded from settings.
+	breaks: ParagraphBreaks;
+	// Appended to the PDF's file name (each version offers its own). The dialog
 	// edits it through PdfExporter.retarget, which recomputes outputPath and
 	// the collision warning for the new name.
 	nameSuffix: string;
 	// Where the PDF goes with no suffix — what outputPath is derived from.
 	baseOutputPath: string;
-	// The note's raw text, kept so the body can be extracted again with the
-	// line-number anchors in it once the dialog has been answered.
+	// The note's raw text, kept so the body can be extracted again with what
+	// the dialog chose (outline, breaks, line numbers) once it is answered.
 	doc: string;
 	outputPath: string;
 	// Set when the PDF the note would normally write already exists. The
@@ -90,7 +96,11 @@ export class PdfExporter {
 		const { fs, path, os } = node();
 		const settings = this.host.settings();
 		const extraction = extractBody(doc, this.host.sigilChar());
-		if (extraction.isEmpty) return `${file.basename} has no body text to export yet — only outline entries.`;
+		// A note that is all outline can still print its outline.
+		const outlineOnly = extraction.isEmpty;
+		if (outlineOnly && extractBody(doc, this.host.sigilChar(), { outline: { levels: this.host.levels() } }).isEmpty) {
+			return `${file.basename} has nothing to export yet.`;
+		}
 		const fm = this.host.app.metadataCache.getFileCache(file)?.frontmatter;
 		const options = resolveExportOptions(
 			fm,
@@ -108,6 +118,8 @@ export class PdfExporter {
 			fontsize: options.fontsize ?? settings.lastFontSize,
 			variant: 'dev',
 			lineNumbers: false,
+			includeOutline: settings.includeOutline || outlineOnly,
+			breaks: { ...settings.breaks },
 			nameSuffix: '',
 			baseOutputPath: target,
 			doc,
@@ -197,9 +209,13 @@ export class PdfExporter {
 				return rel;
 			},
 		};
-		const body = plan.lineNumbers && plan.variant === 'dev'
-			? extractBody(plan.doc, this.host.sigilChar(), { lineNumbers: true }).body
-			: plan.extraction.body;
+		const extracted = extractBody(plan.doc, this.host.sigilChar(), {
+			lineNumbers: plan.lineNumbers && plan.variant === 'dev',
+			breaks: plan.breaks,
+			outline: plan.includeOutline ? { levels: this.host.levels() } : undefined,
+		});
+		if (extracted.isEmpty) return fail('convert', `${plan.file.basename} has no body text to export — only outline entries. Turn on "Include outline" to print them.`);
+		const body = extracted.body;
 		const converted = await toPandocMarkdown(body, plan.file.path, this.host.sigilChar(), resolver);
 		for (const [vaultPath, rel] of staged) {
 			await fs.promises.copyFile(path.join(base, vaultPath), path.join(buildDir, rel));

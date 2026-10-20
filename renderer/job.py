@@ -222,6 +222,20 @@ LINENUMBERS_TEX = "\n".join([
     "\\makeatother",
 ])
 
+# Printed outline entries ("Include outline"). The plugin writes each entry as
+# its own paragraph: \voentry{gap}{indent}{font}{label} <entry text> \voentryend.
+# gap 1 keeps the paragraph space above the entry (a paragraph break), gap 0
+# cancels it so the entry sits tight under the text before it. The entry text
+# is grouped with its level's font and indent; the paragraph space after it is
+# cancelled and a page break there is forbidden, so an entry is never left at
+# the foot of a page without the first line of its body.
+ENTRY_TEX = "\n".join([
+    "\\newcommand{\\voentry}[4]{\\par\\ifnum#1=0 \\vspace{-\\parskip}\\fi",
+    "  \\begingroup\\leftskip=#2\\relax\\noindent#3%",
+    "  \\if\\relax\\detokenize{#4}\\relax\\else#4\\enspace\\fi}",
+    "\\newcommand{\\voentryend}{\\par\\endgroup\\nobreak\\vspace{-\\parskip}}",
+])
+
 SUBMIT_TEX = "\n".join([
     "% Written by job.py — the Submit variant's footer.",
     "\\fancyfoot{}",
@@ -273,6 +287,7 @@ def cmd_prepare(job_path, work_md, meta_tex, variant_tex):
         parts.append(LINENUMBERS_TEX)
     else:
         parts.append("\\newcommand{\\voline}[1]{}")
+    parts.append(ENTRY_TEX)
     with open(variant_tex, "w", encoding="utf-8") as fh:
         fh.write("\n".join(parts) + "\n")
 
