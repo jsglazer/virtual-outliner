@@ -4127,6 +4127,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
   display() {
     const { containerEl } = this;
     containerEl.empty();
+    this.renderOutlineColors(containerEl);
     new import_obsidian4.Setting(containerEl).setName("Depth sigil").setDesc(
       'The character repeated at line start to mark an outline entry (e.g. "@@ text" is a level-2 entry). Exactly one character.'
     ).addText((text2) => {
@@ -4174,14 +4175,14 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
       });
     };
     markerColor(
-      "Paragraph break colour",
+      "Paragraph break color",
       "The \xB6 shown beside an entry that starts a new paragraph in the PDF.",
       () => this.plugin.settings.paragraphColor,
       (v) => this.plugin.settings.paragraphColor = v,
       DEFAULT_PARAGRAPH_COLOR
     );
     markerColor(
-      "Comment colour",
+      "Comment color",
       "Comment lines (`@% \u2026`), which are never printed.",
       () => this.plugin.settings.commentColor,
       (v) => this.plugin.settings.commentColor = v,
@@ -4280,28 +4281,12 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
         breaks.auto = v;
         levelSetting.settingEl.hidden = !v;
         manualSetting.settingEl.hidden = !v;
-        colorSetting.settingEl.hidden = !v;
-        await this.plugin.saveSettings();
-      })
-    );
-    const nonBreak = this.plugin.settings.nonBreakColor;
-    const colorSetting = new import_obsidian4.Setting(containerEl).setName("Colour of entries that don't break").setDesc("A second outline colour, in the editor and in prints, for entries deeper than the break levels above \u2014 the ones the automatic rule leaves joined. Off: every level keeps its own colour.").addToggle(
-      (t) => t.setValue(nonBreak.enabled).onChange(async (v) => {
-        nonBreak.enabled = v;
-        if (v && !isValidHex(nonBreak.color)) nonBreak.color = "#888888";
-        await this.plugin.saveSettings();
-      })
-    ).addColorPicker(
-      (picker) => picker.setValue(isValidHex(nonBreak.color) ? nonBreak.color : "#888888").onChange(async (v) => {
-        nonBreak.color = v;
         await this.plugin.saveSettings();
       })
     );
     levelSetting.settingEl.before(autoSetting.settingEl);
-    manualSetting.settingEl.after(colorSetting.settingEl);
     levelSetting.settingEl.hidden = !breaks.auto;
     manualSetting.settingEl.hidden = !breaks.auto;
-    colorSetting.settingEl.hidden = !breaks.auto;
     new import_obsidian4.Setting(containerEl).setName("Open PDF after export").addToggle(
       (t) => t.setValue(pdf.openAfterExport).onChange(async (v) => {
         pdf.openAfterExport = v;
@@ -4371,14 +4356,14 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
       containerEl.createEl("p", {
         cls: "vo-fixture-note",
         // eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name
-        text: "Install and enable the Note Toolbar plugin to have one of its buttons change colour while the toggle it runs is on."
+        text: "Install and enable the Note Toolbar plugin to have one of its buttons change color while the toggle it runs is on."
       });
       return;
     }
     containerEl.createEl("p", {
       cls: "vo-fixture-note",
       // eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name; On/Off name the grid columns
-      text: `Pick the toolbar button that runs each toggle command below and it takes the On colour while that toggle is on, so the toolbar reads as pressed, and the Off colour while it is off. A colour left unticked leaves the button to Note Toolbar for that state \u2014 Off is unticked by default, so only "on" stands out. Backgrounds only: the icon and label colour stay Note Toolbar's.`
+      text: `Pick the toolbar button that runs each toggle command below and it takes the On color while that toggle is on, so the toolbar reads as pressed, and the Off color while it is off. A color left unticked leaves the button to Note Toolbar for that state \u2014 Off is unticked by default, so only "on" stands out. Backgrounds only: the icon and label color stay Note Toolbar's.`
     });
     const highlights = this.plugin.settings.toolbarHighlights;
     const rows = [
@@ -4509,6 +4494,38 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
   // level 1's entry; an old vault whose levels still differ from a
   // pre-Update003 install keeps that difference invisibly until the first
   // edit here flattens it.
+  // The outline's colour and the second colour for entries the automatic
+  // paragraph-break rule leaves joined, first on the page. The main colour is
+  // part of the shared level format, so it writes every level.
+  renderOutlineColors(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Outline color").setDesc("Color of every level's number and entry text.").addColorPicker((picker) => {
+      const first = this.plugin.settings.levels[0];
+      if (first && first.color !== "") picker.setValue(first.color);
+      picker.onChange(async (value) => {
+        for (const level of this.plugin.settings.levels) level.color = value;
+        await this.plugin.saveSettings();
+      });
+    }).addExtraButton((button) => {
+      button.setIcon("rotate-ccw").setTooltip("Use the theme color").onClick(async () => {
+        for (const level of this.plugin.settings.levels) level.color = "";
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    });
+    const nonBreak = this.plugin.settings.nonBreakColor;
+    new import_obsidian4.Setting(containerEl).setName("Color of entries that don't break").setDesc("A second outline color, in the editor and in prints, for entries deeper than the break levels set under PDF export \u2014 the ones the automatic rule leaves joined. Applies only while automatic paragraph breaks are on.").addToggle(
+      (t) => t.setValue(nonBreak.enabled).onChange(async (v) => {
+        nonBreak.enabled = v;
+        if (v && !isValidHex(nonBreak.color)) nonBreak.color = "#888888";
+        await this.plugin.saveSettings();
+      })
+    ).addColorPicker(
+      (picker) => picker.setValue(isValidHex(nonBreak.color) ? nonBreak.color : "#888888").onChange(async (v) => {
+        nonBreak.color = v;
+        await this.plugin.saveSettings();
+      })
+    );
+  }
   renderLevelSetting(containerEl) {
     var _a, _b;
     const format = this.plugin.settings.levels[0];
@@ -4542,21 +4559,6 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
         await applyToAllLevels((level) => {
           level.italic = value;
         });
-      });
-    });
-    new import_obsidian4.Setting(containerEl).setName("Colour").setDesc("Colour of every level's number and entry text.").addColorPicker((picker) => {
-      if (format.color !== "") picker.setValue(format.color);
-      picker.onChange(async (value) => {
-        await applyToAllLevels((level) => {
-          level.color = value;
-        });
-      });
-    }).addExtraButton((button) => {
-      button.setIcon("rotate-ccw").setTooltip("Use the theme colour").onClick(async () => {
-        await applyToAllLevels((level) => {
-          level.color = "";
-        });
-        this.display();
       });
     });
     this.addTextRow(
