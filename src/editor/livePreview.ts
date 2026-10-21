@@ -156,8 +156,12 @@ export function buildEditorExtension(host: EditorHost): Extension {
 	return [outlineDecoField, watcher];
 }
 
+// Only Markdown notes are outlines. A canvas text node's embedded editor
+// reports the `.canvas` file here, so anything else resolves to null and every
+// editor path (state, decoration, folding) leaves that editor alone.
 export function editorViewPath(view: EditorView): string | null {
-	return view.state.field(editorInfoField, false)?.file?.path ?? null;
+	const file = view.state.field(editorInfoField, false)?.file;
+	return file && file.extension === 'md' ? file.path : null;
 }
 
 // Hidden body/collapsed runs are replaced by a block decoration. Left without

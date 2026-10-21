@@ -1757,8 +1757,9 @@ function buildEditorExtension(host) {
   return [outlineDecoField, watcher];
 }
 function editorViewPath(view) {
-  var _a, _b, _c;
-  return (_c = (_b = (_a = view.state.field(import_obsidian.editorInfoField, false)) == null ? void 0 : _a.file) == null ? void 0 : _b.path) != null ? _c : null;
+  var _a;
+  const file = (_a = view.state.field(import_obsidian.editorInfoField, false)) == null ? void 0 : _a.file;
+  return file && file.extension === "md" ? file.path : null;
 }
 var HiddenBlockWidget = class extends import_view.WidgetType {
   // Every instance is interchangeable, so CM6 reuses the DOM instead of
@@ -2270,6 +2271,9 @@ function inlineHost(el) {
     host = only;
   }
 }
+function isListHost(el) {
+  return el.nodeName === "OL" || el.nodeName === "UL";
+}
 function splitByLineBreak2(el) {
   const segments = [{ nodes: [], br: null }];
   for (const child of Array.from(el.childNodes)) {
@@ -2369,6 +2373,7 @@ function levelClasses(plan, line) {
 function createReadingPostProcessor(host) {
   return (el, ctx) => {
     var _a, _b, _c;
+    if (!ctx.sourcePath.endsWith(".md")) return;
     const section = ctx.getSectionInfo(el);
     if (!section) return;
     const { body } = parseMetaDocument(section.text);
@@ -2416,6 +2421,7 @@ function createReadingPostProcessor(host) {
       materializeLabel(el, lineText, sigilChar, label, level, foldFor(lineStart));
       return;
     }
+    if (!outlined && plan.commentLines.size === 0 && plan.hiddenLineRanges.length === 0) return;
     let allHidden = true;
     for (let line = lineStart; line <= lineEnd; line++) {
       if (!isLineHidden(plan.hiddenLineRanges, line)) {
@@ -2429,9 +2435,10 @@ function createReadingPostProcessor(host) {
     }
     if (outlined) el.addClass("vo-ol");
     const doc = el.ownerDocument;
-    const segments = splitByLineBreak2(inlineHost(el));
+    const inline = inlineHost(el);
+    const segments = splitByLineBreak2(inline);
     const lines = body.split("\n");
-    const alignment = alignRunsToLines(
+    const alignment = isListHost(inline) ? null : alignRunsToLines(
       segments.map((segment) => segment.nodes.map((node2) => {
         var _a2;
         return (_a2 = node2.textContent) != null ? _a2 : "";

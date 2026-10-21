@@ -214,6 +214,14 @@ function inlineHost(el: HTMLElement): HTMLElement {
 	}
 }
 
+// A list's children are `<li>` blocks, not inline runs: wrapping them in a
+// `<span>` is invalid markup and breaks Obsidian's `ol > li` / `ul > li`
+// indent, pushing the numbers and bullets into the margin. Such a host is
+// never split.
+function isListHost(el: HTMLElement): boolean {
+	return el.nodeName === 'OL' || el.nodeName === 'UL';
+}
+
 function splitByLineBreak(el: HTMLElement): LineSegment[] {
 	const segments: LineSegment[] = [{ nodes: [], br: null }];
 	for (const child of Array.from(el.childNodes)) {
@@ -335,6 +343,9 @@ function levelClasses(plan: RenderPlan, line: number): string[] {
 
 export function createReadingPostProcessor(host: ReadingHost) {
 	return (el: HTMLElement, ctx: MarkdownPostProcessorContext): void => {
+		// Only Markdown notes are outlines. Canvas text nodes render through
+		// this same post-processor with the `.canvas` file as their source.
+		if (!ctx.sourcePath.endsWith('.md')) return;
 		const section = ctx.getSectionInfo(el);
 		if (!section) return;
 
@@ -395,6 +406,11 @@ export function createReadingPostProcessor(host: ReadingHost) {
 			return;
 		}
 
+		// A note with no outline entries, comment lines or hidden lines has
+		// nothing to apply, so its multi-line sections are left exactly as
+		// Obsidian rendered them.
+		if (!outlined && plan.commentLines.size === 0 && plan.hiddenLineRanges.length === 0) return;
+
 		let allHidden = true;
 		for (let line = lineStart; line <= lineEnd; line++) {
 			if (!isLineHidden(plan.hiddenLineRanges, line)) {
@@ -409,14 +425,16 @@ export function createReadingPostProcessor(host: ReadingHost) {
 		if (outlined) el.addClass('vo-ol');
 
 		const doc = el.ownerDocument;
-		const segments = splitByLineBreak(inlineHost(el));
+		const inline = inlineHost(el);
+		const segments = splitByLineBreak(inline);
 		const lines = body.split('\n');
 
 		// Usually one segment per source line, but an inline construct that
 		// spans a line break (an unclosed `$`) merges two lines into one
 		// segment; match segments to lines by their text so one typo costs
-		// only the swallowed line its label, not the whole paragraph.
-		const alignment = alignRunsToLines(
+		// only the swallowed line its label, not the whole paragraph. A list
+		// host goes straight to the whole-block fallback below.
+		const alignment = isListHost(inline) ? null : alignRunsToLines(
 			segments.map((segment) => segment.nodes.map((node) => node.textContent ?? '').join('')),
 			lines.slice(lineStart, lineEnd + 1),
 		);
