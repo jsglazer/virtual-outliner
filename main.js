@@ -3731,9 +3731,7 @@ function zoteroManager(app) {
   const plugins = (_a = app.plugins) == null ? void 0 : _a.plugins;
   const api = (_b = plugins == null ? void 0 : plugins["zotero-manager"]) == null ? void 0 : _b.api;
   if (!api || typeof api.version !== "number" || api.version < 1) return null;
-  if (typeof api.isAvailable !== "function" || typeof api.getItemJSON !== "function" || typeof api.getAllCiteKeys !== "function") {
-    return null;
-  }
+  if (typeof api.isAvailable !== "function" || typeof api.getAllCiteKeys !== "function") return null;
   return api;
 }
 async function fetchCitations(app, keys) {
@@ -3743,6 +3741,13 @@ async function fetchCitations(app, keys) {
       ok: false,
       reason: "not-installed",
       message: "This note cites sources, but the Zotero Manager plugin is not installed or enabled."
+    };
+  }
+  if (typeof api.getCSLJSON !== "function") {
+    return {
+      ok: false,
+      reason: "outdated",
+      message: "This note cites sources, but the installed Zotero Manager is too old to export CSL-JSON. Update it to 1.1.15 or later."
     };
   }
   if (!await api.isAvailable()) {
@@ -3755,7 +3760,7 @@ async function fetchCitations(app, keys) {
   const { byLibrary, unknown } = groupKeysByLibrary(keys, await api.getAllCiteKeys(true));
   const items = [];
   for (const [library, libKeys] of byLibrary) {
-    const got = await api.getItemJSON(
+    const got = await api.getCSLJSON(
       libKeys.map((key) => ({ key, library })),
       library
     );
