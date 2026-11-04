@@ -229,11 +229,24 @@ LINENUMBERS_TEX = "\n".join([
 # is grouped with its level's font and indent; the paragraph space after it is
 # cancelled and a page break there is forbidden, so an entry is never left at
 # the foot of a page without the first line of its body.
+#
+# Two entries in a row (an entry with no body) share ONE gap, so the space may
+# be cancelled only once: \voentryend leaves a bare \vskip-\parskip as the last
+# item on the list, and the next \voentry recognises it through \lastskip. A
+# gap-0 entry then adds nothing (the cancel already happened — adding a second
+# one put the line ~1pt below the previous entry and they overprinted), and a
+# gap-1 entry puts the paragraph space back. \vskip rather than \vspace is
+# deliberate: \vspace appends \vskip\z@skip, which would zero \lastskip.
 ENTRY_TEX = "\n".join([
-    "\\newcommand{\\voentry}[4]{\\par\\ifnum#1=0 \\vspace{-\\parskip}\\fi",
+    "\\newcommand{\\voentry}[4]{\\par",
+    "  \\ifdim\\lastskip=-\\parskip\\relax",
+    "    \\ifnum#1=1 \\vskip\\parskip\\relax\\fi",
+    "  \\else",
+    "    \\ifnum#1=0 \\vskip-\\parskip\\relax\\fi",
+    "  \\fi",
     "  \\begingroup\\leftskip=#2\\relax\\noindent#3%",
     "  \\if\\relax\\detokenize{#4}\\relax\\else#4\\enspace\\fi}",
-    "\\newcommand{\\voentryend}{\\par\\endgroup\\nobreak\\vspace{-\\parskip}}",
+    "\\newcommand{\\voentryend}{\\par\\endgroup\\nobreak\\vskip-\\parskip\\relax}",
 ])
 
 SUBMIT_TEX = "\n".join([
