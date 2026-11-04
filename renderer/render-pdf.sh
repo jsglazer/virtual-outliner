@@ -8,7 +8,7 @@
 # and the preamble there; job.py documents every job.json field.
 #
 # Pipeline: job.py prepare (endnote/reference tail + meta.tex + variant.tex) -> table widths
-# -> list breaks -> pandoc to .tex (extracting media) -> sanitize/optimize media
+# -> list breaks -> coloured highlights -> pandoc to .tex (extracting media) -> sanitize/optimize media
 # -> table row lines -> latexmk -> job.py deliver (refuses an existing file unless the job says overwrite; atomic move).
 #
 # The LAST line on stdout is always one JSON status object, which is what the
@@ -65,7 +65,8 @@ eval "$ENV_OUT"
 
 "$PY" "$HERE/job.py" prepare "$JOB" work.md meta.tex variant.tex 2>>"$LOG" || fail_json job "$(tail -3 "$LOG")"
 "$PY" "$HERE/tables.py" work.md work-tables.md 2>>"$LOG" || cp work.md work-tables.md
-"$PY" "$HERE/lists.py" work-tables.md work-final.md 2>>"$LOG" || cp work-tables.md work-final.md
+"$PY" "$HERE/lists.py" work-tables.md work-lists.md 2>>"$LOG" || cp work-tables.md work-lists.md
+"$PY" "$HERE/highlights.py" work-lists.md work-final.md 2>>"$LOG" || cp work-lists.md work-final.md
 
 # Plain pandoc paragraphs: consecutive lines join into one paragraph, and a
 # blank line (which is what each removed outline entry becomes) starts a new

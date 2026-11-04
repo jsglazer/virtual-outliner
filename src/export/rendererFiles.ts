@@ -2,6 +2,7 @@
 // installed renderer folder.
 
 import jobPy from '../../renderer/job.py';
+import highlightsPy from '../../renderer/highlights.py';
 import libSh from '../../renderer/lib.sh';
 import listsPy from '../../renderer/lists.py';
 import preambleTex from '../../renderer/default-preamble.tex';
@@ -23,6 +24,7 @@ export const RENDERER_FILES: Readonly<Record<string, string>> = {
 	'job.py': jobPy,
 	'tables.py': tablesPy,
 	'lists.py': listsPy,
+	'highlights.py': highlightsPy,
 	'rowlines.py': rowlinesPy,
 	'wikilinks.py': wikilinksPy,
 	'quick-action.sh': quickActionSh,

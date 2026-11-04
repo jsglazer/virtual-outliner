@@ -3,7 +3,7 @@
 //
 //   $TMPDIR/virtual-outliner-export/<vault hash>/<note hash>/
 //     source.md      the note's body, outline stripped, Obsidian syntax converted
-//     assets/        vault images the note embeds
+//     assets/        vault images the note embeds (Excalidraw drawings as PNG)
 //     preamble.tex   the resolved preamble
 //     refs.json      CSL-JSON from Zotero (only when the note cites)
 //     job.json       everything else the renderer needs (see renderer/job.py)
@@ -22,6 +22,7 @@ import type { ConversionIssue, ExportResolver } from '../core/obsidianMarkdown';
 import { toPandocMarkdown } from '../core/obsidianMarkdown';
 import type { PdfExportSettings } from '../core/settings';
 import type { LevelFormat } from '../core/types';
+import { drawingImageName, isExcalidraw, renderDrawing } from './excalidraw';
 import { buildRoot, ensureRenderer, missingTools, SEARCH_PATH } from './installer';
 import { node } from './node';
 import { DEFAULT_PREAMBLE } from './rendererFiles';
@@ -189,10 +190,16 @@ export class PdfExporter {
 
 		progress('Converting note…');
 		const staged = new Map<string, string>();
+		// Excalidraw drawings embed as images: rendered to PNG when staged.
+		const drawings = new Map<string, TFile>();
 		const resolver: ExportResolver = {
 			resolveLink: (linkpath, fromPath) => {
 				const target = app.metadataCache.getFirstLinkpathDest(linkpath, fromPath);
 				if (!target) return null;
+				if (isExcalidraw(app, target)) {
+					drawings.set(target.path, target);
+					return { path: target.path, kind: 'image' };
+				}
 				const ext = target.extension.toLowerCase();
 				return { path: target.path, kind: ext === 'md' ? 'markdown' : IMAGE_EXTENSIONS.has(ext) ? 'image' : 'other' };
 			},
@@ -203,7 +210,8 @@ export class PdfExporter {
 			stageImage: (imagePath) => {
 				let rel = staged.get(imagePath);
 				if (rel === undefined) {
-					rel = `assets/${staged.size + 1}-${path.basename(imagePath)}`;
+					const drawing = drawings.get(imagePath);
+					rel = `assets/${staged.size + 1}-${drawing ? drawingImageName(drawing) : path.basename(imagePath)}`;
 					staged.set(imagePath, rel);
 				}
 				return rel;
@@ -218,6 +226,14 @@ export class PdfExporter {
 		const body = extracted.body;
 		const converted = await toPandocMarkdown(body, plan.file.path, this.host.sigilChar(), resolver);
 		for (const [vaultPath, rel] of staged) {
+			const drawing = drawings.get(vaultPath);
+			if (drawing) {
+				progress(`Rendering ${drawing.basename}…`);
+				const image = await renderDrawing(app, drawing);
+				if (!image.ok) return fail('drawing', image.message);
+				await fs.promises.writeFile(path.join(buildDir, rel), image.data);
+				continue;
+			}
 			await fs.promises.copyFile(path.join(base, vaultPath), path.join(buildDir, rel));
 		}
 

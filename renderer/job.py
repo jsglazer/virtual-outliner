@@ -249,6 +249,27 @@ ENTRY_TEX = "\n".join([
     "\\newcommand{\\voentryend}{\\par\\endgroup\\nobreak\\vskip-\\parskip\\relax}",
 ])
 
+# Highlights. Plain ==mark== is pandoc's \hl (lua-ul's \highLight under
+# LuaLaTeX); its colour is set to Obsidian's default highlight — a 30% tint of
+# the theme yellow — instead of LaTeX's saturated yellow. highlights.py turns
+# ==🟢text== and friends into \vohl{<colour>}{text}. lua-ul is loaded here too
+# because pandoc only loads it when the document has a plain ==mark== left.
+# Each colour is the matching Obsidian base colour at 30% over white.
+HIGHLIGHT_TEX = "\n".join([
+    "\\RequirePackage{xcolor}",
+    "\\RequirePackage{luacolor}",
+    "\\RequirePackage[soul]{lua-ul}",
+    "\\definecolor{vohlyellow}{RGB}{246,230,179}",
+    "\\definecolor{vohlgreen}{RGB}{181,234,202}",
+    "\\definecolor{vohlorange}{RGB}{249,214,179}",
+    "\\definecolor{vohlpurple}{RGB}{229,217,255}",
+    "\\definecolor{vohlred}{RGB}{248,193,200}",
+    "\\definecolor{vohlblue}{RGB}{181,211,245}",
+    "\\definecolor{vohlbrown}{RGB}{220,206,191}",
+    "\\LuaULSetHighLightColor{vohlyellow}",
+    "\\newcommand{\\vohl}[2]{\\highLight[#1]{#2}}",
+])
+
 SUBMIT_TEX = "\n".join([
     "% Written by job.py — the Submit variant's footer.",
     "\\fancyfoot{}",
@@ -301,6 +322,7 @@ def cmd_prepare(job_path, work_md, meta_tex, variant_tex):
     else:
         parts.append("\\newcommand{\\voline}[1]{}")
     parts.append(ENTRY_TEX)
+    parts.append(HIGHLIGHT_TEX)
     with open(variant_tex, "w", encoding="utf-8") as fh:
         fh.write("\n".join(parts) + "\n")
 

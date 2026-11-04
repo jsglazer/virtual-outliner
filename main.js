@@ -2735,6 +2735,57 @@ function collapseBlankRuns(markdown) {
   return out.join("\n");
 }
 
+// src/export/excalidraw.ts
+var SCALE = 3;
+var PADDING = 10;
+function isExcalidraw(app, file) {
+  var _a;
+  if (file.extension === "excalidraw") return true;
+  if (file.extension !== "md") return false;
+  if (file.name.toLowerCase().endsWith(".excalidraw.md")) return true;
+  const fm = (_a = app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter;
+  return fm !== void 0 && "excalidraw-plugin" in fm;
+}
+function drawingImageName(file) {
+  return `${file.name.replace(/\.md$/i, "")}.png`;
+}
+function excalidrawApi() {
+  const g = window.ExcalidrawAutomate;
+  if (!g) return null;
+  return typeof g.getAPI === "function" ? { api: g.getAPI(), owned: true } : { api: g, owned: false };
+}
+function exportedSibling(app, file) {
+  var _a, _b;
+  const dir = (_b = (_a = file.parent) == null ? void 0 : _a.path) != null ? _b : "";
+  const stem = file.name.replace(/\.md$/i, "");
+  const bare = stem.replace(/\.excalidraw$/i, "");
+  for (const name of [`${stem}.png`, `${bare}.png`]) {
+    const found = app.vault.getFileByPath(dir === "" || dir === "/" ? name : `${dir}/${name}`);
+    if (found) return found;
+  }
+  return null;
+}
+async function renderDrawing(app, file) {
+  var _a;
+  const found = excalidrawApi();
+  if (found) {
+    const { api, owned } = found;
+    try {
+      const blob = await api.createPNG(file.path, SCALE, { withBackground: true, withTheme: false, isMask: false }, void 0, "light", PADDING);
+      return { ok: true, data: new Uint8Array(await blob.arrayBuffer()) };
+    } catch (e) {
+      const sibling2 = exportedSibling(app, file);
+      if (sibling2) return { ok: true, data: new Uint8Array(await app.vault.readBinary(sibling2)) };
+      return { ok: false, message: `Excalidraw couldn't render ${file.path}: ${e instanceof Error ? e.message : String(e)}` };
+    } finally {
+      if (owned) (_a = api.destroy) == null ? void 0 : _a.call(api);
+    }
+  }
+  const sibling = exportedSibling(app, file);
+  if (sibling) return { ok: true, data: new Uint8Array(await app.vault.readBinary(sibling)) };
+  return { ok: false, message: `${file.path} is an Excalidraw drawing. Enable the Excalidraw plugin (or turn on its PNG auto-export) so it can be printed.` };
+}
+
 // src/export/node.ts
 var cached = null;
 function node() {
@@ -3010,6 +3061,27 @@ ENTRY_TEX = "\\n".join([
     "\\\\newcommand{\\\\voentryend}{\\\\par\\\\endgroup\\\\nobreak\\\\vskip-\\\\parskip\\\\relax}",
 ])
 
+# Highlights. Plain ==mark== is pandoc's \\hl (lua-ul's \\highLight under
+# LuaLaTeX); its colour is set to Obsidian's default highlight \u2014 a 30% tint of
+# the theme yellow \u2014 instead of LaTeX's saturated yellow. highlights.py turns
+# ==\u{1F7E2}text== and friends into \\vohl{<colour>}{text}. lua-ul is loaded here too
+# because pandoc only loads it when the document has a plain ==mark== left.
+# Each colour is the matching Obsidian base colour at 30% over white.
+HIGHLIGHT_TEX = "\\n".join([
+    "\\\\RequirePackage{xcolor}",
+    "\\\\RequirePackage{luacolor}",
+    "\\\\RequirePackage[soul]{lua-ul}",
+    "\\\\definecolor{vohlyellow}{RGB}{246,230,179}",
+    "\\\\definecolor{vohlgreen}{RGB}{181,234,202}",
+    "\\\\definecolor{vohlorange}{RGB}{249,214,179}",
+    "\\\\definecolor{vohlpurple}{RGB}{229,217,255}",
+    "\\\\definecolor{vohlred}{RGB}{248,193,200}",
+    "\\\\definecolor{vohlblue}{RGB}{181,211,245}",
+    "\\\\definecolor{vohlbrown}{RGB}{220,206,191}",
+    "\\\\LuaULSetHighLightColor{vohlyellow}",
+    "\\\\newcommand{\\\\vohl}[2]{\\\\highLight[#1]{#2}}",
+])
+
 SUBMIT_TEX = "\\n".join([
     "% Written by job.py \u2014 the Submit variant's footer.",
     "\\\\fancyfoot{}",
@@ -3062,6 +3134,7 @@ def cmd_prepare(job_path, work_md, meta_tex, variant_tex):
     else:
         parts.append("\\\\newcommand{\\\\voline}[1]{}")
     parts.append(ENTRY_TEX)
+    parts.append(HIGHLIGHT_TEX)
     with open(variant_tex, "w", encoding="utf-8") as fh:
         fh.write("\\n".join(parts) + "\\n")
 
@@ -3277,6 +3350,9 @@ if __name__ == "__main__":
     sys.exit(main(sys.argv))
 `;
 
+// renderer/highlights.py
+var highlights_default = '#!/usr/bin/env python3\n"""Colour-coded highlights: `==\u{1F7E2}text==` prints with a green highlight.\n\nA highlight whose text starts with a coloured circle emoji takes that colour\nin the PDF and the emoji itself is dropped (the LaTeX font has no glyph for\nit, so it would vanish anyway). A highlight with no emoji is left to pandoc\'s\nown `==mark==` handling, which job.py tints to Obsidian\'s default yellow.\n\n    ==\u{1F7E2}**Theory**==   ->  `\\\\vohl{vohlgreen}{`{=latex}**Theory**`}`{=latex}\n\nThe emoji\'s text is still Markdown, so pandoc converts it as usual between\nthe two raw LaTeX halves. Fenced code blocks and inline code spans (which\ninclude every raw `...`{=latex} span the plugin wrote) are left untouched.\n\\\\vohl and the vohl* colours are defined in job.py (HIGHLIGHT_TEX).\n\nUsage: highlights.py <input.md> <output.md>\n"""\nimport re\nimport sys\n\nFENCE = re.compile(r"^\\s*(```|~~~)")\nCOLOURS = {\n    "\\U0001F7E2": "vohlgreen",   # \u{1F7E2}\n    "\\U0001F7E0": "vohlorange",  # \u{1F7E0}\n    "\\U0001F7E3": "vohlpurple",  # \u{1F7E3}\n    "\\U0001F534": "vohlred",     # \u{1F534}\n    "\\U0001F535": "vohlblue",    # \u{1F535}\n    "\\U0001F7E1": "vohlyellow",  # \u{1F7E1}\n    "\\U0001F7E4": "vohlbrown",   # \u{1F7E4}\n}\nEMOJI = "|".join(COLOURS)\n# The opening == must not be part of a longer run of \'=\' (e.g. a ==== rule).\nCOLOURED = re.compile(r"(?<!=)==\\s*(" + EMOJI + r")\uFE0F?\\s*(\\S(?:.*?\\S)?)\\s*==(?!=)")\nCODE_SPAN = re.compile(r"(`+)(?:.*?[^`])?\\1(?!`)|(`+)")\n\n\ndef colour_segment(text):\n    return COLOURED.sub(lambda m: "`\\\\vohl{%s}{`{=latex}%s`}`{=latex}" % (COLOURS[m.group(1)], m.group(2)), text)\n\n\ndef process_line(line):\n    out, pos = [], 0\n    for m in CODE_SPAN.finditer(line):\n        if m.group(2) is not None:\n            continue  # an unmatched backtick run is literal text\n        out.append(colour_segment(line[pos:m.start()]))\n        out.append(m.group(0))\n        pos = m.end()\n    out.append(colour_segment(line[pos:]))\n    return "".join(out)\n\n\ndef process(text):\n    out, fence = [], None\n    for line in text.split("\\n"):\n        f = FENCE.match(line)\n        if fence is not None:\n            if f and f.group(1) == fence:\n                fence = None\n            out.append(line)\n            continue\n        if f:\n            fence = f.group(1)\n            out.append(line)\n            continue\n        out.append(process_line(line))\n    return "\\n".join(out)\n\n\ndef main():\n    if len(sys.argv) != 3:\n        sys.exit("usage: highlights.py <input.md> <output.md>")\n    with open(sys.argv[1], encoding="utf-8") as fh:\n        text = fh.read()\n    with open(sys.argv[2], "w", encoding="utf-8") as fh:\n        fh.write(process(text))\n\n\nif __name__ == "__main__":\n    main()\n';
+
 // renderer/lib.sh
 var lib_default = '# lib.sh \u2014 media helpers for render-pdf.sh. Sourced, not run directly.\n#\n# Forked from ~/.claude/scripts/lib/md-convert-lib.sh (sanitize/optimize). This\n# copy ships inside the Virtual Outliner plugin bundle and is written to\n# ~/Library/Application Support/virtual-outliner/renderer/<version>/ on load,\n# so every path here is relative to the renderer folder, never ~/.claude.\n\n: ${IMG_MAX_WIDTH:=1600}\n# `=` not `:=`: an explicitly empty PNGQUANT_QUALITY="" must disable pngquant.\n: ${PNGQUANT_QUALITY=65-90}\n\nlog() { print -r -- "$(date \'+%Y-%m-%d %H:%M:%S\') $*" >>"${LOG:-/dev/null}" }\n\nhuman_size() {\n  local bytes=$1\n  if (( bytes >= 1048576 )); then\n    printf "%.1f MB" $(( bytes / 1048576.0 ))\n  else\n    printf "%d KB" $(( bytes / 1024 ))\n  fi\n}\n\n# Real format of a file, as a bare extension ("png", "jpg", "webp", ...).\nreal_format() {\n  local mime\n  mime=$(file -b --mime-type -- "$1" 2>/dev/null)\n  case $mime in\n    image/png)             print png  ;;\n    image/jpeg)            print jpg  ;;\n    image/webp)            print webp ;;\n    image/gif)             print gif  ;;\n    image/tiff)            print tiff ;;\n    image/svg+xml|text/*)  print svg  ;;\n    application/pdf)       print pdf  ;;\n    *)                     print ""   ;;\n  esac\n}\n\n# Convert $1 to PNG at $2. Returns non-zero if no converter could handle it.\nto_png() {\n  local src=$1 dst=$2\n  if [[ $(real_format "$src") == webp ]] && (( $+commands[dwebp] )); then\n    dwebp -quiet "$src" -o "$dst" && return 0\n  fi\n  if (( $+commands[magick] )); then\n    magick "$src" "$dst" && return 0\n  fi\n  sips -s format png "$src" --out "$dst" >/dev/null 2>&1\n}\n\n# Make every file under $1 actually be what its extension claims (CDNs lie).\n# Files with an extension lualatex can use (png/jpg/pdf) are converted in place;\n# files it cannot use at all (.webp, .gif, ...) get a new .png beside them and\n# the rename is echoed as "old<TAB>new" for the caller to patch into doc.tex.\nsanitize_media() {\n  local dir=$1\n  local f ext real png\n  [[ -d $dir ]] || return 0\n\n  for f in $dir/**/*(.N); do\n    ext=${${f:e}:l}\n    real=$(real_format "$f")\n\n    [[ -z $real || $real == svg ]] && continue\n    [[ $real == $ext ]] && continue\n    [[ $real == jpg && $ext == jpeg ]] && continue\n\n    case $ext in\n      png|jpg|jpeg)\n        if to_png "$f" "$f.tmp.png"; then\n          mv -f "$f.tmp.png" "$f"\n          log "  transcoded $real -> $ext: ${f:t}"\n        else\n          rm -f "$f.tmp.png"\n          log "  WARNING: could not transcode ${f:t} ($real)"\n        fi\n        ;;\n      *)\n        png="${f:r}.png"\n        if to_png "$f" "$png"; then\n          rm -f "$f"\n          print -r -- "${f:t}	${png:t}"\n          log "  converted $real -> png (renamed): ${f:t} -> ${png:t}"\n        else\n          log "  WARNING: could not convert ${f:t} ($real)"\n        fi\n        ;;\n    esac\n  done\n}\n\n# Shrink every PNG under $1: cap width at IMG_MAX_WIDTH, then lossy-recompress\n# with pngquant when it is installed. Never fatal, never makes a file bigger.\noptimize_media() {\n  local dir=$1\n  local f width before after\n  [[ -d $dir ]] || return 0\n\n  for f in $dir/**/*.png(.N); do\n    before=$(stat -f%z "$f")\n\n    if (( IMG_MAX_WIDTH > 0 )); then\n      width=$(sips -g pixelWidth "$f" 2>/dev/null | awk \'/pixelWidth/{print $2}\')\n      if [[ -n $width ]] && (( width > IMG_MAX_WIDTH )); then\n        sips --resampleWidth "$IMG_MAX_WIDTH" "$f" >/dev/null 2>&1\n      fi\n    fi\n\n    if [[ -n $PNGQUANT_QUALITY ]] && (( $+commands[pngquant] )); then\n      pngquant --quality="$PNGQUANT_QUALITY" --speed 1 --strip \\\n        --skip-if-larger --force --output "$f" -- "$f" 2>/dev/null\n    fi\n\n    after=$(stat -f%z "$f")\n    (( after < before )) && log "  optimized ${f:t}: $(human_size $before) -> $(human_size $after)"\n  done\n}\n';
 
@@ -3360,7 +3436,7 @@ var default_preamble_default = "\\usepackage[top=.75in, bottom=.75in, left=.75in
 var quick_action_default = '#!/bin/zsh\n# quick-action.sh \u2014 Finder Quick Action entry point ("Convert Md to PDF").\n#\n# The installed .workflow is a two-line stub that execs this file from\n# ~/Library/Application Support/virtual-outliner/renderer/current/, so the\n# Quick Action\'s behaviour updates whenever the plugin does.\n#\n# For each selected .md file: find its vault (the folder holding .obsidian),\n# load that vault\'s config written by the plugin (sigil, author, preamble,\n# export defaults), refuse notes that carry a Virtual Outliner outline \u2014 only\n# the plugin can strip one \u2014 and otherwise render next to the note (or to its\n# pdf-output: frontmatter) with the same renderer the plugin uses.\n\nemulate -L zsh\nsetopt no_nomatch\nset -u\n\nHERE=${0:A:h}\nSUPPORT="$HOME/Library/Application Support/virtual-outliner"\nexport PATH=/opt/homebrew/bin:/usr/local/bin:/Library/TeX/texbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}\nPY=python3\n(( $+commands[python3] )) || PY=/usr/bin/python3\n\nquoted() { print -r -- "\\"${${1//\\\\/\\\\\\\\}//\\"/\\\\\\"}\\"" }\nnotify() { osascript -e "display notification $(quoted "$2") with title $(quoted "$1")" >/dev/null 2>&1 }\nalert() { osascript -e "display dialog $(quoted "$1") buttons {\\"OK\\"} default button \\"OK\\" with icon caution with title \\"Convert Md to PDF\\"" >/dev/null 2>&1 }\n\n(( $# )) || exit 0\n\nFONT_SIZE=$(osascript -e \'text returned of (display dialog "Font size (pt): 8, 9, 10, 11, 12, 14, 17 or 20" default answer "12" buttons {"Cancel","OK"} default button "OK" with title "Convert Md to PDF")\' 2>/dev/null) || exit 0\nFONT_SIZE=${FONT_SIZE%pt}\n[[ -n $FONT_SIZE ]] || exit 0\n\nvault_root() {\n  local dir=${1:A:h}\n  while [[ $dir != / ]]; do\n    [[ -d "$dir/.obsidian" ]] && { print -r -- "$dir"; return 0 }\n    dir=${dir:h}\n  done\n  return 1\n}\n\nWROTE=0\nFAILS=0\nfor f in "$@"; do\n  [[ -f $f && ${f:e:l} == md ]] || continue\n  CONFIG=""\n  if ROOT=$(vault_root "$f"); then\n    CONFIG="$SUPPORT/vaults/${ROOT:t}/config.json"\n    [[ -f $CONFIG ]] || CONFIG=""\n  fi\n\n  BUILD=$(mktemp -d "${TMPDIR:-/tmp}/vo-quick-action.XXXXXX") || { (( FAILS++ )); continue }\n  OUT=$("$PY" "$HERE/job.py" qa "$f" "$CONFIG" "$FONT_SIZE" "$BUILD" 2>>"$BUILD/render.log")\n  RC=$?\n  if (( RC == 3 )); then\n    alert "$OUT"\n    rm -rf "$BUILD"\n    continue\n  elif (( RC != 0 )); then\n    alert "Could not prepare ${f:t}: $(tail -3 "$BUILD/render.log")"\n    (( FAILS++ ))\n    continue\n  fi\n\n  # The PDF already exists: ask, defaulting to overwriting it (Save as\n  # <name>-01.pdf is the alternative), matching the plugin\'s export dialog.\n  TARGET=$("$PY" -c \'import json,sys; print(json.load(open(sys.argv[1]))["output"])\' "$BUILD/job.json")\n  if [[ -e $TARGET ]]; then\n    NEXT=$("$PY" "$HERE/job.py" next-free "$TARGET")\n    CHOICE=$(osascript -e "button returned of (display dialog $(quoted "${TARGET:t} already exists in ${TARGET:h}.") buttons {\\"Skip\\", $(quoted "Save as ${NEXT:t}"), \\"Overwrite\\"} default button 3 cancel button 1 with icon caution with title \\"Convert Md to PDF\\")" 2>/dev/null) || CHOICE=Skip\n    case $CHOICE in\n      Skip) rm -rf "$BUILD"; continue ;;\n      Overwrite) "$PY" "$HERE/job.py" set-output "$BUILD/job.json" "$TARGET" 1 ;;\n      *) "$PY" "$HERE/job.py" set-output "$BUILD/job.json" "$NEXT" 0 ;;\n    esac\n  fi\n\n  STATUS=$(/bin/zsh "$HERE/render-pdf.sh" --job "$BUILD/job.json" | tail -1)\n  if [[ $STATUS == \'{"ok": true\'* ]]; then\n    (( WROTE++ ))\n    rm -rf "$BUILD"\n  else\n    MESSAGE=$(print -r -- "$STATUS" | "$PY" -c \'import json,sys; print(json.load(sys.stdin).get("message",""))\' 2>/dev/null)\n    alert "${f:t} failed: ${MESSAGE:-$STATUS}\n\nBuild files kept in $BUILD"\n    (( FAILS++ ))\n  fi\ndone\n\nif (( WROTE )); then\n  notify "Convert Md to PDF" "Wrote $WROTE PDF$([[ $WROTE == 1 ]] || print s)"\nfi\n(( FAILS == 0 ))\n';
 
 // renderer/render-pdf.sh
-var render_pdf_default = '#!/bin/zsh\n# render-pdf.sh \u2014 typeset one prepared Markdown source into a PDF.\n#\n#   zsh render-pdf.sh --job /path/to/build/job.json\n#\n# The build folder is the folder holding job.json. Whoever calls this (the\n# Obsidian plugin, or quick-action.sh) has already written the source Markdown\n# and the preamble there; job.py documents every job.json field.\n#\n# Pipeline: job.py prepare (endnote/reference tail + meta.tex + variant.tex) -> table widths\n# -> list breaks -> pandoc to .tex (extracting media) -> sanitize/optimize media\n# -> table row lines -> latexmk -> job.py deliver (refuses an existing file unless the job says overwrite; atomic move).\n#\n# The LAST line on stdout is always one JSON status object, which is what the\n# plugin parses: {"ok":true,"output":\u2026} or {"ok":false,"stage":\u2026,"message":\u2026}.\n# Everything else goes to render.log in the build folder.\n#\n# Run with /bin/zsh explicitly: sync services drop the executable bit, so\n# nothing here relies on it.\n\nemulate -L zsh\nsetopt no_nomatch pipe_fail\nset -u\n\nHERE=${0:A:h}\nexport PATH=/opt/homebrew/bin:/usr/local/bin:/Library/TeX/texbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}\n\nJOB=""\nwhile (( $# )); do\n  case $1 in\n    --job) JOB=${2:-}; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n\nPY=python3\n(( $+commands[python3] )) || PY=/usr/bin/python3\n\nfail_json() {\n  # stage, message\n  "$PY" "$HERE/job.py" status-fail "$1" "$2" 2>/dev/null \\\n    || print -r -- \'{"ok":false,"stage":"\'"$1"\'","message":"renderer failure"}\'\n  exit 1\n}\n\n[[ -n $JOB && -f $JOB ]] || fail_json args "No job file given (expected --job <job.json>)."\nJOB=${JOB:A}\nBUILD=${JOB:h}\ncd "$BUILD" || fail_json args "Cannot enter build folder $BUILD"\n\nLOG="$BUILD/render.log"\nsource "$HERE/lib.sh"\n# Leftovers from an earlier run in the same folder (e.g. an .aux written with\n# enotez loaded) break the next compile when the options change.\nrm -rf media doc.aux doc.toc doc.out doc.log doc.pdf doc.fls doc.fdb_latexmk doc.tex work*.md meta.tex variant.tex pandoc.out latexmk.out\nlog "=== render $JOB"\n\nfor tool in pandoc latexmk lualatex; do\n  (( $+commands[$tool] )) || fail_json tools "$tool was not found. Install pandoc and MacTeX (pandoc, latexmk, lualatex)."\ndone\n\n# Shell assignments for the job\'s fields (values shell-quoted by job.py).\nENV_OUT=$("$PY" "$HERE/job.py" env "$JOB" 2>>"$LOG") || fail_json job "$(tail -3 "$LOG")"\neval "$ENV_OUT"\n\n"$PY" "$HERE/job.py" prepare "$JOB" work.md meta.tex variant.tex 2>>"$LOG" || fail_json job "$(tail -3 "$LOG")"\n"$PY" "$HERE/tables.py" work.md work-tables.md 2>>"$LOG" || cp work.md work-tables.md\n"$PY" "$HERE/lists.py" work-tables.md work-final.md 2>>"$LOG" || cp work-tables.md work-final.md\n\n# Plain pandoc paragraphs: consecutive lines join into one paragraph, and a\n# blank line (which is what each removed outline entry becomes) starts a new\n# one. End a line with two spaces or a backslash to force a line break.\nargs=(\n  -f markdown+mark\n  -t latex -s -o doc.tex\n  --extract-media=media\n  --resource-path="$BUILD:$JOB_RESOURCE_PATH"\n  -H meta.tex -H "$JOB_PREAMBLE" -H variant.tex\n  -V documentclass=extarticle -V fontsize="$JOB_FONTSIZE" -V papersize=letter\n)\n(( JOB_HEADING_SHIFT )) && args+=(--shift-heading-level-by="$JOB_HEADING_SHIFT")\n(( JOB_HEADNUM )) && args+=(-N)\n(( JOB_TOC )) && args+=(--toc)\nif [[ -n $JOB_BIBLIOGRAPHY ]]; then\n  args+=(--citeproc --bibliography="$JOB_BIBLIOGRAPHY")\n  [[ -n $JOB_CSL ]] && args+=(--csl="$JOB_CSL")\nfi\n\nlog "  pandoc ${args[*]}"\nif ! pandoc work-final.md "${args[@]}" >pandoc.out 2>&1; then\n  cat pandoc.out >>"$LOG"\n  fail_json pandoc "$(tail -15 pandoc.out)"\nfi\n[[ -s pandoc.out ]] && cat pandoc.out >>"$LOG"\n\nrenames=$(sanitize_media media)\nif [[ -n $renames ]]; then\n  while IFS=$\'\\t\' read -r old new; do\n    [[ -n $old ]] || continue\n    LC_ALL=C sed -i \'\' "s|media/${old}|media/${new}|g" doc.tex\n  done <<< "$renames"\nfi\noptimize_media media\n"$PY" "$HERE/rowlines.py" doc.tex >>"$LOG" 2>&1\n\nlog "  latexmk"\nif ! latexmk -lualatex -interaction=nonstopmode -halt-on-error -file-line-error doc.tex >latexmk.out 2>&1; then\n  fail_json latex "$("$PY" "$HERE/job.py" latex-errors doc.log 2>/dev/null)"\nfi\n\n"$PY" "$HERE/job.py" deliver "$JOB" doc.pdf 2>>"$LOG"\n';
+var render_pdf_default = '#!/bin/zsh\n# render-pdf.sh \u2014 typeset one prepared Markdown source into a PDF.\n#\n#   zsh render-pdf.sh --job /path/to/build/job.json\n#\n# The build folder is the folder holding job.json. Whoever calls this (the\n# Obsidian plugin, or quick-action.sh) has already written the source Markdown\n# and the preamble there; job.py documents every job.json field.\n#\n# Pipeline: job.py prepare (endnote/reference tail + meta.tex + variant.tex) -> table widths\n# -> list breaks -> coloured highlights -> pandoc to .tex (extracting media) -> sanitize/optimize media\n# -> table row lines -> latexmk -> job.py deliver (refuses an existing file unless the job says overwrite; atomic move).\n#\n# The LAST line on stdout is always one JSON status object, which is what the\n# plugin parses: {"ok":true,"output":\u2026} or {"ok":false,"stage":\u2026,"message":\u2026}.\n# Everything else goes to render.log in the build folder.\n#\n# Run with /bin/zsh explicitly: sync services drop the executable bit, so\n# nothing here relies on it.\n\nemulate -L zsh\nsetopt no_nomatch pipe_fail\nset -u\n\nHERE=${0:A:h}\nexport PATH=/opt/homebrew/bin:/usr/local/bin:/Library/TeX/texbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}\n\nJOB=""\nwhile (( $# )); do\n  case $1 in\n    --job) JOB=${2:-}; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n\nPY=python3\n(( $+commands[python3] )) || PY=/usr/bin/python3\n\nfail_json() {\n  # stage, message\n  "$PY" "$HERE/job.py" status-fail "$1" "$2" 2>/dev/null \\\n    || print -r -- \'{"ok":false,"stage":"\'"$1"\'","message":"renderer failure"}\'\n  exit 1\n}\n\n[[ -n $JOB && -f $JOB ]] || fail_json args "No job file given (expected --job <job.json>)."\nJOB=${JOB:A}\nBUILD=${JOB:h}\ncd "$BUILD" || fail_json args "Cannot enter build folder $BUILD"\n\nLOG="$BUILD/render.log"\nsource "$HERE/lib.sh"\n# Leftovers from an earlier run in the same folder (e.g. an .aux written with\n# enotez loaded) break the next compile when the options change.\nrm -rf media doc.aux doc.toc doc.out doc.log doc.pdf doc.fls doc.fdb_latexmk doc.tex work*.md meta.tex variant.tex pandoc.out latexmk.out\nlog "=== render $JOB"\n\nfor tool in pandoc latexmk lualatex; do\n  (( $+commands[$tool] )) || fail_json tools "$tool was not found. Install pandoc and MacTeX (pandoc, latexmk, lualatex)."\ndone\n\n# Shell assignments for the job\'s fields (values shell-quoted by job.py).\nENV_OUT=$("$PY" "$HERE/job.py" env "$JOB" 2>>"$LOG") || fail_json job "$(tail -3 "$LOG")"\neval "$ENV_OUT"\n\n"$PY" "$HERE/job.py" prepare "$JOB" work.md meta.tex variant.tex 2>>"$LOG" || fail_json job "$(tail -3 "$LOG")"\n"$PY" "$HERE/tables.py" work.md work-tables.md 2>>"$LOG" || cp work.md work-tables.md\n"$PY" "$HERE/lists.py" work-tables.md work-lists.md 2>>"$LOG" || cp work-tables.md work-lists.md\n"$PY" "$HERE/highlights.py" work-lists.md work-final.md 2>>"$LOG" || cp work-lists.md work-final.md\n\n# Plain pandoc paragraphs: consecutive lines join into one paragraph, and a\n# blank line (which is what each removed outline entry becomes) starts a new\n# one. End a line with two spaces or a backslash to force a line break.\nargs=(\n  -f markdown+mark\n  -t latex -s -o doc.tex\n  --extract-media=media\n  --resource-path="$BUILD:$JOB_RESOURCE_PATH"\n  -H meta.tex -H "$JOB_PREAMBLE" -H variant.tex\n  -V documentclass=extarticle -V fontsize="$JOB_FONTSIZE" -V papersize=letter\n)\n(( JOB_HEADING_SHIFT )) && args+=(--shift-heading-level-by="$JOB_HEADING_SHIFT")\n(( JOB_HEADNUM )) && args+=(-N)\n(( JOB_TOC )) && args+=(--toc)\nif [[ -n $JOB_BIBLIOGRAPHY ]]; then\n  args+=(--citeproc --bibliography="$JOB_BIBLIOGRAPHY")\n  [[ -n $JOB_CSL ]] && args+=(--csl="$JOB_CSL")\nfi\n\nlog "  pandoc ${args[*]}"\nif ! pandoc work-final.md "${args[@]}" >pandoc.out 2>&1; then\n  cat pandoc.out >>"$LOG"\n  fail_json pandoc "$(tail -15 pandoc.out)"\nfi\n[[ -s pandoc.out ]] && cat pandoc.out >>"$LOG"\n\nrenames=$(sanitize_media media)\nif [[ -n $renames ]]; then\n  while IFS=$\'\\t\' read -r old new; do\n    [[ -n $old ]] || continue\n    LC_ALL=C sed -i \'\' "s|media/${old}|media/${new}|g" doc.tex\n  done <<< "$renames"\nfi\noptimize_media media\n"$PY" "$HERE/rowlines.py" doc.tex >>"$LOG" 2>&1\n\nlog "  latexmk"\nif ! latexmk -lualatex -interaction=nonstopmode -halt-on-error -file-line-error doc.tex >latexmk.out 2>&1; then\n  fail_json latex "$("$PY" "$HERE/job.py" latex-errors doc.log 2>/dev/null)"\nfi\n\n"$PY" "$HERE/job.py" deliver "$JOB" doc.pdf 2>>"$LOG"\n';
 
 // renderer/rowlines.py
 var rowlines_default = `#!/usr/bin/env python3
@@ -3581,6 +3657,7 @@ var RENDERER_FILES = {
   "job.py": job_default,
   "tables.py": tables_default,
   "lists.py": lists_default,
+  "highlights.py": highlights_default,
   "rowlines.py": rowlines_default,
   "wikilinks.py": wikilinks_default,
   "quick-action.sh": quick_action_default,
@@ -3898,10 +3975,15 @@ var PdfExporter = class {
     const fail = (stage, message) => ({ ok: false, stage, message, buildDir, logPath: null });
     progress("Converting note\u2026");
     const staged = /* @__PURE__ */ new Map();
+    const drawings = /* @__PURE__ */ new Map();
     const resolver = {
       resolveLink: (linkpath, fromPath) => {
         const target = app.metadataCache.getFirstLinkpathDest(linkpath, fromPath);
         if (!target) return null;
+        if (isExcalidraw(app, target)) {
+          drawings.set(target.path, target);
+          return { path: target.path, kind: "image" };
+        }
         const ext = target.extension.toLowerCase();
         return { path: target.path, kind: ext === "md" ? "markdown" : IMAGE_EXTENSIONS.has(ext) ? "image" : "other" };
       },
@@ -3912,7 +3994,8 @@ var PdfExporter = class {
       stageImage: (imagePath) => {
         let rel = staged.get(imagePath);
         if (rel === void 0) {
-          rel = `assets/${staged.size + 1}-${path.basename(imagePath)}`;
+          const drawing = drawings.get(imagePath);
+          rel = `assets/${staged.size + 1}-${drawing ? drawingImageName(drawing) : path.basename(imagePath)}`;
           staged.set(imagePath, rel);
         }
         return rel;
@@ -3927,6 +4010,14 @@ var PdfExporter = class {
     const body = extracted.body;
     const converted = await toPandocMarkdown(body, plan.file.path, this.host.sigilChar(), resolver);
     for (const [vaultPath, rel] of staged) {
+      const drawing = drawings.get(vaultPath);
+      if (drawing) {
+        progress(`Rendering ${drawing.basename}\u2026`);
+        const image = await renderDrawing(app, drawing);
+        if (!image.ok) return fail("drawing", image.message);
+        await fs.promises.writeFile(path.join(buildDir, rel), image.data);
+        continue;
+      }
       await fs.promises.copyFile(path.join(base, vaultPath), path.join(buildDir, rel));
     }
     let bibliography = "";
