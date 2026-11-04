@@ -2771,7 +2771,7 @@ async function renderDrawing(app, file) {
   if (found) {
     const { api, owned } = found;
     try {
-      const blob = await api.createPNG(file.path, SCALE, { withBackground: true, withTheme: false, isMask: false }, void 0, "light", PADDING);
+      const blob = await api.createPNG(file.path, SCALE, { withBackground: false, withTheme: false, isMask: false }, void 0, "light", PADDING);
       return { ok: true, data: new Uint8Array(await blob.arrayBuffer()) };
     } catch (e) {
       const sibling2 = exportedSibling(app, file);

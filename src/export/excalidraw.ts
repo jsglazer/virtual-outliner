@@ -62,7 +62,7 @@ export async function renderDrawing(app: App, file: TFile): Promise<DrawingImage
 	if (found) {
 		const { api, owned } = found;
 		try {
-			const blob = await api.createPNG(file.path, SCALE, { withBackground: true, withTheme: false, isMask: false }, undefined, 'light', PADDING);
+			const blob = await api.createPNG(file.path, SCALE, { withBackground: false, withTheme: false, isMask: false }, undefined, 'light', PADDING);
 			return { ok: true, data: new Uint8Array(await blob.arrayBuffer()) };
 		} catch (e) {
 			const sibling = exportedSibling(app, file);
