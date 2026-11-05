@@ -824,9 +824,10 @@ export default class VirtualOutlinerPlugin extends Plugin {
 
 	// "Collapse/Expand all inside current outline entry": the document-wide
 	// commands scoped to the subtree of the entry the caret is in (from a body
-	// line, the entry that body belongs to). Collapsing folds every nested
-	// entry but leaves the current one open, so its children show as folded
-	// lines; expanding unfolds the current entry and everything under it.
+	// line, the entry that body belongs to). Collapsing folds the current
+	// entry and every entry nested under it, so the next sibling follows
+	// directly and the nested folds are already in place when the entry is
+	// reopened; expanding unfolds the current entry and everything under it.
 	foldInsideAtLine(path: string, lineIndex: number, caretView: EditorView, collapse: boolean): void {
 		const { body } = parseMetaDocument(caretView.state.doc.toString());
 		const flat = parseOutline(body, this.settings.sigil).flat;
@@ -838,18 +839,19 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		const inside = foldableDescendants(flat, node);
 		const entry = this.fileStateEntry(path);
 		if (collapse) {
-			if (inside.length === 0) {
-				new Notice('No nested entries to collapse under this entry.');
+			const foldable = node.children.length > 0 || node.ownBodyStart < node.ownBodyEnd;
+			const targets = foldable ? [node, ...inside] : inside;
+			if (targets.length === 0) {
+				new Notice('Nothing to collapse in this entry.');
 				return;
 			}
-			if (node.id !== null) entry.collapsedIds.delete(node.id);
 			// A caret inside a section about to be hidden would sit in an atomic
 			// block with no rendered position (see toggleFoldAtLine), so it moves
 			// to the end of the outermost such entry's visible text. Appending
 			// ids never shifts lines, so the entry line is still valid after.
 			const caretLine = caretView.state.doc.lineAt(caretView.state.selection.main.head).number - 1;
-			const hiding = inside.find((n) => caretLine > n.entryLine && caretLine < n.subtreeEnd);
-			this.addCollapsed(path, inside, caretView);
+			const hiding = targets.find((n) => caretLine > n.entryLine && caretLine < n.subtreeEnd);
+			this.addCollapsed(path, targets, caretView);
 			if (hiding) {
 				const line = caretView.state.doc.line(hiding.entryLine + 1);
 				const idMatch = ID_SUFFIX_RE.exec(line.text);

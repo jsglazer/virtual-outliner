@@ -5795,9 +5795,10 @@ ${lineHeight}` : ""}`;
   }
   // "Collapse/Expand all inside current outline entry": the document-wide
   // commands scoped to the subtree of the entry the caret is in (from a body
-  // line, the entry that body belongs to). Collapsing folds every nested
-  // entry but leaves the current one open, so its children show as folded
-  // lines; expanding unfolds the current entry and everything under it.
+  // line, the entry that body belongs to). Collapsing folds the current
+  // entry and every entry nested under it, so the next sibling follows
+  // directly and the nested folds are already in place when the entry is
+  // reopened; expanding unfolds the current entry and everything under it.
   foldInsideAtLine(path, lineIndex, caretView, collapse) {
     const { body } = parseMetaDocument(caretView.state.doc.toString());
     const flat = parseOutline(body, this.settings.sigil).flat;
@@ -5809,14 +5810,15 @@ ${lineHeight}` : ""}`;
     const inside = foldableDescendants(flat, node2);
     const entry = this.fileStateEntry(path);
     if (collapse) {
-      if (inside.length === 0) {
-        new import_obsidian7.Notice("No nested entries to collapse under this entry.");
+      const foldable = node2.children.length > 0 || node2.ownBodyStart < node2.ownBodyEnd;
+      const targets = foldable ? [node2, ...inside] : inside;
+      if (targets.length === 0) {
+        new import_obsidian7.Notice("Nothing to collapse in this entry.");
         return;
       }
-      if (node2.id !== null) entry.collapsedIds.delete(node2.id);
       const caretLine = caretView.state.doc.lineAt(caretView.state.selection.main.head).number - 1;
-      const hiding = inside.find((n) => caretLine > n.entryLine && caretLine < n.subtreeEnd);
-      this.addCollapsed(path, inside, caretView);
+      const hiding = targets.find((n) => caretLine > n.entryLine && caretLine < n.subtreeEnd);
+      this.addCollapsed(path, targets, caretView);
       if (hiding) {
         const line = caretView.state.doc.line(hiding.entryLine + 1);
         const idMatch = ID_SUFFIX_RE.exec(line.text);
