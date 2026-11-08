@@ -241,3 +241,32 @@ describe('extractBody with the outline printed', () => {
 		expect(out.body).toContain('`\\voline{4}`{=latex}A');
 	});
 });
+
+describe('extractBody with the outline only', () => {
+	const levels = [1, 2, 3, 4, 5, 6].map((l) => defaultLevelFormat(l));
+	const breaks = { auto: true, maxLevel: 1, ignoreManual: true };
+
+	it('prints the entries and nothing else', () => {
+		const doc = ['### Title', '@ Intro', 'Prose A', '', '- item', '@@ Sub', 'Prose B', '@% note to self'].join('\n');
+		const out = extractBody(doc, '@', { outline: { levels, only: true }, breaks });
+		expect(out.body).toBe(
+			[
+				'`\\voentry{1}{0em}{\\bfseries}{1.0}`{=latex}Intro`\\voentryend{}`{=latex}',
+				'',
+				'`\\voentry{0}{1.5em}{}{1.1}`{=latex}Sub`\\voentryend{}`{=latex}',
+			].join('\n'),
+		);
+	});
+
+	it('does not take a sigil line inside a fence for an entry', () => {
+		const doc = ['@ A', '```', '@ not an entry', '```', '@ B'].join('\n');
+		const out = extractBody(doc, '@', { outline: { levels, only: true } });
+		expect(out.body).not.toContain('not an entry');
+		expect(out.body).not.toContain('```');
+		expect(out.body.split('\n').filter((l) => l.includes('voentry{')).length).toBe(2);
+	});
+
+	it('is empty for a note with no outline entries', () => {
+		expect(extractBody('Just prose.', '@', { outline: { levels, only: true } }).isEmpty).toBe(true);
+	});
+});

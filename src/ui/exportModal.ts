@@ -83,13 +83,20 @@ export class ExportPdfModal extends Modal {
 			.setDesc('Dev only: each body line\'s editor line number, in the left margin')
 			.addToggle((t) => t.setValue(plan.lineNumbers).onChange((v) => (plan.lineNumbers = v)));
 		new Setting(contentEl)
-			.setName('Include outline')
-			.setDesc('Print the outline entries, numbered, each above its own body')
-			.addToggle((t) =>
-				t.setValue(plan.includeOutline).onChange((v) => {
-					plan.includeOutline = v;
-					if (this.warnEl) this.warnEl.hidden = v;
-				}),
+			.setName('Print')
+			.setDesc('Body text only, the numbered outline entries each above their own body, or the outline alone with no body text')
+			.addDropdown((dd) =>
+				dd
+					.addOption('body', 'Body only')
+					.addOption('both', 'Outline and body')
+					.addOption('outline', 'Outline only')
+					.setValue(plan.outlineOnly ? 'outline' : plan.includeOutline ? 'both' : 'body')
+					.onChange((v) => {
+						plan.outlineOnly = v === 'outline';
+						plan.includeOutline = v !== 'body';
+						// Printing the outline prints what is written on it.
+						if (this.warnEl) this.warnEl.hidden = plan.includeOutline;
+					}),
 			);
 		const levelSetting = new Setting(contentEl)
 			.setName('Break at levels')

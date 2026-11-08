@@ -2,7 +2,7 @@
 // resolve citations and the preamble, run the bundled renderer, and report.
 //
 //   $TMPDIR/virtual-outliner-export/<vault hash>/<note hash>/
-//     source.md      the note's body, outline stripped, Obsidian syntax converted
+//     source.md      the note's body (outline stripped, printed, or alone), Obsidian syntax converted
 //     assets/        vault images the note embeds (Excalidraw drawings as PNG)
 //     preamble.tex   the resolved preamble
 //     refs.json      CSL-JSON from Zotero (only when the note cites)
@@ -55,6 +55,8 @@ export interface ExportPlan {
 	lineNumbers: boolean;
 	// Print the outline entries too, each above its own body.
 	includeOutline: boolean;
+	// Print ONLY the outline entries, no body text (implies includeOutline).
+	outlineOnly: boolean;
 	// This export's paragraph breaks, seeded from settings.
 	breaks: ParagraphBreaks;
 	// Appended to the PDF's file name (each version offers its own). The dialog
@@ -120,6 +122,7 @@ export class PdfExporter {
 			variant: 'dev',
 			lineNumbers: false,
 			includeOutline: settings.includeOutline || outlineOnly,
+			outlineOnly: false,
 			breaks: { ...settings.breaks },
 			nameSuffix: '',
 			baseOutputPath: target,
@@ -220,9 +223,16 @@ export class PdfExporter {
 		const extracted = extractBody(plan.doc, this.host.sigilChar(), {
 			lineNumbers: plan.lineNumbers && plan.variant === 'dev',
 			breaks: plan.breaks,
-			outline: plan.includeOutline ? { levels: this.host.levels() } : undefined,
+			outline: plan.includeOutline || plan.outlineOnly ? { levels: this.host.levels(), only: plan.outlineOnly } : undefined,
 		});
-		if (extracted.isEmpty) return fail('convert', `${plan.file.basename} has no body text to export — only outline entries. Turn on "Include outline" to print them.`);
+		if (extracted.isEmpty) {
+			return fail(
+				'convert',
+				plan.outlineOnly
+					? `${plan.file.basename} has no outline entries to export.`
+					: `${plan.file.basename} has no body text to export — only outline entries. Choose "Outline and body" or "Outline only" to print them.`,
+			);
+		}
 		const body = extracted.body;
 		const converted = await toPandocMarkdown(body, plan.file.path, this.host.sigilChar(), resolver);
 		for (const [vaultPath, rel] of staged) {

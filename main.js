@@ -478,7 +478,7 @@ function entryParagraph(level, label, text2, gap, format, lineAnchor) {
   return `\`${open}\`{=latex}${lineAnchor}${text2}\`\\voentryend{}\`{=latex}`;
 }
 function extractBody(doc, sigilChar, options = {}) {
-  var _a, _b, _c, _d;
+  var _a, _b, _c, _d, _e;
   const full = parseMetaDocument(doc).body;
   const stripped = stripFrontmatter(full);
   const frontmatterLines = full.split("\n").length - stripped.split("\n").length;
@@ -506,8 +506,12 @@ function extractBody(doc, sigilChar, options = {}) {
       forceBreak = false;
       continue;
     }
+    if (((_b = options.outline) == null ? void 0 : _b.only) === true) {
+      if (fence !== null || FENCE_RE.test(line)) fence = nextFenceState(line, fence);
+      continue;
+    }
     if (fence === null && isOutlineLine(line, sigilChar)) {
-      const entryText = ((_c = (_b = entryRe.exec(line)) == null ? void 0 : _b[2]) != null ? _c : "").trim();
+      const entryText = ((_d = (_c = entryRe.exec(line)) == null ? void 0 : _c[2]) != null ? _d : "").trim();
       const kinds = lostKinds(entryText);
       if (kinds.length > 0 && !printed) lost.push({ line: i, text: entryText, kinds });
       dropped = true;
@@ -535,7 +539,7 @@ function extractBody(doc, sigilChar, options = {}) {
     lastBlank = blank;
     if (!blank) lastText = line;
   }
-  while (out.length > 0 && ((_d = out[out.length - 1]) != null ? _d : "").trim() === "") out.pop();
+  while (out.length > 0 && ((_e = out[out.length - 1]) != null ? _e : "").trim() === "") out.pop();
   const body = out.join("\n");
   return { body, lost, isEmpty: body.trim() === "" };
 }
@@ -3912,6 +3916,7 @@ var PdfExporter = class {
       variant: "dev",
       lineNumbers: false,
       includeOutline: settings.includeOutline || outlineOnly,
+      outlineOnly: false,
       breaks: { ...settings.breaks },
       nameSuffix: "",
       baseOutputPath: target,
@@ -4004,9 +4009,14 @@ var PdfExporter = class {
     const extracted = extractBody(plan.doc, this.host.sigilChar(), {
       lineNumbers: plan.lineNumbers && plan.variant === "dev",
       breaks: plan.breaks,
-      outline: plan.includeOutline ? { levels: this.host.levels() } : void 0
+      outline: plan.includeOutline || plan.outlineOnly ? { levels: this.host.levels(), only: plan.outlineOnly } : void 0
     });
-    if (extracted.isEmpty) return fail("convert", `${plan.file.basename} has no body text to export \u2014 only outline entries. Turn on "Include outline" to print them.`);
+    if (extracted.isEmpty) {
+      return fail(
+        "convert",
+        plan.outlineOnly ? `${plan.file.basename} has no outline entries to export.` : `${plan.file.basename} has no body text to export \u2014 only outline entries. Choose "Outline and body" or "Outline only" to print them.`
+      );
+    }
     const body = extracted.body;
     const converted = await toPandocMarkdown(body, plan.file.path, this.host.sigilChar(), resolver);
     for (const [vaultPath, rel] of staged) {
@@ -4859,10 +4869,11 @@ var ExportPdfModal = class extends import_obsidian5.Modal {
     );
     versionSetting.settingEl.after(suffixSetting.settingEl);
     new import_obsidian5.Setting(contentEl).setName("Line numbers").setDesc("Dev only: each body line's editor line number, in the left margin").addToggle((t) => t.setValue(plan.lineNumbers).onChange((v) => plan.lineNumbers = v));
-    new import_obsidian5.Setting(contentEl).setName("Include outline").setDesc("Print the outline entries, numbered, each above its own body").addToggle(
-      (t) => t.setValue(plan.includeOutline).onChange((v) => {
-        plan.includeOutline = v;
-        if (this.warnEl) this.warnEl.hidden = v;
+    new import_obsidian5.Setting(contentEl).setName("Print").setDesc("Body text only, the numbered outline entries each above their own body, or the outline alone with no body text").addDropdown(
+      (dd) => dd.addOption("body", "Body only").addOption("both", "Outline and body").addOption("outline", "Outline only").setValue(plan.outlineOnly ? "outline" : plan.includeOutline ? "both" : "body").onChange((v) => {
+        plan.outlineOnly = v === "outline";
+        plan.includeOutline = v !== "body";
+        if (this.warnEl) this.warnEl.hidden = plan.includeOutline;
       })
     );
     const levelSetting = new import_obsidian5.Setting(contentEl).setName("Break at levels").setDesc("Entries at these levels start a new paragraph").addDropdown((dd) => {

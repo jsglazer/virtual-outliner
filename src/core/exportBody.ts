@@ -122,8 +122,10 @@ export interface ExtractOptions {
 	// Where entries start a new paragraph; see breaksBefore.
 	breaks?: ParagraphBreaks;
 	// Print the outline too: each entry line becomes a paragraph of its own,
-	// labelled and styled by its level (renderer/job.py ENTRY_TEX).
-	outline?: { levels: readonly LevelFormat[] };
+	// labelled and styled by its level (renderer/job.py ENTRY_TEX). With
+	// `only`, the entries are ALL that is printed: every body line, heading,
+	// fence and comment is left out, so the PDF is the outline alone.
+	outline?: { levels: readonly LevelFormat[]; only?: boolean };
 }
 
 function latexEscape(text: string): string {
@@ -182,6 +184,12 @@ export function extractBody(doc: string, sigilChar: string, options: ExtractOpti
 			lastBlank = true;
 			dropped = false;
 			forceBreak = false;
+			continue;
+		}
+		// Outline only: everything that is not a printed entry goes, but fences
+		// are still tracked so a sigil line inside one is never taken for an entry.
+		if (options.outline?.only === true) {
+			if (fence !== null || FENCE_RE.test(line)) fence = nextFenceState(line, fence);
 			continue;
 		}
 		if (fence === null && isOutlineLine(line, sigilChar)) {
