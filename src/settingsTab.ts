@@ -186,7 +186,6 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 		const pdf = this.plugin.settings.pdfExport;
 		containerEl.createEl('p', {
 			cls: 'vo-fixture-note',
-			// eslint-disable-next-line obsidianmd/ui/sentence-case -- headnum, TOC, notes, cite, pdf-output are literal frontmatter keys
 			text: 'Export to PDF typesets the body text, and the outline too when "Include outline" is on. These are the defaults; a note\'s frontmatter (headnum, TOC, notes, cite, pdf-output) overrides them, and the export dialog can change any of them for one export.',
 		});
 
@@ -357,13 +356,11 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 	// ── Note Toolbar buttons (ported from md-annotation's Note Toolbar tab) ──
 
 	private renderToolbarSection(containerEl: HTMLElement): void {
-		// eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name
 		new Setting(containerEl).setName('Note Toolbar buttons').setHeading();
 
 		if (!isNoteToolbarAvailable(this.app)) {
 			containerEl.createEl('p', {
 				cls: 'vo-fixture-note',
-				// eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name
 				text: 'Install and enable the Note Toolbar plugin to have one of its buttons change color while the toggle it runs is on.',
 			});
 			return;
@@ -371,7 +368,6 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 
 		containerEl.createEl('p', {
 			cls: 'vo-fixture-note',
-			// eslint-disable-next-line obsidianmd/ui/sentence-case -- 'Note Toolbar' is the plugin's own name; On/Off name the grid columns
 			text: 'Pick the toolbar button that runs each toggle command below and it takes the On color while that toggle is on, so the toolbar reads as pressed, and the Off color while it is off. A color left unticked leaves the button to Note Toolbar for that state — Off is unticked by default, so only "on" stands out. Backgrounds only: the icon and label color stay Note Toolbar\'s.',
 		});
 
@@ -468,7 +464,6 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 		picker.value = isValidHex(opt.color) ? opt.color : '#888888';
 		const hex = wrap.createEl('input', {
 			cls: 'vo-grid-hex',
-			// eslint-disable-next-line obsidianmd/ui/sentence-case -- '#hex' is a hex-notation placeholder, not prose
 			attr: { type: 'text', maxlength: '7', placeholder: '#hex', spellcheck: 'false' },
 		});
 		hex.value = isValidHex(opt.color) ? opt.color : '';

@@ -2,8 +2,6 @@
 // `require('fs')` throws — a top-level import would break the whole plugin
 // there — so these are only ever called from desktop-gated code paths.
 
-/* eslint-disable @typescript-eslint/no-require-imports, import/no-nodejs-modules, no-undef -- desktop-only PDF export needs fs/child_process, loaded lazily so mobile never evaluates them */
-
 export interface NodeModules {
 	fs: typeof import('fs');
 	path: typeof import('path');

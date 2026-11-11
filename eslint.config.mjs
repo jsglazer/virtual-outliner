@@ -29,7 +29,15 @@ export default tseslint.config(
 				{
 					// "Virtual Outliner" is the plugin's proper name; Dataview and
 					// Datacore are third-party plugin names, not generic nouns.
-					brands: ['Virtual Outliner', 'Dataview', 'Datacore', 'Zotero Manager', 'Zotero', 'Markdown', 'PDF'],
+					brands: ['Virtual Outliner', 'Dataview', 'Datacore', 'Zotero Manager', 'Zotero', 'Markdown', 'PDF', 'Note Toolbar'],
+					// Help paragraphs that quote setting names, column names and frontmatter keys
+					// verbatim. eslint-plugin-obsidianmd 0.5 forbids inline eslint-disable of its
+					// rules, so these exceptions live here.
+					ignoreRegex: [
+						'^One format applied to every outline level',
+						'^Export to PDF typesets the body text',
+						'^Pick the toolbar button that runs each toggle command',
+					],
 				},
 			],
 		},
