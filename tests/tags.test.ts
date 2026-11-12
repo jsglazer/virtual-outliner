@@ -13,28 +13,32 @@ const hidden = (doc: string): string[] => findTagRanges(doc).map((r) => doc.slic
 
 describe('findTagRanges', () => {
 	it('extends a tag over the comment attached to it', () => {
-		expect(hidden('Check #fix%%confirm accuracy%% now')).toEqual(['#fix%%confirm accuracy%%']);
+		expect(hidden('Check #fix%%confirm accuracy%% now')).toEqual([' #fix%%confirm accuracy%%']);
 	});
 
 	it('takes a comment separated from the tag only by spaces', () => {
-		expect(hidden('a #fix  %%later%% b')).toEqual(['#fix  %%later%%']);
+		expect(hidden('a #fix  %%later%% b')).toEqual([' #fix  %%later%%']);
 	});
 
 	it('leaves a comment that is not next to the tag', () => {
-		expect(hidden('a #fix then %%other%% b')).toEqual(['#fix']);
+		expect(hidden('a #fix then %%other%% b')).toEqual([' #fix']);
 	});
 
 	it('follows an attached comment onto later lines', () => {
 		const doc = 'x #todo%%line one\nline two%% y';
-		expect(hidden(doc)).toEqual(['#todo%%line one\nline two%%']);
+		expect(hidden(doc)).toEqual([' #todo%%line one\nline two%%']);
 	});
 
 	it('finds plain, nested and multiple tags', () => {
-		expect(hidden('#start mid #a/b-c_d, #e.')).toEqual(['#start', '#a/b-c_d', '#e']);
+		expect(hidden('#start mid #a/b-c_d, #e.')).toEqual(['#start', ' #a/b-c_d', ' #e']);
 	});
 
-	it('skips what Obsidian does not treat as a tag', () => {
-		expect(hidden('# Heading\n## Sub\n#123 issue\n[[Note#Head]] [x](#anchor) a\\#b c#d')).toEqual([]);
+	it('skips # that cannot start a tag', () => {
+		expect(
+			hidden(
+				'# Heading\n## Sub\n#123 issue\n[[Note#Head]] [x](#anchor) a\\#b c#d https://x.org/p#frag &#38; [[#Head]]',
+			),
+		).toEqual([]);
 	});
 
 	it('skips frontmatter, code and comments', () => {
@@ -56,7 +60,16 @@ describe('findTagRanges', () => {
 	});
 
 	it('hides only the tag when its comment never closes', () => {
-		expect(hidden('a #fix%%unclosed\n#notseen')).toEqual(['#fix']);
+		expect(hidden('a #fix%%unclosed\n#notseen')).toEqual([' #fix']);
+	});
+
+	it('takes a tag after sentence punctuation, keeping the punctuation', () => {
+		expect(hidden('as "polarization").#cite%%confirm no consensus%%\nnext')).toEqual(['#cite%%confirm no consensus%%']);
+		expect(hidden('done!#a; (x)#b')).toEqual(['#a', '#b']);
+	});
+
+	it('keeps line-start indentation but takes spaces after text', () => {
+		expect(hidden('  #a text\npublic   #b and')).toEqual(['#a', '   #b']);
 	});
 });
 
@@ -74,9 +87,9 @@ describe('tagHideField', () => {
 		let state = EditorState.create({ doc, extensions: [tagHideField], selection: EditorSelection.cursor(doc.length) });
 		expect(drawn(state)).toEqual([]);
 		state = state.update({ effects: setTagsHidden.of(true) }).state;
-		expect(drawn(state)).toEqual(['#a%%note%%', '#b']);
+		expect(drawn(state)).toEqual([' #a%%note%%', ' #b']);
 		state = state.update({ selection: EditorSelection.cursor(2) }).state;
-		expect(drawn(state)).toEqual(['#b']);
+		expect(drawn(state)).toEqual([' #b']);
 		state = state.update({ effects: setTagsHidden.of(false) }).state;
 		expect(drawn(state)).toEqual([]);
 	});
@@ -86,6 +99,6 @@ describe('tagHideField', () => {
 		state = state.update({ effects: setTagsHidden.of(true) }).state;
 		state = state.update({ changes: { from: doc.length, insert: '!!' } }).state;
 		state = state.update({ changes: { from: 0, insert: 'NEW ' } }).state;
-		expect(drawn(state)).toEqual(['#a%%note%%', '#b']);
+		expect(drawn(state)).toEqual([' #a%%note%%', ' #b']);
 	});
 });

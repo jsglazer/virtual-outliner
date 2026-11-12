@@ -38,6 +38,7 @@ import type { KeymapHost } from './editor/keymap';
 import { buildOutlineKeymap, moveBlock } from './editor/keymap';
 import { createReadingPostProcessor } from './editor/readingView';
 import { buildTagHideExtension, syncTagHiding } from './editor/tagHide';
+import { markHideableTags } from './editor/tagHideReading';
 import { PdfExporter, vaultBasePath } from './export/exporter';
 import { ensureRenderer, installQuickAction, missingTools, pruneBuildDirs, REQUIRED_TOOLS, supportDir, writeVaultConfig } from './export/installer';
 import { electronShell } from './export/node';
@@ -155,6 +156,8 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				toggleFold: (path, lineIndex) => this.toggleFoldAtLine(path, lineIndex, null),
 			}),
 		);
+
+		this.registerMarkdownPostProcessor((el) => markHideableTags(el));
 
 		this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new OutlineSidebarView(leaf, this.sidebarHost()));
 		this.addSettingTab(new VirtualOutlinerSettingTab(this.app, this));

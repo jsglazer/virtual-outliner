@@ -8,12 +8,19 @@
 // only by spaces/tabs on the same line (`#fix %%note%%`). A comment elsewhere
 // on the line is left alone. The comment itself may run onto later lines.
 //
-// What counts as a tag follows Obsidian: a `#` at the start of a line or after
-// whitespace, followed by a run of non-terminator characters that is not all
-// digits (`#123` is not a tag). Headings (`# Title`), `[[Note#Heading]]`,
-// `[x](#anchor)` and `\#` therefore never match. Nothing inside YAML
+// What counts as a tag: a `#` followed by a run of non-terminator characters
+// that is not all digits (`#123` is not a tag), where the `#` starts a line or
+// follows whitespace (Obsidian's own rule) or sentence punctuation such as the
+// `.` in `("polarization").#cite` — Obsidian leaves that one unstyled, but it
+// is written as a tag and is hidden with the rest (Update015 follow-up). A `#`
+// after a letter, digit, `[`, `(`, `/`, `\` or `&` never starts one, so
+// headings (`# Title`), `[[Note#Heading]]`, `[x](#anchor)`, URL fragments and
+// `\#` never match. Nothing inside YAML
 // frontmatter, a fenced code block, an inline code span or a %%comment%%
 // (including the %%md-outline metadata block) is a tag.
+//
+// A range also takes the spaces before the tag when there is text before them
+// on the line, so `public #cite and` reads `public and`, not `public  and`.
 //
 // Pure: offsets are UTF-16 indices into `doc`, i.e. CodeMirror positions.
 
@@ -29,6 +36,17 @@ const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 // these punctuation marks; letters, digits, _, -, / and emoji continue it).
 const TAG_TERMINATOR_RE = /[\s!"#$%&'()*+,.:;<=>?@[\\\]^`{|}~]/;
 const ALL_DIGITS_RE = /^\d+$/;
+// What may sit right before a tag's `#`: whitespace (Obsidian) or sentence
+// punctuation that cannot be part of a link, URL or escape.
+const TAG_LEAD_RE = /[\s.,;:!?)\]}"'\u2019\u201d*~>]/;
+
+// Start of the run of spaces/tabs before `pos`, when that run follows text on
+// the same line; otherwise `pos` itself (line-start indentation is kept).
+function leadingSpaceStart(doc: string, pos: number): number {
+	let s = pos;
+	while (s > 0 && (doc[s - 1] === ' ' || doc[s - 1] === '\t')) s--;
+	return s < pos && s > 0 && doc[s - 1] !== '\n' ? s : pos;
+}
 
 function lineEnd(doc: string, pos: number): number {
 	const nl = doc.indexOf('\n', pos);
@@ -105,7 +123,7 @@ export function findTagRanges(doc: string): TagRange[] {
 			continue;
 		}
 
-		if (ch === '#' && (pos === 0 || /\s/.test(doc[pos - 1] ?? ''))) {
+		if (ch === '#' && (pos === 0 || TAG_LEAD_RE.test(doc[pos - 1] ?? ''))) {
 			let k = pos + 1;
 			while (k < n && !TAG_TERMINATOR_RE.test(doc[k] ?? '')) k++;
 			const name = doc.slice(pos + 1, k);
@@ -113,22 +131,23 @@ export function findTagRanges(doc: string): TagRange[] {
 				pos = k > pos + 1 ? k : pos + 1;
 				continue;
 			}
+			const from = leadingSpaceStart(doc, pos);
 			let m = k;
 			while (doc[m] === ' ' || doc[m] === '\t') m++;
 			if (doc[m] === '%' && doc[m + 1] === '%') {
 				const close = doc.indexOf('%%', m + 2);
 				if (close >= 0) {
-					out.push({ from: pos, to: close + 2 });
+					out.push({ from, to: close + 2 });
 					pos = close + 2;
 					continue;
 				}
 				// Unclosed: the comment swallows the rest of the note, so only
 				// the tag itself is a hideable range.
-				out.push({ from: pos, to: k });
+				out.push({ from, to: k });
 				pos = m;
 				continue;
 			}
-			out.push({ from: pos, to: k });
+			out.push({ from, to: k });
 			pos = k;
 			continue;
 		}

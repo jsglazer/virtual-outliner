@@ -769,7 +769,7 @@
 /* Hide tags toggle (Update015): Reading view, and the blocks Live Preview
    renders as widgets (tables, callouts). The editor text itself is hidden by
    decorations in src/editor/tagHide.ts. */
-body.vo-hide-tags .markdown-preview-view a.tag,
-body.vo-hide-tags .markdown-source-view .markdown-rendered a.tag {
+body.vo-hide-tags .markdown-preview-view :is(a.tag, .vo-tag-space, .vo-loose-tag),
+body.vo-hide-tags .markdown-source-view .markdown-rendered :is(a.tag, .vo-tag-space, .vo-loose-tag) {
 	display: none;
 }

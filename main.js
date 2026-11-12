@@ -2517,6 +2517,12 @@ var import_view3 = require("@codemirror/view");
 var FENCE_RE2 = /^\s*(`{3,}|~{3,})/;
 var TAG_TERMINATOR_RE = /[\s!"#$%&'()*+,.:;<=>?@[\\\]^`{|}~]/;
 var ALL_DIGITS_RE = /^\d+$/;
+var TAG_LEAD_RE = /[\s.,;:!?)\]}"'\u2019\u201d*~>]/;
+function leadingSpaceStart(doc, pos) {
+  let s = pos;
+  while (s > 0 && (doc[s - 1] === " " || doc[s - 1] === "	")) s--;
+  return s < pos && s > 0 && doc[s - 1] !== "\n" ? s : pos;
+}
 function lineEnd(doc, pos) {
   const nl = doc.indexOf("\n", pos);
   return nl < 0 ? doc.length : nl;
@@ -2581,7 +2587,7 @@ function findTagRanges(doc) {
       pos += 2;
       continue;
     }
-    if (ch === "#" && (pos === 0 || /\s/.test((_a = doc[pos - 1]) != null ? _a : ""))) {
+    if (ch === "#" && (pos === 0 || TAG_LEAD_RE.test((_a = doc[pos - 1]) != null ? _a : ""))) {
       let k = pos + 1;
       while (k < n && !TAG_TERMINATOR_RE.test((_b = doc[k]) != null ? _b : "")) k++;
       const name = doc.slice(pos + 1, k);
@@ -2589,20 +2595,21 @@ function findTagRanges(doc) {
         pos = k > pos + 1 ? k : pos + 1;
         continue;
       }
+      const from = leadingSpaceStart(doc, pos);
       let m = k;
       while (doc[m] === " " || doc[m] === "	") m++;
       if (doc[m] === "%" && doc[m + 1] === "%") {
         const close = doc.indexOf("%%", m + 2);
         if (close >= 0) {
-          out.push({ from: pos, to: close + 2 });
+          out.push({ from, to: close + 2 });
           pos = close + 2;
           continue;
         }
-        out.push({ from: pos, to: k });
+        out.push({ from, to: k });
         pos = m;
         continue;
       }
-      out.push({ from: pos, to: k });
+      out.push({ from, to: k });
       pos = k;
       continue;
     }
@@ -2688,6 +2695,61 @@ function syncTagHiding(view, hidden) {
   const value = view.state.field(tagHideField, false);
   if (value === void 0 || value.hidden === hidden) return;
   view.dispatch({ effects: setTagsHidden.of(hidden) });
+}
+
+// src/editor/tagHideReading.ts
+var LOOSE_TAG_RE = /([.,;:!?)\]}"'\u2019\u201d*~>])(#[^\s!"#$%&'()*+,.:;<=>?@[\\\]^`{|}~]+)/g;
+var ALL_DIGITS_RE2 = /^#\d+$/;
+var SKIP_SELECTOR2 = "code, pre, a, .vo-loose-tag, .vo-tag-space";
+function wrap(doc, text2, cls) {
+  const span = doc.createElement("span");
+  span.className = cls;
+  span.textContent = text2;
+  return span;
+}
+function markTagSpaces(el) {
+  var _a;
+  for (const tag of Array.from(el.querySelectorAll("a.tag"))) {
+    const prev = tag.previousSibling;
+    if (prev === null || prev.nodeType !== 3) continue;
+    const text2 = (_a = prev.textContent) != null ? _a : "";
+    const m = /[ \t\u00a0]+$/.exec(text2);
+    if (m === null || m.index === 0) continue;
+    prev.textContent = text2.slice(0, m.index);
+    tag.before(wrap(el.ownerDocument, m[0], "vo-tag-space"));
+  }
+}
+function markLooseTags(el) {
+  var _a, _b, _c, _d, _e, _f;
+  const doc = el.ownerDocument;
+  const walker = doc.createTreeWalker(
+    el,
+    4
+    /* NodeFilter.SHOW_TEXT */
+  );
+  const nodes = [];
+  for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+    if (!((_a = n.parentElement) == null ? void 0 : _a.closest(SKIP_SELECTOR2)) && ((_b = n.textContent) == null ? void 0 : _b.includes("#"))) nodes.push(n);
+  }
+  for (const node2 of nodes) {
+    const text2 = (_c = node2.textContent) != null ? _c : "";
+    const parts = [];
+    let last = 0;
+    for (const m of text2.matchAll(LOOSE_TAG_RE)) {
+      const tag = (_d = m[2]) != null ? _d : "";
+      if (ALL_DIGITS_RE2.test(tag)) continue;
+      const at = ((_e = m.index) != null ? _e : 0) + ((_f = m[1]) != null ? _f : "").length;
+      parts.push(text2.slice(last, at), wrap(doc, tag, "vo-loose-tag"));
+      last = at + tag.length;
+    }
+    if (parts.length === 0) continue;
+    parts.push(text2.slice(last));
+    node2.replaceWith(...parts);
+  }
+}
+function markHideableTags(el) {
+  markTagSpaces(el);
+  markLooseTags(el);
 }
 
 // src/export/exporter.ts
@@ -4715,8 +4777,8 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
       { name: "Hide tags button", short: "Hide tags", highlight: highlights.hideTags }
     ];
     for (const row of rows) this.renderToolbarItemPicker(containerEl, row.name, row.highlight);
-    const wrap = containerEl.createDiv("vo-grid-wrap");
-    const table = wrap.createEl("table", { cls: "vo-grid-table" });
+    const wrap2 = containerEl.createDiv("vo-grid-wrap");
+    const table = wrap2.createEl("table", { cls: "vo-grid-table" });
     const thead = table.createEl("thead");
     const r1 = thead.createEl("tr");
     r1.createEl("th", { text: "Button", attr: { rowspan: "2" }, cls: "vo-grid-name-h" });
@@ -4783,12 +4845,12 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
   // one ColorOption. Setting a colour by either control ticks the checkbox;
   // the checkbox alone decides whether the stored colour is applied.
   renderColorCell(td, opt, onChanged) {
-    const wrap = td.createDiv("vo-grid-cell");
-    const check = wrap.createEl("input", { attr: { type: "checkbox" }, cls: "vo-grid-check" });
+    const wrap2 = td.createDiv("vo-grid-cell");
+    const check = wrap2.createEl("input", { attr: { type: "checkbox" }, cls: "vo-grid-check" });
     check.checked = opt.enabled;
-    const picker = wrap.createEl("input", { attr: { type: "color" }, cls: "vo-grid-color" });
+    const picker = wrap2.createEl("input", { attr: { type: "color" }, cls: "vo-grid-color" });
     picker.value = isValidHex(opt.color) ? opt.color : "#888888";
-    const hex = wrap.createEl("input", {
+    const hex = wrap2.createEl("input", {
       cls: "vo-grid-hex",
       attr: { type: "text", maxlength: "7", placeholder: "#hex", spellcheck: "false" }
     });
@@ -5423,6 +5485,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         toggleFold: (path, lineIndex) => this.toggleFoldAtLine(path, lineIndex, null)
       })
     );
+    this.registerMarkdownPostProcessor((el) => markHideableTags(el));
     this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new OutlineSidebarView(leaf, this.sidebarHost()));
     this.addSettingTab(new VirtualOutlinerSettingTab(this.app, this));
     this.addRibbonIcon("list-tree", "Toggle outline sidebar", () => void this.toggleSidebar());
