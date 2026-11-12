@@ -61,20 +61,30 @@ function startState(): EditorState {
 }
 
 describe('hidden-body block replacements (Outline-only view)', () => {
-	it('covers whole hidden lines through their trailing break', () => {
+	it('covers whole hidden lines, stopping before their trailing break', () => {
 		const state = startState();
 		const ranges = blockRanges(state);
 		expect(ranges.length).toBeGreaterThan(0);
 
 		// Starts at the first hidden line's own start, NOT at the end of the
-		// entry line above it, and runs to the start of the next visible line.
-		// Leaving the last hidden line's break behind made CM6 render an empty
-		// .cm-line in its place — a blank line after every hidden run.
+		// entry line above it, and ends at the last hidden line's END. Running on
+		// to the next visible line's start swallowed the break, which made CM6
+		// join the hidden run and that line into one composite visual line —
+		// breaking gutters (Line Marks) and heading fold chevrons.
 		expect(ranges[0]?.from).toBe(state.doc.line(2).from); // "body under thesis"
-		expect(ranges[0]?.to).toBe(state.doc.line(3).from); // "@@ Detail"
+		expect(ranges[0]?.to).toBe(state.doc.line(2).to);
 	});
 
-	it('keeps startSide negative so CM6 opens no line before the block', () => {
+	it('never covers the line break that ends a hidden run', () => {
+		const state = startState();
+		for (const r of blockRanges(state)) {
+			if (r.to >= state.doc.length) continue;
+			expect(state.doc.sliceString(r.to, r.to + 1)).toBe('\n');
+			expect(state.doc.lineAt(r.to).to).toBe(r.to);
+		}
+	});
+
+	it('keeps startSide negative and endSide positive so CM6 opens no empty line', () => {
 		// CM6's content builder: `if (deco.startSide > 0)
 		// b.addLineStartIfNotCovered(...)` before `addBlockWidget`. A positive
 		// startSide (what `inclusiveStart: false` produces) makes it open a line
@@ -89,9 +99,10 @@ describe('hidden-body block replacements (Outline-only view)', () => {
 			if (!isBlock) continue;
 			checked++;
 			expect(iter.value.startSide).toBeLessThan(0);
-			// And the end must sort before a Decoration.line (-200000000) at the
-			// same offset, or the next visible line loses its classes.
-			expect(iter.value.endSide).toBeLessThan(-200000000);
+			// And the end must be inclusive (endSide > 0): CM6's posCovered()
+			// treats a block with endSide < 0 as not covering the break that
+			// follows it and opens an empty .cm-line there.
+			expect(iter.value.endSide).toBeGreaterThan(0);
 		}
 		expect(checked).toBeGreaterThan(0);
 	});
@@ -211,6 +222,21 @@ describe('hidden-content delete guard (Outline-only view)', () => {
 		expect(blocked).toBe(1);
 	});
 
+	it('blocks deleting the break after a hidden run (joining visible text onto it)', () => {
+		const state = guarded();
+		const block = blockRanges(state)[0];
+		expect(block).toBeDefined();
+
+		// Backspace at the start of the next visible line.
+		const next = state.update({
+			changes: { from: block!.to, to: block!.to + 1, insert: '' },
+			userEvent: 'delete.backward',
+		}).state;
+
+		expect(next.doc.toString()).toBe(DOC);
+		expect(blocked).toBe(1);
+	});
+
 	it('still allows deleting the last character of an entry line', () => {
 		const state = guarded();
 		const cursor = state.doc.line(1).to; // end of "@ Thesis" == a block's `from`
@@ -258,8 +284,9 @@ describe('hidden-content delete guard (Outline-only view)', () => {
 		expect(block).toBeDefined();
 		expect(state.doc.sliceString(block!.from, block!.to).trim()).toBe('');
 
+		// The run plus the break that ends it.
 		const next = state.update({
-			changes: { from: block!.from, to: block!.to, insert: '' },
+			changes: { from: block!.from, to: block!.to + 1, insert: '' },
 			userEvent: 'delete.backward',
 		}).state;
 

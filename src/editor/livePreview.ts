@@ -99,9 +99,14 @@ export function buildHiddenContentGuard(onBlocked: () => void): Extension {
 		// strands the user: in Outline-only view those blank lines are invisible,
 		// so the guard would make them unremovable from the one view where the
 		// user can see they are in the way.
-		const blocks = hiddenBlockRanges(tr.startState).filter(
-			(b) => tr.startState.doc.sliceString(b.from, b.to).trim() !== '',
-		);
+		const doc = tr.startState.doc;
+		const blocks = hiddenBlockRanges(tr.startState)
+			.filter((b) => doc.sliceString(b.from, b.to).trim() !== '')
+			// A block ends at its last hidden line's END, leaving the line break
+			// after it outside the range. Deleting that break (Backspace at the
+			// start of the next visible line) would join visible text onto a
+			// hidden line, so it is protected as part of the run.
+			.map((b) => (b.to < doc.length && doc.sliceString(b.to, b.to + 1) === '\n' ? { from: b.from, to: b.to + 1 } : b));
 		if (blocks.length === 0) return tr;
 
 		let destroys = false;
@@ -328,77 +333,63 @@ export function buildOutlineDecorations(
 		// `range` is a LINE range [from, to); translate to a CHARACTER range
 		// spanning whole lines, which is what a block replacement requires.
 		//
-		// Cover the hidden lines from the START of the first one THROUGH the
-		// line break that ends the last one, i.e. up to the start of the next
-		// visible line (or to end-of-document when the run reaches EOF). Taking
-		// the TRAILING break is what makes the run vanish completely.
+		// GEOMETRY: from the START of the first hidden line to the END of the
+		// last one, leaving the line break that follows it OUTSIDE the range.
+		// That is CM6's canonical whole-line block replacement: the heightmap
+		// gets a separate WidgetRange block for the hidden run, and every
+		// visible line keeps its own line block.
 		//
-		// This previously took the LEADING break instead (from = end of the line
-		// above), which left the last hidden line's own break behind. CM6 then
-		// rendered an empty `.cm-line` for that leftover — a full line of height
-		// after every hidden run, which is precisely the "blank lines in
-		// Outline-only view" the user kept seeing. Confirmed from the live DOM:
-		// each zero-height `.vo-hidden-block` was followed by an empty
-		// `<div class="cm-line">` measuring 28px.
+		// The previous geometry ran on to the START of the next visible line,
+		// swallowing that break. A replacement that covers a line break JOINS the
+		// lines on either side of it into one visual line, so the hidden run and
+		// the next visible line (and, chained, every run and line after it) came
+		// back from `lineBlockAt`/`viewportLineBlocks` as ONE composite block —
+		// confirmed live in Final.md, where lines 18–123 were a single block in
+		// Body-only view. Everything that works per visual line broke: CM6
+		// gutters (Line Marks) drew every marker in that span on one row and
+		// mapped every click to its first line, and Obsidian's heading fold
+		// chevrons vanished for the headings inside it.
 		//
-		// Ending at the next line's start was originally avoided because it put
-		// that line's own `Decoration.line` inside the replaced range, so CM6
-		// dropped it and the following line lost its indent/colour classes
-		// (Update003). That hazard is gone now that the replacement is
-		// `inclusiveEnd: false` (below): its endSide is -599999999, which sorts
-		// BEFORE a `Decoration.line`'s -200000000 at the same offset, so the
-		// line decoration is no longer contained. It was only swallowed under
-		// the DEFAULT inclusive block end, whose +200000001 sorted after it.
+		// The end MUST be inclusive (the `block` default; do NOT pass
+		// `inclusiveEnd: false`). CM6's content builder, on the break that
+		// follows, checks `posCovered()`: a preceding block widget with
+		// `endSide < 0` counts as NOT covering the position, so it opens a fresh
+		// empty `.cm-line` there — a blank line after every hidden run (the
+		// 28px empty line seen before the trailing-break geometry). With
+		// `endSide > 0` the break is consumed silently. An insertion exactly at
+		// `to` (end of the last hidden line) is absorbed, but that position is
+		// inside an atomic range edge the caret is never placed at; the next
+		// visible line starts at `to + 1`.
 		//
-		// Starting at the first hidden line's own start also removes the special
-		// case for a run at line 0, which had no preceding break to take and so
-		// left a blank leading line by design.
+		// The start must also stay inclusive (`startSide < 0`): CM6 does
+		// `if (deco.startSide > 0) b.addLineStartIfNotCovered(...)` before a
+		// block widget, which would render an empty line before every run. The
+		// caret at the end of the entry line above sits at `from - 1`, so typing
+		// there shifts the range rather than being absorbed into it.
+		//
+		// Exception: a run that is a single EMPTY line has no characters of its
+		// own (from === to), and a zero-length block leaves the line itself on
+		// screen. For that case only, cover its trailing break up to the next
+		// line's start with a non-inclusive end (endSide sorts before the next
+		// line's Decoration.line so that line keeps its classes). It joins one
+		// blank line to its neighbour visually, which is harmless.
 		if (range.from >= lineCount || range.to > lineCount) continue;
-		const lastLineNo = Math.min(range.to, lineCount);
-		const from = doc.line(range.from + 1).from;
-		const to = lastLineNo < lineCount ? doc.line(lastLineNo + 1).from : doc.length;
-		if (from >= to) continue;
-		// `inclusiveEnd: false` is required; `inclusiveStart` must be left at its
-		// default. CM6's Decoration.replace derives both from
-		// `getInclusive(spec, block)`, which falls back to the `block` flag, so a
-		// plain `{block: true}` replacement is inclusive at BOTH boundaries and
-		// absorbs text inserted exactly at either one.
-		//
-		// END — must be non-inclusive, for two reasons. It keeps a character
-		// typed at the start of the next visible line outside the hidden range,
-		// and it sets `endSide` to -599999999, which sorts before a
-		// `Decoration.line`'s -200000000 at the same offset so the following
-		// line keeps its indent/colour classes (see the geometry note above).
-		//
-		// START — must stay INCLUSIVE, i.e. `startSide` negative. CM6's content
-		// builder does:
-		//
-		//     if (deco.block) {
-		//         if (deco.startSide > 0) b.addLineStartIfNotCovered(...);
-		//         b.addBlockWidget(tile);
-		//     }
-		//
-		// `inclusiveStart: false` makes `startSide` +499999999 — positive — so
-		// CM6 opened a line before every hidden block, rendering an empty
-		// `.cm-line` there. That is a blank line per hidden run, in Outline-only
-		// and Body-only alike, in documents containing no blank lines at all.
-		//
-		// Setting it false was only ever needed under the OLD geometry, where
-		// `from` was the end of the entry line above — the exact spot the cursor
-		// occupies while editing that entry, so a keystroke there was swallowed
-		// into the hidden range (the corruption that turned `@@@ More detail`
-		// into `en@@@ More detail`). Now that `from` is the start of the FIRST
-		// HIDDEN line, the cursor sits at `from - 1`, and an insertion strictly
-		// before `from` shifts the range regardless of inclusivity — so the
-		// protection is inherent in the geometry and no longer needs the flag.
-		// Covered by tests/livePreview.test.ts, including a guard on the sign of
-		// `startSide` itself.
+		const firstLine = doc.line(range.from + 1);
+		const lastLine = doc.line(Math.min(range.to, lineCount));
+		const from = firstLine.from;
+		let to = lastLine.to;
+		let inclusiveEnd = true;
+		if (from >= to) {
+			if (lastLine.number >= lineCount) continue;
+			to = doc.line(lastLine.number + 1).from;
+			inclusiveEnd = false;
+		}
 		items.push({
 			from,
 			to,
 			deco: Decoration.replace({
 				block: true,
-				inclusiveEnd: false,
+				...(inclusiveEnd ? {} : { inclusiveEnd: false }),
 				widget: hiddenBlockWidget,
 			}),
 		});

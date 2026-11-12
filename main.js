@@ -1726,9 +1726,8 @@ function hiddenBlockRanges(state) {
 function buildHiddenContentGuard(onBlocked) {
   return import_state.EditorState.transactionFilter.of((tr) => {
     if (!tr.docChanged || !tr.isUserEvent("delete")) return tr;
-    const blocks = hiddenBlockRanges(tr.startState).filter(
-      (b) => tr.startState.doc.sliceString(b.from, b.to).trim() !== ""
-    );
+    const doc = tr.startState.doc;
+    const blocks = hiddenBlockRanges(tr.startState).filter((b) => doc.sliceString(b.from, b.to).trim() !== "").map((b) => b.to < doc.length && doc.sliceString(b.to, b.to + 1) === "\n" ? { from: b.from, to: b.to + 1 } : b);
     if (blocks.length === 0) return tr;
     let destroys = false;
     tr.changes.iterChanges((fromA, toA) => {
@@ -1860,16 +1859,22 @@ function buildOutlineDecorations(view, plan, sigilChar, onToggleFold = null, tex
   const items = [];
   for (const range of plan.hiddenLineRanges) {
     if (range.from >= lineCount || range.to > lineCount) continue;
-    const lastLineNo = Math.min(range.to, lineCount);
-    const from = doc.line(range.from + 1).from;
-    const to = lastLineNo < lineCount ? doc.line(lastLineNo + 1).from : doc.length;
-    if (from >= to) continue;
+    const firstLine = doc.line(range.from + 1);
+    const lastLine = doc.line(Math.min(range.to, lineCount));
+    const from = firstLine.from;
+    let to = lastLine.to;
+    let inclusiveEnd = true;
+    if (from >= to) {
+      if (lastLine.number >= lineCount) continue;
+      to = doc.line(lastLine.number + 1).from;
+      inclusiveEnd = false;
+    }
     items.push({
       from,
       to,
       deco: import_view.Decoration.replace({
         block: true,
-        inclusiveEnd: false,
+        ...inclusiveEnd ? {} : { inclusiveEnd: false },
         widget: hiddenBlockWidget
       })
     });
