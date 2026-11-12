@@ -765,7 +765,13 @@ export default class VirtualOutlinerPlugin extends Plugin {
 
 	private async toggleClean(path: string): Promise<void> {
 		const on = !this.isCleanView(path);
-		this.fileStateEntry(path).viewState = on ? 'body' : 'both';
+		const entry = this.fileStateEntry(path);
+		entry.viewState = on ? 'body' : 'both';
+		// The editor draws from the parsed-file cache, not fileState, so its
+		// copy must be updated too (as decorateAllFor does for setViewState) —
+		// without this the note kept showing its outline in clean mode.
+		const cached = this.states.get(path);
+		if (cached) cached.viewState = entry.viewState;
 		this.settings.indentBody = !on;
 		this.settings.hideTags = on;
 		// saveSettings persists the view state too and redraws every editor

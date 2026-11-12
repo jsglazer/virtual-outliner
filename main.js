@@ -6069,7 +6069,10 @@ ${lineHeight}` : ""}`;
   }
   async toggleClean(path) {
     const on = !this.isCleanView(path);
-    this.fileStateEntry(path).viewState = on ? "body" : "both";
+    const entry = this.fileStateEntry(path);
+    entry.viewState = on ? "body" : "both";
+    const cached2 = this.states.get(path);
+    if (cached2) cached2.viewState = entry.viewState;
     this.settings.indentBody = !on;
     this.settings.hideTags = on;
     await this.saveSettings();
