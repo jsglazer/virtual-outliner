@@ -131,6 +131,9 @@ export interface EditorHost {
 	// the viewport, a resize, fonts loading), so entry text positions need
 	// measuring again — see measureEntryTextOffsets.
 	layoutChanged(view: EditorView): void;
+	// The caret moved (or the text under it changed) — the sidebar shades the
+	// entry the caret is in.
+	cursorMoved(view: EditorView): void;
 }
 
 export const EDITOR_RESOLVE_DEBOUNCE_MS = 200;
@@ -145,12 +148,15 @@ export function buildEditorExtension(host: EditorHost): Extension {
 
 			update(update: {
 				docChanged: boolean;
+				selectionSet: boolean;
+				focusChanged: boolean;
 				viewportChanged: boolean;
 				geometryChanged: boolean;
 				view: EditorView;
 			}): void {
 				if (update.docChanged) host.scheduleEditorResolve(update.view, EDITOR_RESOLVE_DEBOUNCE_MS);
 				if (update.viewportChanged || update.geometryChanged) host.layoutChanged(update.view);
+				if (update.selectionSet || update.docChanged || update.focusChanged) host.cursorMoved(update.view);
 			}
 
 			destroy(): void {

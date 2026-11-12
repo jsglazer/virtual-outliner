@@ -1,7 +1,8 @@
-// Sidebar outline tree: collapsible, searchable, click to jump — v1's scope
-// is deliberately navigation-only (Interview capture: "Sidebar v1 needs
-// navigation only with collapse/expand, search, and jump to prose");
-// drag-to-reorder / rename-in-place are nice-to-haves explicitly out of v1.
+// Sidebar outline tree: collapsible, searchable, click to jump. The entry the
+// caret is in is lightly shaded, and entries can be dragged to move their
+// whole block (entry, body, sub-entries) — dropped on the top quarter of a row
+// the block goes before it, on the bottom quarter after its section, in the
+// middle as its last child.
 
 import type { WorkspaceLeaf } from 'obsidian';
 import { ItemView, setIcon } from 'obsidian';
@@ -9,6 +10,7 @@ import { ItemView, setIcon } from 'obsidian';
 import { computeLabel } from '../core/label';
 import type { ParsedOutline, OutlineNode } from '../core/types';
 import type { LevelFormat } from '../core/types';
+import type { DropPosition } from '../core/ops';
 
 export const SIDEBAR_VIEW_TYPE = 'virtual-outliner-sidebar';
 
@@ -22,11 +24,22 @@ export interface SidebarHost {
 	expandAll(path: string): void;
 	jumpToNode(path: string, node: OutlineNode): void;
 	onStateChange(listener: () => void): () => void;
+	// 0-based line the caret is on in this note, null when unknown.
+	currentLine(path: string): number | null;
+	onCursorChange(listener: () => void): () => void;
+	moveNode(path: string, dragged: OutlineNode, target: OutlineNode, position: DropPosition): void;
 }
+
+const DROP_CLASSES = ['vo-drop-before', 'vo-drop-after', 'vo-drop-child'];
 
 export class OutlineSidebarView extends ItemView {
 	private unsubscribe: (() => void) | null = null;
+	private unsubscribeCursor: (() => void) | null = null;
 	private searchQuery = '';
+	// Rendered rows of the current tree, by node, for shading the caret's entry.
+	private rows = new Map<OutlineNode, HTMLElement>();
+	private currentRow: HTMLElement | null = null;
+	private dragged: OutlineNode | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -49,6 +62,7 @@ export class OutlineSidebarView extends ItemView {
 
 	onOpen(): Promise<void> {
 		this.unsubscribe = this.host.onStateChange(() => this.render());
+		this.unsubscribeCursor = this.host.onCursorChange(() => this.shadeCurrent());
 		this.render();
 		return Promise.resolve();
 	}
@@ -56,6 +70,8 @@ export class OutlineSidebarView extends ItemView {
 	onClose(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
+		this.unsubscribeCursor?.();
+		this.unsubscribeCursor = null;
 		return Promise.resolve();
 	}
 
@@ -77,6 +93,8 @@ export class OutlineSidebarView extends ItemView {
 	private render(): void {
 		const root = this.contentEl;
 		root.empty();
+		this.rows.clear();
+		this.currentRow = null;
 		root.addClass('vo-sidebar');
 
 		const searchWrap = root.createDiv({ cls: 'vo-sidebar-search' });
@@ -117,6 +135,77 @@ export class OutlineSidebarView extends ItemView {
 		for (const node of parsed.roots) {
 			this.renderNode(treeEl, path, node, levels, matches, trimmedQuery);
 		}
+		this.shadeCurrent();
+	}
+
+	// Shades the entry whose section holds the caret — the deepest entry at or
+	// above its line — or, when that row is folded away, its nearest visible
+	// ancestor.
+	private shadeCurrent(): void {
+		const path = this.host.activeOutlinePath();
+		const line = path ? this.host.currentLine(path) : null;
+		const parsed = path ? this.host.getParsed(path) : null;
+		let node: OutlineNode | null = null;
+		if (parsed && line !== null) {
+			for (const n of parsed.flat) {
+				if (n.entryLine > line) break;
+				node = n;
+			}
+		}
+		let row = node ? this.rows.get(node) : undefined;
+		while (node && (!row || row.closest('.vo-collapsed'))) {
+			node = node.parent;
+			row = node ? this.rows.get(node) : undefined;
+		}
+		if (row === this.currentRow) return;
+		this.currentRow?.removeClass('vo-node-current');
+		this.currentRow = row ?? null;
+		if (row) {
+			row.addClass('vo-node-current');
+			row.scrollIntoView({ block: 'nearest' });
+		}
+	}
+
+	private dropPosition(row: HTMLElement, evt: DragEvent): DropPosition {
+		const rect = row.getBoundingClientRect();
+		const y = (evt.clientY - rect.top) / Math.max(rect.height, 1);
+		return y < 0.25 ? 'before' : y > 0.75 ? 'after' : 'child';
+	}
+
+	private wireDrag(row: HTMLElement, path: string, node: OutlineNode): void {
+		row.draggable = true;
+		row.addEventListener('dragstart', (evt) => {
+			this.dragged = node;
+			row.addClass('vo-dragging');
+			if (evt.dataTransfer) {
+				evt.dataTransfer.effectAllowed = 'move';
+				evt.dataTransfer.setData('text/plain', node.text);
+			}
+		});
+		row.addEventListener('dragend', () => {
+			this.dragged = null;
+			row.removeClass('vo-dragging');
+			for (const el of Array.from(this.contentEl.querySelectorAll('.vo-drop-before, .vo-drop-after, .vo-drop-child'))) {
+				el.removeClasses(DROP_CLASSES);
+			}
+		});
+		row.addEventListener('dragover', (evt) => {
+			const dragged = this.dragged;
+			// Not onto itself or anywhere inside its own block.
+			if (!dragged || (node.entryLine >= dragged.subtreeStart && node.entryLine < dragged.subtreeEnd)) return;
+			evt.preventDefault();
+			if (evt.dataTransfer) evt.dataTransfer.dropEffect = 'move';
+			row.removeClasses(DROP_CLASSES);
+			row.addClass(`vo-drop-${this.dropPosition(row, evt)}`);
+		});
+		row.addEventListener('dragleave', () => row.removeClasses(DROP_CLASSES));
+		row.addEventListener('drop', (evt) => {
+			evt.preventDefault();
+			row.removeClasses(DROP_CLASSES);
+			const dragged = this.dragged;
+			this.dragged = null;
+			if (dragged) this.host.moveNode(path, dragged, node, this.dropPosition(row, evt));
+		});
 	}
 
 	private renderNode(
@@ -150,6 +239,8 @@ export class OutlineSidebarView extends ItemView {
 		row.createSpan({ cls: 'vo-node-label', text: computeLabel(levels, node) });
 		row.createSpan({ cls: 'vo-node-text', text: node.text === '' ? '(empty)' : node.text });
 		row.addEventListener('click', () => this.host.jumpToNode(path, node));
+		this.rows.set(node, row);
+		this.wireDrag(row, path, node);
 
 		if (hasChildren) {
 			// Search always shows the path to a match regardless of collapse state.

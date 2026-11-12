@@ -1248,6 +1248,44 @@ function addBodyLine(body, entryLine, sigilChar = DEFAULT_SIGIL_CHAR) {
   const insertAt = ((_a = offsets[entryLine]) != null ? _a : 0) + line.length;
   return { from: insertAt, to: insertAt, insert: "\n" };
 }
+function shiftSubtreeBy(text2, delta, sigilChar) {
+  if (delta === 0) return text2;
+  return text2.split("\n").map((line) => {
+    if (!isEntryLine(line, sigilChar)) return line;
+    return delta > 0 ? sigilChar.repeat(delta) + line : line.slice(sigilChar.length * -delta);
+  }).join("\n");
+}
+function moveSubtreeTo(body, entryLine, targetEntryLine, position, sigilChar = DEFAULT_SIGIL_CHAR) {
+  var _a;
+  const lines = body.split("\n");
+  const parsed = parseOutline(body, sigilChar);
+  const node2 = nodeAtLine(parsed, entryLine);
+  const target = nodeAtLine(parsed, targetEntryLine);
+  if (!node2 || !target) return null;
+  if (target.entryLine >= node2.subtreeStart && target.entryLine < node2.subtreeEnd) return null;
+  const newLevel = position === "child" ? target.level + 1 : target.level;
+  const delta = newLevel - node2.level;
+  if (deepestLevelInSubtree(lines, node2, sigilChar) + delta > MAX_LEVEL) return null;
+  const at = position === "before" ? target.subtreeStart : target.subtreeEnd;
+  if (delta === 0 && (at === node2.subtreeStart || at === node2.subtreeEnd)) return null;
+  const blockRange = sliceRange(lines, node2.subtreeStart, node2.subtreeEnd);
+  const blockText = shiftSubtreeBy(body.slice(blockRange.from, blockRange.to), delta, sigilChar);
+  if (at <= node2.subtreeStart) {
+    const midRange2 = sliceRange(lines, at, node2.subtreeStart);
+    const midText2 = body.slice(midRange2.from, midRange2.to);
+    const chunks2 = rejoinChunks(body, midRange2.from, blockRange.to, [blockText, midText2]);
+    return { from: midRange2.from, to: blockRange.to, insert: chunks2.join(""), movedTo: midRange2.from };
+  }
+  const midRange = sliceRange(lines, node2.subtreeEnd, at);
+  const midText = body.slice(midRange.from, midRange.to);
+  const chunks = rejoinChunks(body, blockRange.from, midRange.to, [midText, blockText]);
+  return {
+    from: blockRange.from,
+    to: midRange.to,
+    insert: chunks.join(""),
+    movedTo: blockRange.from + (midText === "" ? 0 : ((_a = chunks[0]) != null ? _a : "").length)
+  };
+}
 
 // src/core/exportFilter.ts
 function generateFilteredCopy(doc, sigilChar, levels, viewState, collapsedIds) {
@@ -1757,6 +1795,7 @@ function buildEditorExtension(host) {
       update(update) {
         if (update.docChanged) host.scheduleEditorResolve(update.view, EDITOR_RESOLVE_DEBOUNCE_MS);
         if (update.viewportChanged || update.geometryChanged) host.layoutChanged(update.view);
+        if (update.selectionSet || update.docChanged || update.focusChanged) host.cursorMoved(update.view);
       }
       destroy() {
         host.detachEditor(this.view);
@@ -4610,7 +4649,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
       });
     });
     new import_obsidian4.Setting(containerEl).setName("Hide tags and their comments").setDesc(
-      "Hides every #tag, and a %%comment%% attached to it, in the editor and reading view. The cursor steps over a hidden tag, and Backspace or Delete beside it removes the visible character instead. Visual only \u2014 the file is never changed, and PDF export is unaffected."
+      "Hides every #tag, and a %%comment%% attached to it, in the editor and reading view. The cursor steps over a hidden tag, and the backspace or delete key beside it removes the visible character instead. Visual only \u2014 the file is never changed, and PDF export is unaffected."
     ).addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.hideTags).onChange(async (value) => {
         this.plugin.settings.hideTags = value;
@@ -5332,12 +5371,18 @@ var ExportErrorModal = class extends import_obsidian5.Modal {
 // src/ui/sidebar.ts
 var import_obsidian6 = require("obsidian");
 var SIDEBAR_VIEW_TYPE = "virtual-outliner-sidebar";
+var DROP_CLASSES = ["vo-drop-before", "vo-drop-after", "vo-drop-child"];
 var OutlineSidebarView = class extends import_obsidian6.ItemView {
   constructor(leaf, host) {
     super(leaf);
     this.host = host;
     this.unsubscribe = null;
+    this.unsubscribeCursor = null;
     this.searchQuery = "";
+    // Rendered rows of the current tree, by node, for shading the caret's entry.
+    this.rows = /* @__PURE__ */ new Map();
+    this.currentRow = null;
+    this.dragged = null;
   }
   getViewType() {
     return SIDEBAR_VIEW_TYPE;
@@ -5350,13 +5395,16 @@ var OutlineSidebarView = class extends import_obsidian6.ItemView {
   }
   onOpen() {
     this.unsubscribe = this.host.onStateChange(() => this.render());
+    this.unsubscribeCursor = this.host.onCursorChange(() => this.shadeCurrent());
     this.render();
     return Promise.resolve();
   }
   onClose() {
-    var _a;
+    var _a, _b;
     (_a = this.unsubscribe) == null ? void 0 : _a.call(this);
     this.unsubscribe = null;
+    (_b = this.unsubscribeCursor) == null ? void 0 : _b.call(this);
+    this.unsubscribeCursor = null;
     return Promise.resolve();
   }
   matchingAncestry(parsed, query) {
@@ -5376,6 +5424,8 @@ var OutlineSidebarView = class extends import_obsidian6.ItemView {
   render() {
     const root = this.contentEl;
     root.empty();
+    this.rows.clear();
+    this.currentRow = null;
     root.addClass("vo-sidebar");
     const searchWrap = root.createDiv({ cls: "vo-sidebar-search" });
     const input = searchWrap.createEl("input", { type: "search", placeholder: "Search outline\u2026" });
@@ -5411,6 +5461,74 @@ var OutlineSidebarView = class extends import_obsidian6.ItemView {
     for (const node2 of parsed.roots) {
       this.renderNode(treeEl, path, node2, levels, matches, trimmedQuery);
     }
+    this.shadeCurrent();
+  }
+  // Shades the entry whose section holds the caret — the deepest entry at or
+  // above its line — or, when that row is folded away, its nearest visible
+  // ancestor.
+  shadeCurrent() {
+    var _a;
+    const path = this.host.activeOutlinePath();
+    const line = path ? this.host.currentLine(path) : null;
+    const parsed = path ? this.host.getParsed(path) : null;
+    let node2 = null;
+    if (parsed && line !== null) {
+      for (const n of parsed.flat) {
+        if (n.entryLine > line) break;
+        node2 = n;
+      }
+    }
+    let row = node2 ? this.rows.get(node2) : void 0;
+    while (node2 && (!row || row.closest(".vo-collapsed"))) {
+      node2 = node2.parent;
+      row = node2 ? this.rows.get(node2) : void 0;
+    }
+    if (row === this.currentRow) return;
+    (_a = this.currentRow) == null ? void 0 : _a.removeClass("vo-node-current");
+    this.currentRow = row != null ? row : null;
+    if (row) {
+      row.addClass("vo-node-current");
+      row.scrollIntoView({ block: "nearest" });
+    }
+  }
+  dropPosition(row, evt) {
+    const rect = row.getBoundingClientRect();
+    const y = (evt.clientY - rect.top) / Math.max(rect.height, 1);
+    return y < 0.25 ? "before" : y > 0.75 ? "after" : "child";
+  }
+  wireDrag(row, path, node2) {
+    row.draggable = true;
+    row.addEventListener("dragstart", (evt) => {
+      this.dragged = node2;
+      row.addClass("vo-dragging");
+      if (evt.dataTransfer) {
+        evt.dataTransfer.effectAllowed = "move";
+        evt.dataTransfer.setData("text/plain", node2.text);
+      }
+    });
+    row.addEventListener("dragend", () => {
+      this.dragged = null;
+      row.removeClass("vo-dragging");
+      for (const el of Array.from(this.contentEl.querySelectorAll(".vo-drop-before, .vo-drop-after, .vo-drop-child"))) {
+        el.removeClasses(DROP_CLASSES);
+      }
+    });
+    row.addEventListener("dragover", (evt) => {
+      const dragged = this.dragged;
+      if (!dragged || node2.entryLine >= dragged.subtreeStart && node2.entryLine < dragged.subtreeEnd) return;
+      evt.preventDefault();
+      if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
+      row.removeClasses(DROP_CLASSES);
+      row.addClass(`vo-drop-${this.dropPosition(row, evt)}`);
+    });
+    row.addEventListener("dragleave", () => row.removeClasses(DROP_CLASSES));
+    row.addEventListener("drop", (evt) => {
+      evt.preventDefault();
+      row.removeClasses(DROP_CLASSES);
+      const dragged = this.dragged;
+      this.dragged = null;
+      if (dragged) this.host.moveNode(path, dragged, node2, this.dropPosition(row, evt));
+    });
   }
   renderNode(container, path, node2, levels, matches, trimmedQuery) {
     if (matches && !matches.has(node2)) return;
@@ -5433,6 +5551,8 @@ var OutlineSidebarView = class extends import_obsidian6.ItemView {
     row.createSpan({ cls: "vo-node-label", text: computeLabel(levels, node2) });
     row.createSpan({ cls: "vo-node-text", text: node2.text === "" ? "(empty)" : node2.text });
     row.addEventListener("click", () => this.host.jumpToNode(path, node2));
+    this.rows.set(node2, row);
+    this.wireDrag(row, path, node2);
     if (hasChildren) {
       const expanded = matches !== null || !collapsed;
       const childrenEl = container.createDiv({
@@ -5456,6 +5576,7 @@ function normalizeFileStateEntry(v, fallback) {
 var RESOLVE_DEBOUNCE_MS = 200;
 var CSS_VAR_STYLE_ID = "virtual-outliner-level-vars";
 var HIDE_TAGS_CLASS = "vo-hide-tags";
+var CURSOR_TRACK_DELAY_MS = 60;
 var TOOLBAR_HIGHLIGHT_DELAY_MS = 50;
 var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
   constructor() {
@@ -5476,6 +5597,11 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     // Set when Toggle clean closed the outline sidebar, so turning clean off
     // reopens it — and only then (a sidebar the user had closed stays closed).
     this.sidebarClosedByClean = false;
+    // Per note, the 0-based line the caret was last on (any editor showing
+    // it), so the sidebar can shade the entry being worked in.
+    this.cursorLines = /* @__PURE__ */ new Map();
+    this.cursorListeners = /* @__PURE__ */ new Set();
+    this.cursorTimer = null;
     // One stable handler for every editor's fold chevrons (a fresh closure per
     // decorate would be harmless but pointless).
     this.onFoldClick = (view, lineIndex) => {
@@ -5527,7 +5653,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
           }
         },
         scheduleEditorResolve: (view, delayMs) => this.scheduleEditorResolve(view, delayMs),
-        layoutChanged: (view) => this.scheduleTextMeasure(view)
+        layoutChanged: (view) => this.scheduleTextMeasure(view),
+        cursorMoved: (view) => this.onCursorMoved(view)
       })
     ]);
     this.registerMarkdownPostProcessor(
@@ -5816,6 +5943,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     }
     if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
     this.toolbarTimer = null;
+    if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
+    this.cursorTimer = null;
     (_b = this.toolbarHighlighter) == null ? void 0 : _b.clear();
   }
   scheduleToolbarRefresh() {
@@ -6477,17 +6606,86 @@ ${lineHeight}` : ""}`;
       collapseAll: (path) => this.collapseAll(path),
       expandAll: (path) => this.expandAll(path),
       jumpToNode: (path, node2) => void this.jumpToNode(path, node2),
-      onStateChange: (listener) => this.onStateChange(listener)
+      onStateChange: (listener) => this.onStateChange(listener),
+      currentLine: (path) => {
+        var _a;
+        return (_a = this.cursorLines.get(path)) != null ? _a : null;
+      },
+      onCursorChange: (listener) => {
+        this.cursorListeners.add(listener);
+        return () => this.cursorListeners.delete(listener);
+      },
+      moveNode: (path, dragged, target, position) => void this.moveNode(path, dragged, target, position)
     };
   }
-  async jumpToNode(path, node2) {
+  onCursorMoved(view) {
+    const path = editorViewPath(view);
+    if (path === null) return;
+    const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
+    if (this.cursorLines.get(path) === line) return;
+    this.cursorLines.set(path, line);
+    if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
+    this.cursorTimer = window.setTimeout(() => {
+      this.cursorTimer = null;
+      for (const listener of this.cursorListeners) listener();
+    }, CURSOR_TRACK_DELAY_MS);
+  }
+  // Sidebar drag-and-drop. The rows were drawn from the last parse, which
+  // can trail the editor by a debounce, so both entries are re-found in the
+  // current text by line AND text before anything moves.
+  async moveNode(path, dragged, target, position) {
+    const sigil = this.settings.sigil;
+    const plan = (doc) => {
+      var _a, _b;
+      const body = parseMetaDocument(doc).body;
+      const parsed = parseOutline(body, sigil);
+      if (((_a = nodeAtLine(parsed, dragged.entryLine)) == null ? void 0 : _a.text) !== dragged.text) return null;
+      if (((_b = nodeAtLine(parsed, target.entryLine)) == null ? void 0 : _b.text) !== target.text) return null;
+      return moveSubtreeTo(body, dragged.entryLine, target.entryLine, position, sigil);
+    };
+    const view = this.editorFor(path);
+    if (view) {
+      const splice = plan(view.state.doc.toString());
+      if (!splice) return;
+      view.dispatch({
+        changes: { from: splice.from, to: splice.to, insert: splice.insert },
+        selection: splice.movedTo !== void 0 ? { anchor: splice.movedTo } : void 0,
+        userEvent: "move.drop",
+        scrollIntoView: true
+      });
+      this.resolveEditor(view);
+      return;
+    }
+    const file = this.app.vault.getFileByPath(path);
+    if (!file) return;
+    await this.app.vault.process(file, (doc) => {
+      const splice = plan(doc);
+      return splice ? doc.slice(0, splice.from) + splice.insert + doc.slice(splice.to) : doc;
+    });
+  }
+  // The tab already showing `path`: the most recent one if it does, else any.
+  markdownLeafFor(path) {
     var _a, _b;
-    let view = this.app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView);
-    if (!view || ((_a = view.file) == null ? void 0 : _a.path) !== path) {
+    const recent = this.app.workspace.getMostRecentLeaf();
+    if ((recent == null ? void 0 : recent.view) instanceof import_obsidian7.MarkdownView && ((_a = recent.view.file) == null ? void 0 : _a.path) === path) return recent;
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      if (leaf.view instanceof import_obsidian7.MarkdownView && ((_b = leaf.view.file) == null ? void 0 : _b.path) === path) return leaf;
+    }
+    return null;
+  }
+  async jumpToNode(path, node2) {
+    var _a;
+    let view = null;
+    const leaf = this.markdownLeafFor(path);
+    if (leaf) {
+      await this.app.workspace.revealLeaf(leaf);
+      this.app.workspace.setActiveLeaf(leaf, { focus: true });
+      view = leaf.view instanceof import_obsidian7.MarkdownView ? leaf.view : null;
+    } else {
       await this.app.workspace.openLinkText(path, "", false);
       view = this.app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView);
     }
-    if (!view || ((_b = view.file) == null ? void 0 : _b.path) !== path) return;
+    if (!view || ((_a = view.file) == null ? void 0 : _a.path) !== path) return;
     const targetLine = node2.ownBodyStart < node2.ownBodyEnd ? node2.ownBodyStart : node2.entryLine;
     const pos = { line: targetLine, ch: 0 };
     view.editor.setCursor(pos);

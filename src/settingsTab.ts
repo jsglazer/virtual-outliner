@@ -103,7 +103,7 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Hide tags and their comments')
 			.setDesc(
-				'Hides every #tag, and a %%comment%% attached to it, in the editor and reading view. The cursor steps over a hidden tag, and Backspace or Delete beside it removes the visible character instead. Visual only — the file is never changed, and PDF export is unaffected.',
+				'Hides every #tag, and a %%comment%% attached to it, in the editor and reading view. The cursor steps over a hidden tag, and the backspace or delete key beside it removes the visible character instead. Visual only — the file is never changed, and PDF export is unaffected.',
 			)
 			.addToggle((toggle) => {
 				toggle.setValue(this.plugin.settings.hideTags).onChange(async (value) => {

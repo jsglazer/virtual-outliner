@@ -17,8 +17,9 @@ import { createApi } from './api';
 import { lineStartOffsets } from './core/lines';
 import { appendId, ID_SUFFIX_RE, mintId } from './core/id';
 import { parseMetaDocument, pruneOrphaned } from './core/metadata';
-import { parseOutline } from './core/parser';
-import { ownerNodeAtLine } from './core/ops';
+import { nodeAtLine, parseOutline } from './core/parser';
+import { moveSubtreeTo, ownerNodeAtLine } from './core/ops';
+import type { DropPosition } from './core/ops';
 import { computeRenderPlan, foldableDescendants, hasFoldableContent } from './core/render';
 import { generateFilteredCopy } from './core/exportFilter';
 import { hasParagraphFlag, isCommentLine, setComment, setParagraphFlag } from './core/sigil';
@@ -71,6 +72,8 @@ const RESOLVE_DEBOUNCE_MS = 200;
 const CSS_VAR_STYLE_ID = 'virtual-outliner-level-vars';
 // On <body> while tags are hidden; styles.css hides rendered tags under it.
 const HIDE_TAGS_CLASS = 'vo-hide-tags';
+// Caret moves are batched this long before the sidebar re-shades its entry.
+const CURSOR_TRACK_DELAY_MS = 60;
 // Note Toolbar renders its own DOM per leaf/file/mode; a short delay lets that
 // land before the toggle colours are re-applied (same value as md-annotation).
 const TOOLBAR_HIGHLIGHT_DELAY_MS = 50;
@@ -95,6 +98,11 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	// Set when Toggle clean closed the outline sidebar, so turning clean off
 	// reopens it — and only then (a sidebar the user had closed stays closed).
 	private sidebarClosedByClean = false;
+	// Per note, the 0-based line the caret was last on (any editor showing
+	// it), so the sidebar can shade the entry being worked in.
+	private cursorLines = new Map<string, number>();
+	private cursorListeners = new Set<() => void>();
+	private cursorTimer: number | null = null;
 
 	async onload(): Promise<void> {
 		const raw: unknown = await this.loadData();
@@ -146,6 +154,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				},
 				scheduleEditorResolve: (view, delayMs) => this.scheduleEditorResolve(view, delayMs),
 				layoutChanged: (view) => this.scheduleTextMeasure(view),
+				cursorMoved: (view) => this.onCursorMoved(view),
 			}),
 		]);
 
@@ -502,6 +511,8 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		}
 		if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
 		this.toolbarTimer = null;
+		if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
+		this.cursorTimer = null;
 		this.toolbarHighlighter?.clear();
 	}
 
@@ -1249,12 +1260,88 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			expandAll: (path: string) => this.expandAll(path),
 			jumpToNode: (path: string, node: OutlineNode) => void this.jumpToNode(path, node),
 			onStateChange: (listener: () => void) => this.onStateChange(listener),
+			currentLine: (path: string) => this.cursorLines.get(path) ?? null,
+			onCursorChange: (listener: () => void) => {
+				this.cursorListeners.add(listener);
+				return () => this.cursorListeners.delete(listener);
+			},
+			moveNode: (path: string, dragged: OutlineNode, target: OutlineNode, position: DropPosition) =>
+				void this.moveNode(path, dragged, target, position),
 		};
 	}
 
+	private onCursorMoved(view: EditorView): void {
+		const path = editorViewPath(view);
+		if (path === null) return;
+		const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
+		if (this.cursorLines.get(path) === line) return;
+		this.cursorLines.set(path, line);
+		// Coalesce a burst of caret moves (holding an arrow key) into one
+		// sidebar update.
+		if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
+		this.cursorTimer = window.setTimeout(() => {
+			this.cursorTimer = null;
+			for (const listener of this.cursorListeners) listener();
+		}, CURSOR_TRACK_DELAY_MS);
+	}
+
+	// Sidebar drag-and-drop. The rows were drawn from the last parse, which
+	// can trail the editor by a debounce, so both entries are re-found in the
+	// current text by line AND text before anything moves.
+	private async moveNode(path: string, dragged: OutlineNode, target: OutlineNode, position: DropPosition): Promise<void> {
+		const sigil = this.settings.sigil;
+		const plan = (doc: string): { from: number; to: number; insert: string; movedTo?: number } | null => {
+			const body = parseMetaDocument(doc).body;
+			const parsed = parseOutline(body, sigil);
+			if (nodeAtLine(parsed, dragged.entryLine)?.text !== dragged.text) return null;
+			if (nodeAtLine(parsed, target.entryLine)?.text !== target.text) return null;
+			return moveSubtreeTo(body, dragged.entryLine, target.entryLine, position, sigil);
+		};
+
+		const view = this.editorFor(path);
+		if (view) {
+			const splice = plan(view.state.doc.toString());
+			if (!splice) return;
+			view.dispatch({
+				changes: { from: splice.from, to: splice.to, insert: splice.insert },
+				selection: splice.movedTo !== undefined ? { anchor: splice.movedTo } : undefined,
+				userEvent: 'move.drop',
+				scrollIntoView: true,
+			});
+			this.resolveEditor(view);
+			return;
+		}
+		// Note not open in an editor (Reading view only): edit the file itself.
+		const file = this.app.vault.getFileByPath(path);
+		if (!file) return;
+		await this.app.vault.process(file, (doc) => {
+			const splice = plan(doc);
+			return splice ? doc.slice(0, splice.from) + splice.insert + doc.slice(splice.to) : doc;
+		});
+	}
+
+	// The tab already showing `path`: the most recent one if it does, else any.
+	private markdownLeafFor(path: string): WorkspaceLeaf | null {
+		const recent = this.app.workspace.getMostRecentLeaf();
+		if (recent?.view instanceof MarkdownView && recent.view.file?.path === path) return recent;
+		for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+			if (leaf.view instanceof MarkdownView && leaf.view.file?.path === path) return leaf;
+		}
+		return null;
+	}
+
 	private async jumpToNode(path: string, node: OutlineNode): Promise<void> {
-		let view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view || view.file?.path !== path) {
+		// Clicking the sidebar makes IT the active leaf, so the active view is
+		// never the note here; opening the link then made a new tab every
+		// time. Go to the tab already showing the note, and open one only
+		// when there is none.
+		let view: MarkdownView | null = null;
+		const leaf = this.markdownLeafFor(path);
+		if (leaf) {
+			await this.app.workspace.revealLeaf(leaf);
+			this.app.workspace.setActiveLeaf(leaf, { focus: true });
+			view = leaf.view instanceof MarkdownView ? leaf.view : null;
+		} else {
 			await this.app.workspace.openLinkText(path, '', false);
 			view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		}

@@ -310,3 +310,68 @@ export function addBodyLine(
 	const insertAt = (offsets[entryLine] ?? 0) + line.length;
 	return { from: insertAt, to: insertAt, insert: '\n' };
 }
+
+// Sidebar drag-and-drop: where a dragged block lands relative to the entry it
+// is dropped on.
+//   'before' — directly above `target`, as its sibling (same level);
+//   'after'  — directly below `target`'s whole subtree, as its sibling;
+//   'child'  — at the end of `target`'s subtree, as its last child.
+export type DropPosition = 'before' | 'after' | 'child';
+
+function shiftSubtreeBy(text: string, delta: number, sigilChar: string): string {
+	if (delta === 0) return text;
+	return text
+		.split('\n')
+		.map((line) => {
+			if (!isEntryLine(line, sigilChar)) return line;
+			return delta > 0 ? sigilChar.repeat(delta) + line : line.slice(sigilChar.length * -delta);
+		})
+		.join('\n');
+}
+
+// Moves the node at `entryLine` — its full subtree: entry, body and every
+// descendant — to `position` relative to the node at `targetEntryLine`,
+// re-levelling the whole block so its entry takes the target's level (or one
+// deeper for 'child'). The new level always continues the outline without a
+// gap. Returns null when the move is impossible or changes nothing: dropping
+// a block onto itself or into its own subtree, or nesting it past MAX_LEVEL.
+export function moveSubtreeTo(
+	body: string,
+	entryLine: number,
+	targetEntryLine: number,
+	position: DropPosition,
+	sigilChar: string = DEFAULT_SIGIL_CHAR,
+): EditSplice | null {
+	const lines = body.split('\n');
+	const parsed = parseOutline(body, sigilChar);
+	const node = nodeAtLine(parsed, entryLine);
+	const target = nodeAtLine(parsed, targetEntryLine);
+	if (!node || !target) return null;
+	if (target.entryLine >= node.subtreeStart && target.entryLine < node.subtreeEnd) return null;
+
+	const newLevel = position === 'child' ? target.level + 1 : target.level;
+	const delta = newLevel - node.level;
+	if (deepestLevelInSubtree(lines, node, sigilChar) + delta > MAX_LEVEL) return null;
+
+	const at = position === 'before' ? target.subtreeStart : target.subtreeEnd;
+	if (delta === 0 && (at === node.subtreeStart || at === node.subtreeEnd)) return null;
+
+	const blockRange = sliceRange(lines, node.subtreeStart, node.subtreeEnd);
+	const blockText = shiftSubtreeBy(body.slice(blockRange.from, blockRange.to), delta, sigilChar);
+
+	if (at <= node.subtreeStart) {
+		const midRange = sliceRange(lines, at, node.subtreeStart);
+		const midText = body.slice(midRange.from, midRange.to);
+		const chunks = rejoinChunks(body, midRange.from, blockRange.to, [blockText, midText]);
+		return { from: midRange.from, to: blockRange.to, insert: chunks.join(''), movedTo: midRange.from };
+	}
+	const midRange = sliceRange(lines, node.subtreeEnd, at);
+	const midText = body.slice(midRange.from, midRange.to);
+	const chunks = rejoinChunks(body, blockRange.from, midRange.to, [midText, blockText]);
+	return {
+		from: blockRange.from,
+		to: midRange.to,
+		insert: chunks.join(''),
+		movedTo: blockRange.from + (midText === '' ? 0 : (chunks[0] ?? '').length),
+	};
+}
