@@ -499,7 +499,7 @@ function extractBody(doc, sigilChar, options = {}) {
       if (!lastBlank) out.push("");
       const lineAnchor = options.lineNumbers === true ? anchor(i + frontmatterLines + 1) : "";
       const format = options.outline.levels[node2.level - 1];
-      const gap = breaksBefore(line, sigilChar, options.breaks);
+      const gap = options.outline.only === true ? false : breaksBefore(line, sigilChar, options.breaks);
       out.push(entryParagraph(node2.level, computeLabel(options.outline.levels, node2), node2.text, gap, format, lineAnchor), "");
       lastBlank = true;
       dropped = false;

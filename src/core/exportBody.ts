@@ -179,7 +179,10 @@ export function extractBody(doc: string, sigilChar: string, options: ExtractOpti
 			if (!lastBlank) out.push('');
 			const lineAnchor = options.lineNumbers === true ? anchor(i + frontmatterLines + 1) : '';
 			const format = options.outline.levels[node.level - 1];
-			const gap = breaksBefore(line, sigilChar, options.breaks);
+			// Outline only prints the entries as one tight list: no paragraph
+			// space between them, whatever blank lines or paragraph breaks the
+			// note has (those separate body text, which is not printed).
+			const gap = options.outline.only === true ? false : breaksBefore(line, sigilChar, options.breaks);
 			out.push(entryParagraph(node.level, computeLabel(options.outline.levels, node), node.text, gap, format, lineAnchor), '');
 			lastBlank = true;
 			dropped = false;

@@ -251,11 +251,18 @@ describe('extractBody with the outline only', () => {
 		const out = extractBody(doc, '@', { outline: { levels, only: true }, breaks });
 		expect(out.body).toBe(
 			[
-				'`\\voentry{1}{0em}{\\bfseries}{1.0}`{=latex}Intro`\\voentryend{}`{=latex}',
+				'`\\voentry{0}{0em}{\\bfseries}{1.0}`{=latex}Intro`\\voentryend{}`{=latex}',
 				'',
 				'`\\voentry{0}{1.5em}{}{1.1}`{=latex}Sub`\\voentryend{}`{=latex}',
 			].join('\n'),
 		);
+	});
+
+	it('prints no gap between entries, whatever breaks the note has', () => {
+		const doc = ['@ A', '', '@@ B', 'Prose', '', '', '@@ C', '@ D'].join('\n');
+		const out = extractBody(doc, '@', { outline: { levels, only: true }, breaks: { auto: true, maxLevel: 6, ignoreManual: false } });
+		expect(out.body).not.toContain('\\voentry{1}');
+		expect(out.body.match(/\\voentry\{0\}/g)?.length).toBe(4);
 	});
 
 	it('does not take a sigil line inside a fence for an entry', () => {
