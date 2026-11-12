@@ -37,6 +37,7 @@ import {
 import type { KeymapHost } from './editor/keymap';
 import { buildOutlineKeymap, moveBlock } from './editor/keymap';
 import { createReadingPostProcessor } from './editor/readingView';
+import { buildTagHideExtension, syncTagHiding } from './editor/tagHide';
 import { PdfExporter, vaultBasePath } from './export/exporter';
 import { ensureRenderer, installQuickAction, missingTools, pruneBuildDirs, REQUIRED_TOOLS, supportDir, writeVaultConfig } from './export/installer';
 import { electronShell } from './export/node';
@@ -67,6 +68,8 @@ function normalizeFileStateEntry(v: unknown, fallback: ViewState): PersistedFile
 
 const RESOLVE_DEBOUNCE_MS = 200;
 const CSS_VAR_STYLE_ID = 'virtual-outliner-level-vars';
+// On <body> while tags are hidden; styles.css hides rendered tags under it.
+const HIDE_TAGS_CLASS = 'vo-hide-tags';
 // Note Toolbar renders its own DOM per leaf/file/mode; a short delay lets that
 // land before the toggle colours are re-applied (same value as md-annotation).
 const TOOLBAR_HIGHLIGHT_DELAY_MS = 50;
@@ -112,6 +115,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		);
 
 		this.applyLevelCssVars();
+		this.applyTagHideClass();
 
 		this.keymapHost = {
 			sigilChar: () => this.settings.sigil,
@@ -124,6 +128,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				new Notice('Hidden text is not deleted from this view — switch to outline and body to edit it.');
 			}),
 			buildOutlineKeymap(this.keymapHost),
+			buildTagHideExtension(() => this.settings.hideTags),
 			buildEditorExtension({
 				attachEditor: (view) => this.editors.add(view),
 				detachEditor: (view) => {
@@ -252,6 +257,19 @@ export default class VirtualOutlinerPlugin extends Plugin {
 						? 'Enter adds the new entry on the next line'
 						: 'Enter adds the new entry after the whole section',
 				);
+			},
+		});
+
+		// Hides every #tag and the %%comment%% attached to it (`#fix%%check%%`)
+		// in the editor and Reading view. The file is never changed; the line
+		// with the cursor shows its tags so they can still be edited.
+		this.addCommand({
+			id: 'toggle-hide-tags',
+			name: 'Toggle hiding tags and their comments',
+			callback: () => {
+				this.settings.hideTags = !this.settings.hideTags;
+				void this.saveSettings();
+				new Notice(this.settings.hideTags ? 'Tags and their comments hidden' : 'Tags and their comments shown');
 			},
 		});
 
@@ -425,9 +443,15 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				highlight: this.settings.toolbarHighlights.enterBehavior,
 				active: this.settings.enterBehavior === 'line',
 			},
+			{ highlight: this.settings.toolbarHighlights.hideTags, active: this.settings.hideTags },
 		]);
 		const onWorkspaceChange = (): void => this.scheduleToolbarRefresh();
 		this.registerEvent(this.app.workspace.on('layout-change', onWorkspaceChange));
+		this.registerEvent(
+			this.app.workspace.on('window-open', (win) =>
+				win.doc.body.classList.toggle(HIDE_TAGS_CLASS, this.settings.hideTags),
+			),
+		);
 		this.registerEvent(this.app.workspace.on('active-leaf-change', onWorkspaceChange));
 		this.registerEvent(this.app.workspace.on('css-change', onWorkspaceChange));
 		this.app.workspace.onLayoutReady(onWorkspaceChange);
@@ -436,6 +460,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			const file = this.app.workspace.getActiveFile();
 			if (file && file.extension === 'md') void this.ensureFileState(file.path);
 			this.applyLevelCssVars();
+			this.applyTagHideClass();
 			for (const view of this.editors) this.decorate(view);
 			this.rerenderPreviews(null);
 		});
@@ -446,7 +471,10 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		this.editorTimers.clear();
 		for (const timer of this.diskTimers.values()) window.clearTimeout(timer);
 		this.diskTimers.clear();
-		for (const doc of this.cssVarTargetDocuments()) doc.getElementById(CSS_VAR_STYLE_ID)?.remove();
+		for (const doc of this.cssVarTargetDocuments()) {
+			doc.getElementById(CSS_VAR_STYLE_ID)?.remove();
+			doc.body.classList.remove(HIDE_TAGS_CLASS);
+		}
 		if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
 		this.toolbarTimer = null;
 		this.toolbarHighlighter?.clear();
@@ -464,7 +492,11 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		await this.persist();
 		if (Platform.isDesktopApp) void this.syncVaultConfig();
 		this.applyLevelCssVars();
-		for (const view of this.editors) this.decorate(view);
+		this.applyTagHideClass();
+		for (const view of this.editors) {
+			syncTagHiding(view, this.settings.hideTags);
+			this.decorate(view);
+		}
 		this.rerenderPreviews(null);
 		this.notifyChange();
 		this.scheduleToolbarRefresh();
@@ -643,6 +675,13 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		for (const leaf of this.app.workspace.getLeavesOfType('markdown')) docs.add(leaf.view.containerEl.ownerDocument);
 		docs.add(activeDocument); // covers the case of zero open markdown leaves
 		return docs;
+	}
+
+	// Reading view (and widgets Live Preview renders, like tables and
+	// callouts) hides tags by CSS. Comments need nothing: the renderer already
+	// drops them.
+	private applyTagHideClass(): void {
+		for (const doc of this.cssVarTargetDocuments()) doc.body.classList.toggle(HIDE_TAGS_CLASS, this.settings.hideTags);
 	}
 
 	private applyLevelCssVars(): void {

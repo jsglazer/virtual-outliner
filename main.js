@@ -1207,9 +1207,9 @@ function addSibling(body, entryLine, cursorCol, sigilChar = DEFAULT_SIGIL_CHAR, 
   const newEntry = sigils + " ";
   const offsets = lineStartOffsets(lines);
   const lineStart = (_c = offsets[entryLine]) != null ? _c : 0;
-  const lineEnd = lineStart + line.length;
+  const lineEnd2 = lineStart + line.length;
   if (text2.trim() === "") {
-    return { from: lineStart, to: lineEnd, insert: "", cursor: lineStart };
+    return { from: lineStart, to: lineEnd2, insert: "", cursor: lineStart };
   }
   const col = Math.max(cursorCol, prefixEnd);
   const atVisibleEnd = col >= visibleEnd || line.slice(col, visibleEnd).trim() === "";
@@ -1220,11 +1220,11 @@ function addSibling(body, entryLine, cursorCol, sigilChar = DEFAULT_SIGIL_CHAR, 
     }
     const head = line.slice(0, col).trimEnd() + line.slice(visibleEnd);
     const insert2 = head + "\n" + newEntry + line.slice(col, visibleEnd).trimStart();
-    return { from: lineStart, to: lineEnd, insert: insert2, cursor: lineStart + head.length + 1 + newEntry.length };
+    return { from: lineStart, to: lineEnd2, insert: insert2, cursor: lineStart + head.length + 1 + newEntry.length };
   }
   if (behavior === "line") {
     const insert2 = "\n" + newEntry;
-    return { from: lineEnd, to: lineEnd, insert: insert2, cursor: lineEnd + insert2.length };
+    return { from: lineEnd2, to: lineEnd2, insert: insert2, cursor: lineEnd2 + insert2.length };
   }
   const parsed = parseOutline(body, sigilChar);
   const node2 = nodeAtLine(parsed, entryLine);
@@ -1466,7 +1466,8 @@ function defaultToolbarHighlights() {
   return {
     sidebar: makeToolbarHighlight(),
     indentBody: makeToolbarHighlight(),
-    enterBehavior: makeToolbarHighlight()
+    enterBehavior: makeToolbarHighlight(),
+    hideTags: makeToolbarHighlight()
   };
 }
 var DEFAULT_LABEL_STYLES = ["1.0", "1", "1", "1", "1", "1"];
@@ -1503,6 +1504,7 @@ function defaultSettings() {
     defaultViewState: "both",
     indentBody: true,
     enterBehavior: "section",
+    hideTags: false,
     levels,
     metaFields: defaultMetaFields(),
     toolbarHighlights: defaultToolbarHighlights(),
@@ -1577,7 +1579,8 @@ function readToolbarHighlights(v) {
   return {
     sidebar: readToolbarHighlight(v.sidebar, fallback.sidebar),
     indentBody: readToolbarHighlight(v.indentBody, fallback.indentBody),
-    enterBehavior: readToolbarHighlight(v.enterBehavior, fallback.enterBehavior)
+    enterBehavior: readToolbarHighlight(v.enterBehavior, fallback.enterBehavior),
+    hideTags: readToolbarHighlight(v.hideTags, fallback.hideTags)
   };
 }
 function readPdfExport(v) {
@@ -1618,6 +1621,7 @@ function normalizeSettings(raw) {
     defaultViewState,
     indentBody: readBool(raw.indentBody, fallback.indentBody),
     enterBehavior: raw.enterBehavior === "line" ? "line" : "section",
+    hideTags: readBool(raw.hideTags, fallback.hideTags),
     levels,
     metaFields: metaFields.length > 0 ? metaFields : fallback.metaFields,
     toolbarHighlights: readToolbarHighlights(raw.toolbarHighlights),
@@ -2398,14 +2402,14 @@ function createReadingPostProcessor(host) {
       collapsedIds,
       host.indentBody(ctx.sourcePath)
     );
-    const { lineStart, lineEnd } = section;
+    const { lineStart, lineEnd: lineEnd2 } = section;
     const outlined = plan.parsed.flat.length > 0;
     const foldFor = (line) => {
       const collapsed = plan.foldable.get(line);
       if (collapsed === void 0) return null;
       return { collapsed, toggle: () => host.toggleFold(ctx.sourcePath, line) };
     };
-    if (lineStart === lineEnd) {
+    if (lineStart === lineEnd2) {
       if (isLineHidden(plan.hiddenLineRanges, lineStart)) {
         el.addClass("vo-hidden");
         return;
@@ -2432,7 +2436,7 @@ function createReadingPostProcessor(host) {
     }
     if (!outlined && plan.commentLines.size === 0 && plan.hiddenLineRanges.length === 0) return;
     let allHidden = true;
-    for (let line = lineStart; line <= lineEnd; line++) {
+    for (let line = lineStart; line <= lineEnd2; line++) {
       if (!isLineHidden(plan.hiddenLineRanges, line)) {
         allHidden = false;
         break;
@@ -2452,10 +2456,10 @@ function createReadingPostProcessor(host) {
         var _a2;
         return (_a2 = node2.textContent) != null ? _a2 : "";
       }).join("")),
-      lines.slice(lineStart, lineEnd + 1)
+      lines.slice(lineStart, lineEnd2 + 1)
     );
     if (!alignment) {
-      for (let line = lineStart; line <= lineEnd; line++) {
+      for (let line = lineStart; line <= lineEnd2; line++) {
         if (isLineHidden(plan.hiddenLineRanges, line)) continue;
         const classes = levelClasses(plan, line);
         if (classes.length === 0) continue;
@@ -2503,6 +2507,187 @@ function createReadingPostProcessor(host) {
     }
     scheduleAlignment(el);
   };
+}
+
+// src/editor/tagHide.ts
+var import_state3 = require("@codemirror/state");
+var import_view3 = require("@codemirror/view");
+
+// src/core/tags.ts
+var FENCE_RE2 = /^\s*(`{3,}|~{3,})/;
+var TAG_TERMINATOR_RE = /[\s!"#$%&'()*+,.:;<=>?@[\\\]^`{|}~]/;
+var ALL_DIGITS_RE = /^\d+$/;
+function lineEnd(doc, pos) {
+  const nl = doc.indexOf("\n", pos);
+  return nl < 0 ? doc.length : nl;
+}
+function frontmatterEnd(doc) {
+  const firstEnd = lineEnd(doc, 0);
+  if (doc.slice(0, firstEnd).trimEnd() !== "---") return 0;
+  let pos = firstEnd + 1;
+  while (pos <= doc.length) {
+    const end = lineEnd(doc, pos);
+    const t = doc.slice(pos, end).trimEnd();
+    if (t === "---" || t === "...") return Math.min(end + 1, doc.length);
+    if (end >= doc.length) break;
+    pos = end + 1;
+  }
+  return 0;
+}
+function findTagRanges(doc) {
+  var _a, _b;
+  const out = [];
+  const n = doc.length;
+  let pos = frontmatterEnd(doc);
+  let atLineStart = true;
+  let fence = null;
+  let inComment = false;
+  while (pos < n) {
+    if (inComment) {
+      const close = doc.indexOf("%%", pos);
+      if (close < 0) break;
+      inComment = false;
+      pos = close + 2;
+      atLineStart = false;
+      continue;
+    }
+    if (atLineStart) {
+      atLineStart = false;
+      const end = lineEnd(doc, pos);
+      const line = doc.slice(pos, end);
+      if (fence !== null || FENCE_RE2.test(line)) {
+        fence = nextFenceState(line, fence);
+        pos = end + 1;
+        atLineStart = true;
+        continue;
+      }
+    }
+    const ch = doc[pos];
+    if (ch === "\n") {
+      pos++;
+      atLineStart = true;
+      continue;
+    }
+    if (ch === "`") {
+      let run = 1;
+      while (doc[pos + run] === "`") run++;
+      const ticks = "`".repeat(run);
+      const close = doc.indexOf(ticks, pos + run);
+      pos = close >= 0 && close < lineEnd(doc, pos) ? close + run : pos + run;
+      continue;
+    }
+    if (ch === "%" && doc[pos + 1] === "%") {
+      inComment = true;
+      pos += 2;
+      continue;
+    }
+    if (ch === "#" && (pos === 0 || /\s/.test((_a = doc[pos - 1]) != null ? _a : ""))) {
+      let k = pos + 1;
+      while (k < n && !TAG_TERMINATOR_RE.test((_b = doc[k]) != null ? _b : "")) k++;
+      const name = doc.slice(pos + 1, k);
+      if (name === "" || ALL_DIGITS_RE.test(name)) {
+        pos = k > pos + 1 ? k : pos + 1;
+        continue;
+      }
+      let m = k;
+      while (doc[m] === " " || doc[m] === "	") m++;
+      if (doc[m] === "%" && doc[m + 1] === "%") {
+        const close = doc.indexOf("%%", m + 2);
+        if (close >= 0) {
+          out.push({ from: pos, to: close + 2 });
+          pos = close + 2;
+          continue;
+        }
+        out.push({ from: pos, to: k });
+        pos = m;
+        continue;
+      }
+      out.push({ from: pos, to: k });
+      pos = k;
+      continue;
+    }
+    pos++;
+  }
+  return out;
+}
+
+// src/editor/tagHide.ts
+var TAG_SCAN_DEBOUNCE_MS = 200;
+var setTagsHidden = import_state3.StateEffect.define();
+var rescanTags = import_state3.StateEffect.define();
+var HIDE = import_view3.Decoration.replace({});
+function scanTagDecorations(doc) {
+  const builder = new import_state3.RangeSetBuilder();
+  for (const r of findTagRanges(doc.toString())) {
+    if (r.to > r.from) builder.add(r.from, r.to, HIDE);
+  }
+  return builder.finish();
+}
+function withoutSelectionLines(state, ranges) {
+  const spans = state.selection.ranges.map((r) => ({
+    from: state.doc.lineAt(r.from).from,
+    to: state.doc.lineAt(r.to).to
+  }));
+  return ranges.update({
+    filter: (from, to) => !spans.some((s) => from <= s.to && to >= s.from)
+  });
+}
+var OFF = {
+  hidden: false,
+  ranges: import_view3.Decoration.none,
+  deco: import_view3.Decoration.none
+};
+function makeValue(state, ranges) {
+  return { hidden: true, ranges, deco: withoutSelectionLines(state, ranges) };
+}
+var hiddenAtCreate = () => false;
+var tagHideField = import_state3.StateField.define({
+  create: (state) => hiddenAtCreate() ? makeValue(state, scanTagDecorations(state.doc)) : OFF,
+  update(value, tr) {
+    let hidden = value.hidden;
+    let rescan = false;
+    for (const effect of tr.effects) {
+      if (effect.is(setTagsHidden)) {
+        rescan = effect.value && !hidden;
+        hidden = effect.value;
+      } else if (effect.is(rescanTags)) {
+        rescan = true;
+      }
+    }
+    if (!hidden) return value.hidden ? OFF : value;
+    if (rescan) return makeValue(tr.state, scanTagDecorations(tr.state.doc));
+    if (!tr.docChanged && !tr.selection) return value;
+    return makeValue(tr.state, tr.docChanged ? value.ranges.map(tr.changes) : value.ranges);
+  },
+  provide: (f) => import_view3.EditorView.decorations.from(f, (v) => v.deco)
+});
+function buildTagHideExtension(isHidden) {
+  hiddenAtCreate = isHidden;
+  const scanner = import_view3.ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.timer = null;
+      }
+      update(update) {
+        if (!update.docChanged || !update.state.field(tagHideField).hidden) return;
+        if (this.timer !== null) window.clearTimeout(this.timer);
+        this.timer = window.setTimeout(() => {
+          this.timer = null;
+          this.view.dispatch({ effects: rescanTags.of(null) });
+        }, TAG_SCAN_DEBOUNCE_MS);
+      }
+      destroy() {
+        if (this.timer !== null) window.clearTimeout(this.timer);
+      }
+    }
+  );
+  return [tagHideField, scanner];
+}
+function syncTagHiding(view, hidden) {
+  const value = view.state.field(tagHideField, false);
+  if (value === void 0 || value.hidden === hidden) return;
+  view.dispatch({ effects: setTagsHidden.of(hidden) });
 }
 
 // src/export/exporter.ts
@@ -4311,6 +4496,14 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
         await this.plugin.saveSettings();
       });
     });
+    new import_obsidian4.Setting(containerEl).setName("Hide tags and their comments").setDesc(
+      "Hides every #tag, and a %%comment%% attached to it, in the editor and reading view. The line with the cursor still shows its tags. Visual only \u2014 the file is never changed, and PDF export is unaffected."
+    ).addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.hideTags).onChange(async (value) => {
+        this.plugin.settings.hideTags = value;
+        await this.plugin.saveSettings();
+      });
+    });
     const markerColor = (name, desc, get, set, fallback) => {
       new import_obsidian4.Setting(containerEl).setName(name).setDesc(desc).addColorPicker((picker) => {
         picker.setValue(get());
@@ -4518,7 +4711,8 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
     const rows = [
       { name: "Outline sidebar button", short: "Sidebar", highlight: highlights.sidebar },
       { name: "Indent body button", short: "Indent body", highlight: highlights.indentBody },
-      { name: "Enter on next line button", short: "Enter: next line", highlight: highlights.enterBehavior }
+      { name: "Enter on next line button", short: "Enter: next line", highlight: highlights.enterBehavior },
+      { name: "Hide tags button", short: "Hide tags", highlight: highlights.hideTags }
     ];
     for (const row of rows) this.renderToolbarItemPicker(containerEl, row.name, row.highlight);
     const wrap = containerEl.createDiv("vo-grid-wrap");
@@ -5147,6 +5341,7 @@ function normalizeFileStateEntry(v, fallback) {
 }
 var RESOLVE_DEBOUNCE_MS = 200;
 var CSS_VAR_STYLE_ID = "virtual-outliner-level-vars";
+var HIDE_TAGS_CLASS = "vo-hide-tags";
 var TOOLBAR_HIGHLIGHT_DELAY_MS = 50;
 var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
   constructor() {
@@ -5191,6 +5386,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       }
     );
     this.applyLevelCssVars();
+    this.applyTagHideClass();
     this.keymapHost = {
       sigilChar: () => this.settings.sigil,
       enterBehavior: () => this.settings.enterBehavior,
@@ -5201,6 +5397,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         new import_obsidian7.Notice("Hidden text is not deleted from this view \u2014 switch to outline and body to edit it.");
       }),
       buildOutlineKeymap(this.keymapHost),
+      buildTagHideExtension(() => this.settings.hideTags),
       buildEditorExtension({
         attachEditor: (view) => this.editors.add(view),
         detachEditor: (view) => {
@@ -5313,6 +5510,15 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         new import_obsidian7.Notice(
           this.settings.enterBehavior === "line" ? "Enter adds the new entry on the next line" : "Enter adds the new entry after the whole section"
         );
+      }
+    });
+    this.addCommand({
+      id: "toggle-hide-tags",
+      name: "Toggle hiding tags and their comments",
+      callback: () => {
+        this.settings.hideTags = !this.settings.hideTags;
+        void this.saveSettings();
+        new import_obsidian7.Notice(this.settings.hideTags ? "Tags and their comments hidden" : "Tags and their comments shown");
       }
     });
     const moveCommand = (id, name, direction) => {
@@ -5445,10 +5651,17 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       {
         highlight: this.settings.toolbarHighlights.enterBehavior,
         active: this.settings.enterBehavior === "line"
-      }
+      },
+      { highlight: this.settings.toolbarHighlights.hideTags, active: this.settings.hideTags }
     ]);
     const onWorkspaceChange = () => this.scheduleToolbarRefresh();
     this.registerEvent(this.app.workspace.on("layout-change", onWorkspaceChange));
+    this.registerEvent(
+      this.app.workspace.on(
+        "window-open",
+        (win) => win.doc.body.classList.toggle(HIDE_TAGS_CLASS, this.settings.hideTags)
+      )
+    );
     this.registerEvent(this.app.workspace.on("active-leaf-change", onWorkspaceChange));
     this.registerEvent(this.app.workspace.on("css-change", onWorkspaceChange));
     this.app.workspace.onLayoutReady(onWorkspaceChange);
@@ -5456,6 +5669,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       const file = this.app.workspace.getActiveFile();
       if (file && file.extension === "md") void this.ensureFileState(file.path);
       this.applyLevelCssVars();
+      this.applyTagHideClass();
       for (const view of this.editors) this.decorate(view);
       this.rerenderPreviews(null);
     });
@@ -5466,7 +5680,10 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     this.editorTimers.clear();
     for (const timer of this.diskTimers.values()) window.clearTimeout(timer);
     this.diskTimers.clear();
-    for (const doc of this.cssVarTargetDocuments()) (_a = doc.getElementById(CSS_VAR_STYLE_ID)) == null ? void 0 : _a.remove();
+    for (const doc of this.cssVarTargetDocuments()) {
+      (_a = doc.getElementById(CSS_VAR_STYLE_ID)) == null ? void 0 : _a.remove();
+      doc.body.classList.remove(HIDE_TAGS_CLASS);
+    }
     if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
     this.toolbarTimer = null;
     (_b = this.toolbarHighlighter) == null ? void 0 : _b.clear();
@@ -5483,7 +5700,11 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     await this.persist();
     if (import_obsidian7.Platform.isDesktopApp) void this.syncVaultConfig();
     this.applyLevelCssVars();
-    for (const view of this.editors) this.decorate(view);
+    this.applyTagHideClass();
+    for (const view of this.editors) {
+      syncTagHiding(view, this.settings.hideTags);
+      this.decorate(view);
+    }
     this.rerenderPreviews(null);
     this.notifyChange();
     this.scheduleToolbarRefresh();
@@ -5661,6 +5882,12 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     docs.add(activeDocument);
     return docs;
   }
+  // Reading view (and widgets Live Preview renders, like tables and
+  // callouts) hides tags by CSS. Comments need nothing: the renderer already
+  // drops them.
+  applyTagHideClass() {
+    for (const doc of this.cssVarTargetDocuments()) doc.body.classList.toggle(HIDE_TAGS_CLASS, this.settings.hideTags);
+  }
   applyLevelCssVars() {
     const vars = { ...levelCssVars(this.settings.levels), ...nonBreakColorVars(this.settings), ...markerCssVars(this.settings) };
     const body = Object.entries(vars).map(([key, value]) => `	${key}: ${value};`).join("\n");
@@ -5761,12 +5988,12 @@ ${lineHeight}` : ""}`;
     const lineText = (_a = lines[node2.entryLine]) != null ? _a : "";
     const offsets = lineStartOffsets(lines);
     const lineStart = (_b = offsets[node2.entryLine]) != null ? _b : 0;
-    const lineEnd = lineStart + lineText.length;
+    const lineEnd2 = lineStart + lineText.length;
     const id = mintId(Date.now(), Math.random());
     const withId = appendId("", id);
     view.dispatch({
-      changes: { from: lineEnd, to: lineEnd, insert: withId },
-      selection: caretView === view ? { anchor: lineEnd } : void 0
+      changes: { from: lineEnd2, to: lineEnd2, insert: withId },
+      selection: caretView === view ? { anchor: lineEnd2 } : void 0
     });
     this.setStateFromDoc(path, view.state.doc.toString());
     this.flipCollapse(path, id);
@@ -5802,9 +6029,9 @@ ${lineHeight}` : ""}`;
         }
         const lineText = (_a = lines[node2.entryLine]) != null ? _a : "";
         const lineStart = (_b = offsets[node2.entryLine]) != null ? _b : 0;
-        const lineEnd = lineStart + lineText.length;
+        const lineEnd2 = lineStart + lineText.length;
         const id = mintId(Date.now(), Math.random());
-        changes.push({ from: lineEnd, to: lineEnd, insert: appendId("", id) });
+        changes.push({ from: lineEnd2, to: lineEnd2, insert: appendId("", id) });
         mintedIds.push(id);
       }
       if (changes.length > 0) {

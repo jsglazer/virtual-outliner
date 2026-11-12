@@ -100,6 +100,18 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 				});
 			});
 
+		new Setting(containerEl)
+			.setName('Hide tags and their comments')
+			.setDesc(
+				'Hides every #tag, and a %%comment%% attached to it, in the editor and reading view. The line with the cursor still shows its tags. Visual only — the file is never changed, and PDF export is unaffected.',
+			)
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.hideTags).onChange(async (value) => {
+					this.plugin.settings.hideTags = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
 		const markerColor = (
 			name: string,
 			desc: string,
@@ -376,6 +388,7 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 			{ name: 'Outline sidebar button', short: 'Sidebar', highlight: highlights.sidebar },
 			{ name: 'Indent body button', short: 'Indent body', highlight: highlights.indentBody },
 			{ name: 'Enter on next line button', short: 'Enter: next line', highlight: highlights.enterBehavior },
+			{ name: 'Hide tags button', short: 'Hide tags', highlight: highlights.hideTags },
 		];
 		for (const row of rows) this.renderToolbarItemPicker(containerEl, row.name, row.highlight);
 

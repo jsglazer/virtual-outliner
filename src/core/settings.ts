@@ -45,6 +45,7 @@ export interface ToolbarHighlights {
 	sidebar: ToolbarHighlight;
 	indentBody: ToolbarHighlight;
 	enterBehavior: ToolbarHighlight;
+	hideTags: ToolbarHighlight;
 }
 
 // PDF export. The LaTeX preamble lives here (so it syncs with the plugin's
@@ -80,6 +81,9 @@ export interface OutlineSettings {
 	defaultViewState: ViewState;
 	indentBody: boolean;
 	enterBehavior: EnterBehavior;
+	// Hide every #tag, with the %%comment%% attached to it, in the editor and
+	// Reading view. Visual only — the file is never changed (Update015).
+	hideTags: boolean;
 	levels: LevelFormat[]; // always exactly MAX_LEVEL entries, index 0 = level 1
 	metaFields: MetaFieldDef[];
 	toolbarHighlights: ToolbarHighlights;
@@ -176,6 +180,7 @@ export function defaultToolbarHighlights(): ToolbarHighlights {
 		sidebar: makeToolbarHighlight(),
 		indentBody: makeToolbarHighlight(),
 		enterBehavior: makeToolbarHighlight(),
+		hideTags: makeToolbarHighlight(),
 	};
 }
 
@@ -215,6 +220,7 @@ export function defaultSettings(): OutlineSettings {
 		defaultViewState: 'both',
 		indentBody: true,
 		enterBehavior: 'section',
+		hideTags: false,
 		levels,
 		metaFields: defaultMetaFields(),
 		toolbarHighlights: defaultToolbarHighlights(),
@@ -304,6 +310,7 @@ function readToolbarHighlights(v: unknown): ToolbarHighlights {
 		sidebar: readToolbarHighlight(v.sidebar, fallback.sidebar),
 		indentBody: readToolbarHighlight(v.indentBody, fallback.indentBody),
 		enterBehavior: readToolbarHighlight(v.enterBehavior, fallback.enterBehavior),
+		hideTags: readToolbarHighlight(v.hideTags, fallback.hideTags),
 	};
 }
 
@@ -356,6 +363,7 @@ export function normalizeSettings(raw: unknown): OutlineSettings {
 		defaultViewState,
 		indentBody: readBool(raw.indentBody, fallback.indentBody),
 		enterBehavior: raw.enterBehavior === 'line' ? 'line' : 'section',
+		hideTags: readBool(raw.hideTags, fallback.hideTags),
 		levels,
 		metaFields: metaFields.length > 0 ? metaFields : fallback.metaFields,
 		toolbarHighlights: readToolbarHighlights(raw.toolbarHighlights),
