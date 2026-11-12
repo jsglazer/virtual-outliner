@@ -1,17 +1,21 @@
 // The "hide tags" toggle (Update015) in the editor: every #tag, together with
-// the %%comment%% attached to it (see core/tags.ts), is replaced by nothing.
-// Like Live Preview's own markup, the tags on the line(s) holding the cursor
-// or selection are shown again — so text is only ever edited, or deleted,
-// where it can be seen.
+// the %%comment%% attached to it (see core/tags.ts), is replaced by nothing —
+// on every line, the cursor's included.
+//
+// A hidden tag behaves like one invisible character the caret steps over: its
+// range is atomic, so arrows and clicks never land inside it, and the delete
+// guard below makes Backspace/Delete next to it remove the visible character
+// beyond it instead of the tag. Only a selection that spans a hidden tag
+// deletes it, as it deletes everything else it covers.
 //
 // A StateField rather than a ViewPlugin because an attached comment may span
 // lines, and CM6 only accepts line-break-replacing decorations from state.
 // Scanning is debounced off `docChanged` like the outline resolve: between
-// scans the known ranges are mapped through each edit, and a tag typed in the
-// meantime is on the cursor line, where it would be shown anyway.
+// scans the known ranges are mapped through each edit, so a tag being typed
+// stays visible until typing pauses.
 
-import { EditorState, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
-import type { Extension, Text } from '@codemirror/state';
+import { EditorState, findClusterBreak, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
+import type { Extension, Text, Transaction, TransactionSpec } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 
@@ -25,8 +29,6 @@ const rescanTags = StateEffect.define<null>();
 interface TagHideValue {
 	hidden: boolean;
 	// Every tag range in the document (empty while not hidden).
-	ranges: DecorationSet;
-	// What is actually drawn: `ranges` minus the cursor lines.
 	deco: DecorationSet;
 }
 
@@ -40,33 +42,14 @@ export function scanTagDecorations(doc: Text): DecorationSet {
 	return builder.finish();
 }
 
-// Drops every range that touches a line holding part of the selection.
-export function withoutSelectionLines(state: EditorState, ranges: DecorationSet): DecorationSet {
-	const spans = state.selection.ranges.map((r) => ({
-		from: state.doc.lineAt(r.from).from,
-		to: state.doc.lineAt(r.to).to,
-	}));
-	return ranges.update({
-		filter: (from, to) => !spans.some((s) => from <= s.to && to >= s.from),
-	});
-}
-
-const OFF: TagHideValue = {
-	hidden: false,
-	ranges: Decoration.none,
-	deco: Decoration.none,
-};
-
-function makeValue(state: EditorState, ranges: DecorationSet): TagHideValue {
-	return { hidden: true, ranges, deco: withoutSelectionLines(state, ranges) };
-}
+const OFF: TagHideValue = { hidden: false, deco: Decoration.none };
 
 // Read when an editor is created, so a note opened while the toggle is on
 // starts hidden; later changes arrive as `setTagsHidden` effects.
 let hiddenAtCreate: () => boolean = () => false;
 
 export const tagHideField = StateField.define<TagHideValue>({
-	create: (state) => (hiddenAtCreate() ? makeValue(state, scanTagDecorations(state.doc)) : OFF),
+	create: (state) => (hiddenAtCreate() ? { hidden: true, deco: scanTagDecorations(state.doc) } : OFF),
 	update(value, tr) {
 		let hidden = value.hidden;
 		let rescan = false;
@@ -79,12 +62,90 @@ export const tagHideField = StateField.define<TagHideValue>({
 			}
 		}
 		if (!hidden) return value.hidden ? OFF : value;
-		if (rescan) return makeValue(tr.state, scanTagDecorations(tr.state.doc));
-		if (!tr.docChanged && !tr.selection) return value;
-		return makeValue(tr.state, tr.docChanged ? value.ranges.map(tr.changes) : value.ranges);
+		if (rescan) return { hidden: true, deco: scanTagDecorations(tr.state.doc) };
+		if (!tr.docChanged) return value;
+		return { hidden: true, deco: value.deco.map(tr.changes) };
 	},
-	provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
+	provide: (f) => [
+		EditorView.decorations.from(f, (v) => v.deco),
+		EditorView.atomicRanges.of((view) => view.state.field(f).deco),
+	],
 });
+
+// Rewrites a caret Backspace/Delete that would remove only hidden tag text so
+// it removes the visible character beyond the tag instead; a deletion that
+// also reaches visible text keeps just its visible parts. A deletion from a
+// real selection (or several cursors) passes untouched. Exported for tests.
+export function guardTagDelete(tr: Transaction): TransactionSpec | readonly TransactionSpec[] {
+	if (!tr.docChanged || !tr.isUserEvent('delete')) return tr;
+	const value = tr.startState.field(tagHideField, false);
+	if (!value?.hidden || value.deco.size === 0) return tr;
+	const sel = tr.startState.selection;
+	if (sel.ranges.length !== 1 || !sel.main.empty) return tr;
+
+	let fromA = -1;
+	let toA = -1;
+	let count = 0;
+	tr.changes.iterChanges((fa, ta) => {
+		count++;
+		fromA = fa;
+		toA = ta;
+	});
+	if (count !== 1 || toA <= fromA) return tr;
+
+	const hit: { from: number; to: number }[] = [];
+	for (const it = value.deco.iter(); it.value !== null; it.next()) {
+		if (fromA < it.to && toA > it.from) hit.push({ from: it.from, to: it.to });
+	}
+	if (hit.length === 0) return tr;
+
+	const doc = tr.startState.doc;
+	const head = sel.main.head;
+	const backward = fromA < head;
+	const parts: { from: number; to: number }[] = [];
+	let p = fromA;
+	for (const h of hit) {
+		if (h.from > p) parts.push({ from: p, to: Math.min(h.from, toA) });
+		p = Math.max(p, h.to);
+	}
+	if (p < toA) parts.push({ from: p, to: toA });
+
+	if (parts.length === 0) {
+		const at = backward ? (hit[0]?.from ?? fromA) : (hit[hit.length - 1]?.to ?? toA);
+		const other = backward ? clusterBefore(doc, at) : clusterAfter(doc, at);
+		if (other === null) return [];
+		const span = backward ? { from: other, to: at } : { from: at, to: other };
+		// The neighbour is itself hidden (two tags back to back): stop rather
+		// than delete hidden text.
+		let inside = false;
+		value.deco.between(span.from, span.to, (f, t) => {
+			if (span.from < t && span.to > f) inside = true;
+		});
+		if (inside) return [];
+		parts.push(span);
+	}
+
+	return {
+		changes: parts,
+		selection: { anchor: backward ? (parts[0]?.from ?? head) : head },
+		userEvent: backward ? 'delete.backward' : 'delete.forward',
+		scrollIntoView: true,
+	};
+}
+
+function clusterBefore(doc: Text, pos: number): number | null {
+	if (pos <= 0) return null;
+	const line = doc.lineAt(pos);
+	if (pos === line.from) return pos - 1; // the line break
+	return line.from + findClusterBreak(line.text, pos - line.from, false);
+}
+
+function clusterAfter(doc: Text, pos: number): number | null {
+	if (pos >= doc.length) return null;
+	const line = doc.lineAt(pos);
+	if (pos === line.to) return pos + 1; // the line break
+	return line.from + findClusterBreak(line.text, pos - line.from, true);
+}
 
 export function buildTagHideExtension(isHidden: () => boolean): Extension {
 	hiddenAtCreate = isHidden;
@@ -109,7 +170,7 @@ export function buildTagHideExtension(isHidden: () => boolean): Extension {
 		},
 	);
 
-	return [tagHideField, scanner];
+	return [tagHideField, EditorState.transactionFilter.of(guardTagDelete), scanner];
 }
 
 // Brings one editor in line with the setting; a no-op when it already matches.

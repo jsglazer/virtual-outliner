@@ -7,7 +7,7 @@ import { EditorSelection, EditorState } from '@codemirror/state';
 import type { DecorationSet } from '@codemirror/view';
 
 import { findTagRanges } from '../src/core/tags';
-import { setTagsHidden, tagHideField } from '../src/editor/tagHide';
+import { guardTagDelete, setTagsHidden, tagHideField } from '../src/editor/tagHide';
 
 const hidden = (doc: string): string[] => findTagRanges(doc).map((r) => doc.slice(r.from, r.to));
 
@@ -83,13 +83,13 @@ function drawn(state: EditorState): string[] {
 describe('tagHideField', () => {
 	const doc = 'line one #a%%note%%\nline two #b\nline three';
 
-	it('hides nothing until switched on, and shows the cursor line', () => {
+	it('hides nothing until switched on, then hides every line, the cursor line included', () => {
 		let state = EditorState.create({ doc, extensions: [tagHideField], selection: EditorSelection.cursor(doc.length) });
 		expect(drawn(state)).toEqual([]);
 		state = state.update({ effects: setTagsHidden.of(true) }).state;
 		expect(drawn(state)).toEqual([' #a%%note%%', ' #b']);
 		state = state.update({ selection: EditorSelection.cursor(2) }).state;
-		expect(drawn(state)).toEqual([' #b']);
+		expect(drawn(state)).toEqual([' #a%%note%%', ' #b']);
 		state = state.update({ effects: setTagsHidden.of(false) }).state;
 		expect(drawn(state)).toEqual([]);
 	});
@@ -100,5 +100,49 @@ describe('tagHideField', () => {
 		state = state.update({ changes: { from: doc.length, insert: '!!' } }).state;
 		state = state.update({ changes: { from: 0, insert: 'NEW ' } }).state;
 		expect(drawn(state)).toEqual([' #a%%note%%', ' #b']);
+	});
+});
+
+describe('guardTagDelete', () => {
+	// "corrodes" + hidden " #fix%%accurate?%%" + " the"
+	const doc = 'it corrodes #fix%%accurate?%% the process';
+	const tagFrom = doc.indexOf(' #fix');
+	const tagTo = doc.indexOf(' the');
+
+	function hiddenAt(cursor: number, anchor = cursor): EditorState {
+		const state = EditorState.create({
+			doc,
+			extensions: [tagHideField, EditorState.transactionFilter.of(guardTagDelete)],
+			selection: EditorSelection.single(anchor, cursor),
+		});
+		return state.update({ effects: setTagsHidden.of(true) }).state;
+	}
+
+	it('turns Backspace over a hidden tag into deleting the visible character before it', () => {
+		// What CM6's atomic-range Backspace produces from just after the tag.
+		const tr = hiddenAt(tagTo).update({ changes: { from: tagFrom, to: tagTo }, userEvent: 'delete.backward' });
+		expect(tr.state.doc.toString()).toBe('it corrode #fix%%accurate?%% the process');
+		expect(tr.state.selection.main.head).toBe(tagFrom - 1);
+	});
+
+	it('turns Delete over a hidden tag into deleting the visible character after it', () => {
+		const tr = hiddenAt(tagFrom).update({ changes: { from: tagFrom, to: tagTo }, userEvent: 'delete.forward' });
+		expect(tr.state.doc.toString()).toBe('it corrodes #fix%%accurate?%%the process');
+		expect(tr.state.selection.main.head).toBe(tagFrom);
+	});
+
+	it('keeps only the visible part of a word delete that reaches into a tag', () => {
+		const tr = hiddenAt(tagTo + 4).update({ changes: { from: tagFrom, to: tagTo + 4 }, userEvent: 'delete.backward' });
+		expect(tr.state.doc.toString()).toBe('it corrodes #fix%%accurate?%% process');
+	});
+
+	it('lets a selection delete the hidden tag it spans', () => {
+		const tr = hiddenAt(tagTo + 4, 3).update({ changes: { from: 3, to: tagTo + 4 }, userEvent: 'delete.selection' });
+		expect(tr.state.doc.toString()).toBe('it  process');
+	});
+
+	it('leaves deletes away from tags alone', () => {
+		const tr = hiddenAt(2).update({ changes: { from: 1, to: 2 }, userEvent: 'delete.backward' });
+		expect(tr.state.doc.toString()).toBe('i corrodes #fix%%accurate?%% the process');
 	});
 });

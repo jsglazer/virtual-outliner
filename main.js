@@ -2632,26 +2632,10 @@ function scanTagDecorations(doc) {
   }
   return builder.finish();
 }
-function withoutSelectionLines(state, ranges) {
-  const spans = state.selection.ranges.map((r) => ({
-    from: state.doc.lineAt(r.from).from,
-    to: state.doc.lineAt(r.to).to
-  }));
-  return ranges.update({
-    filter: (from, to) => !spans.some((s) => from <= s.to && to >= s.from)
-  });
-}
-var OFF = {
-  hidden: false,
-  ranges: import_view3.Decoration.none,
-  deco: import_view3.Decoration.none
-};
-function makeValue(state, ranges) {
-  return { hidden: true, ranges, deco: withoutSelectionLines(state, ranges) };
-}
+var OFF = { hidden: false, deco: import_view3.Decoration.none };
 var hiddenAtCreate = () => false;
 var tagHideField = import_state3.StateField.define({
-  create: (state) => hiddenAtCreate() ? makeValue(state, scanTagDecorations(state.doc)) : OFF,
+  create: (state) => hiddenAtCreate() ? { hidden: true, deco: scanTagDecorations(state.doc) } : OFF,
   update(value, tr) {
     let hidden = value.hidden;
     let rescan = false;
@@ -2664,12 +2648,77 @@ var tagHideField = import_state3.StateField.define({
       }
     }
     if (!hidden) return value.hidden ? OFF : value;
-    if (rescan) return makeValue(tr.state, scanTagDecorations(tr.state.doc));
-    if (!tr.docChanged && !tr.selection) return value;
-    return makeValue(tr.state, tr.docChanged ? value.ranges.map(tr.changes) : value.ranges);
+    if (rescan) return { hidden: true, deco: scanTagDecorations(tr.state.doc) };
+    if (!tr.docChanged) return value;
+    return { hidden: true, deco: value.deco.map(tr.changes) };
   },
-  provide: (f) => import_view3.EditorView.decorations.from(f, (v) => v.deco)
+  provide: (f) => [
+    import_view3.EditorView.decorations.from(f, (v) => v.deco),
+    import_view3.EditorView.atomicRanges.of((view) => view.state.field(f).deco)
+  ]
 });
+function guardTagDelete(tr) {
+  var _a, _b, _c, _d, _e, _f;
+  if (!tr.docChanged || !tr.isUserEvent("delete")) return tr;
+  const value = tr.startState.field(tagHideField, false);
+  if (!(value == null ? void 0 : value.hidden) || value.deco.size === 0) return tr;
+  const sel = tr.startState.selection;
+  if (sel.ranges.length !== 1 || !sel.main.empty) return tr;
+  let fromA = -1;
+  let toA = -1;
+  let count = 0;
+  tr.changes.iterChanges((fa, ta) => {
+    count++;
+    fromA = fa;
+    toA = ta;
+  });
+  if (count !== 1 || toA <= fromA) return tr;
+  const hit = [];
+  for (const it = value.deco.iter(); it.value !== null; it.next()) {
+    if (fromA < it.to && toA > it.from) hit.push({ from: it.from, to: it.to });
+  }
+  if (hit.length === 0) return tr;
+  const doc = tr.startState.doc;
+  const head = sel.main.head;
+  const backward = fromA < head;
+  const parts = [];
+  let p = fromA;
+  for (const h of hit) {
+    if (h.from > p) parts.push({ from: p, to: Math.min(h.from, toA) });
+    p = Math.max(p, h.to);
+  }
+  if (p < toA) parts.push({ from: p, to: toA });
+  if (parts.length === 0) {
+    const at = backward ? (_b = (_a = hit[0]) == null ? void 0 : _a.from) != null ? _b : fromA : (_d = (_c = hit[hit.length - 1]) == null ? void 0 : _c.to) != null ? _d : toA;
+    const other = backward ? clusterBefore(doc, at) : clusterAfter(doc, at);
+    if (other === null) return [];
+    const span = backward ? { from: other, to: at } : { from: at, to: other };
+    let inside = false;
+    value.deco.between(span.from, span.to, (f, t) => {
+      if (span.from < t && span.to > f) inside = true;
+    });
+    if (inside) return [];
+    parts.push(span);
+  }
+  return {
+    changes: parts,
+    selection: { anchor: backward ? (_f = (_e = parts[0]) == null ? void 0 : _e.from) != null ? _f : head : head },
+    userEvent: backward ? "delete.backward" : "delete.forward",
+    scrollIntoView: true
+  };
+}
+function clusterBefore(doc, pos) {
+  if (pos <= 0) return null;
+  const line = doc.lineAt(pos);
+  if (pos === line.from) return pos - 1;
+  return line.from + (0, import_state3.findClusterBreak)(line.text, pos - line.from, false);
+}
+function clusterAfter(doc, pos) {
+  if (pos >= doc.length) return null;
+  const line = doc.lineAt(pos);
+  if (pos === line.to) return pos + 1;
+  return line.from + (0, import_state3.findClusterBreak)(line.text, pos - line.from, true);
+}
 function buildTagHideExtension(isHidden) {
   hiddenAtCreate = isHidden;
   const scanner = import_view3.ViewPlugin.fromClass(
@@ -2691,7 +2740,7 @@ function buildTagHideExtension(isHidden) {
       }
     }
   );
-  return [tagHideField, scanner];
+  return [tagHideField, import_state3.EditorState.transactionFilter.of(guardTagDelete), scanner];
 }
 function syncTagHiding(view, hidden) {
   const value = view.state.field(tagHideField, false);
@@ -4561,7 +4610,7 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
       });
     });
     new import_obsidian4.Setting(containerEl).setName("Hide tags and their comments").setDesc(
-      "Hides every #tag, and a %%comment%% attached to it, in the editor and reading view. The line with the cursor still shows its tags. Visual only \u2014 the file is never changed, and PDF export is unaffected."
+      "Hides every #tag, and a %%comment%% attached to it, in the editor and reading view. The cursor steps over a hidden tag, and Backspace or Delete beside it removes the visible character instead. Visual only \u2014 the file is never changed, and PDF export is unaffected."
     ).addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.hideTags).onChange(async (value) => {
         this.plugin.settings.hideTags = value;
@@ -5424,6 +5473,9 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     this.toolbarTimer = null;
     this.pdfExporter = null;
     this.exportRunning = false;
+    // Set when Toggle clean closed the outline sidebar, so turning clean off
+    // reopens it — and only then (a sidebar the user had closed stays closed).
+    this.sidebarClosedByClean = false;
     // One stable handler for every editor's fold chevrons (a fresh closure per
     // decorate would be harmless but pointless).
     this.onFoldClick = (view, lineIndex) => {
@@ -6021,7 +6073,20 @@ ${lineHeight}` : ""}`;
     this.settings.indentBody = !on;
     this.settings.hideTags = on;
     await this.saveSettings();
-    new import_obsidian7.Notice(on ? "Clean: body only, no indent, tags hidden" : "Clean off: outline and body, indented, tags shown");
+    if (on) {
+      const shown = this.shownSidebarLeaves();
+      this.sidebarClosedByClean = shown.length > 0;
+      for (const leaf of shown) leaf.detach();
+    } else if (this.sidebarClosedByClean) {
+      this.sidebarClosedByClean = false;
+      const noteLeaf = this.app.workspace.getMostRecentLeaf();
+      await this.activateSidebar();
+      if (noteLeaf) this.app.workspace.setActiveLeaf(noteLeaf, { focus: true });
+    }
+    this.scheduleToolbarRefresh();
+    new import_obsidian7.Notice(
+      on ? "Clean: body only, no indent, tags hidden, outline closed" : "Clean off: outline and body, indented, tags shown"
+    );
   }
   flipCollapse(path, id) {
     const entry = this.fileStateEntry(path);

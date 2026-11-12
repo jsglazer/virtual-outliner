@@ -92,6 +92,9 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private keymapHost!: KeymapHost;
 	private pdfExporter: PdfExporter | null = null;
 	private exportRunning = false;
+	// Set when Toggle clean closed the outline sidebar, so turning clean off
+	// reopens it — and only then (a sidebar the user had closed stays closed).
+	private sidebarClosedByClean = false;
 
 	async onload(): Promise<void> {
 		const raw: unknown = await this.loadData();
@@ -277,8 +280,9 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		});
 
 		// One switch between a clean reading layout and the full editing one:
-		// On  = Show body only + indent off + tags hidden
-		// Off = Show outline and body + indent on + tags shown
+		// On  = Show body only + indent off + tags hidden + sidebar closed
+		// Off = Show outline and body + indent on + tags shown (+ the sidebar
+		//       reopened if clean closed it)
 		// The view is per note, indent and tag hiding are global, so "on" means
 		// all three match for the active note; anything else turns it on.
 		this.addCommand({
@@ -767,7 +771,24 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		// saveSettings persists the view state too and redraws every editor
 		// and reading view, the toolbar highlights included.
 		await this.saveSettings();
-		new Notice(on ? 'Clean: body only, no indent, tags hidden' : 'Clean off: outline and body, indented, tags shown');
+		if (on) {
+			const shown = this.shownSidebarLeaves();
+			this.sidebarClosedByClean = shown.length > 0;
+			for (const leaf of shown) leaf.detach();
+		} else if (this.sidebarClosedByClean) {
+			this.sidebarClosedByClean = false;
+			// Opening the sidebar makes it the active leaf; hand focus back to
+			// the note so typing carries on where it was.
+			const noteLeaf = this.app.workspace.getMostRecentLeaf();
+			await this.activateSidebar();
+			if (noteLeaf) this.app.workspace.setActiveLeaf(noteLeaf, { focus: true });
+		}
+		this.scheduleToolbarRefresh();
+		new Notice(
+			on
+				? 'Clean: body only, no indent, tags hidden, outline closed'
+				: 'Clean off: outline and body, indented, tags shown',
+		);
 	}
 
 	private flipCollapse(path: string, id: string): void {
