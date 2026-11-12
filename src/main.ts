@@ -276,6 +276,23 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			},
 		});
 
+		// One switch between a clean reading layout and the full editing one:
+		// On  = Show body only + indent off + tags hidden
+		// Off = Show outline and body + indent on + tags shown
+		// The view is per note, indent and tag hiding are global, so "on" means
+		// all three match for the active note; anything else turns it on.
+		this.addCommand({
+			id: 'toggle-clean-view',
+			name: 'Toggle clean',
+			checkCallback: (checking) => {
+				const file = this.activeMarkdownFile();
+				if (!file) return false;
+				if (checking) return true;
+				void this.toggleClean(file.path);
+				return true;
+			},
+		});
+
 		const moveCommand = (id: string, name: string, direction: 'up' | 'down'): void => {
 			this.addCommand({
 				id,
@@ -447,6 +464,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				active: this.settings.enterBehavior === 'line',
 			},
 			{ highlight: this.settings.toolbarHighlights.hideTags, active: this.settings.hideTags },
+			{ highlight: this.settings.toolbarHighlights.clean, active: this.isActiveNoteClean() },
 		]);
 		const onWorkspaceChange = (): void => this.scheduleToolbarRefresh();
 		this.registerEvent(this.app.workspace.on('layout-change', onWorkspaceChange));
@@ -729,6 +747,27 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		void this.persist();
 		this.decorateAllFor(path);
 		this.notifyChange();
+		this.scheduleToolbarRefresh();
+	}
+
+	private isCleanView(path: string): boolean {
+		return this.viewStateFor(path) === 'body' && !this.settings.indentBody && this.settings.hideTags;
+	}
+
+	private isActiveNoteClean(): boolean {
+		const file = this.activeMarkdownFile();
+		return file !== null && this.isCleanView(file.path);
+	}
+
+	private async toggleClean(path: string): Promise<void> {
+		const on = !this.isCleanView(path);
+		this.fileStateEntry(path).viewState = on ? 'body' : 'both';
+		this.settings.indentBody = !on;
+		this.settings.hideTags = on;
+		// saveSettings persists the view state too and redraws every editor
+		// and reading view, the toolbar highlights included.
+		await this.saveSettings();
+		new Notice(on ? 'Clean: body only, no indent, tags hidden' : 'Clean off: outline and body, indented, tags shown');
 	}
 
 	private flipCollapse(path: string, id: string): void {

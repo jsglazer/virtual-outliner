@@ -46,6 +46,7 @@ export interface ToolbarHighlights {
 	indentBody: ToolbarHighlight;
 	enterBehavior: ToolbarHighlight;
 	hideTags: ToolbarHighlight;
+	clean: ToolbarHighlight;
 }
 
 // PDF export. The LaTeX preamble lives here (so it syncs with the plugin's
@@ -181,6 +182,7 @@ export function defaultToolbarHighlights(): ToolbarHighlights {
 		indentBody: makeToolbarHighlight(),
 		enterBehavior: makeToolbarHighlight(),
 		hideTags: makeToolbarHighlight(),
+		clean: makeToolbarHighlight(),
 	};
 }
 
@@ -311,6 +313,7 @@ function readToolbarHighlights(v: unknown): ToolbarHighlights {
 		indentBody: readToolbarHighlight(v.indentBody, fallback.indentBody),
 		enterBehavior: readToolbarHighlight(v.enterBehavior, fallback.enterBehavior),
 		hideTags: readToolbarHighlight(v.hideTags, fallback.hideTags),
+		clean: readToolbarHighlight(v.clean, fallback.clean),
 	};
 }
 

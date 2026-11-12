@@ -389,6 +389,7 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 			{ name: 'Indent body button', short: 'Indent body', highlight: highlights.indentBody },
 			{ name: 'Enter on next line button', short: 'Enter: next line', highlight: highlights.enterBehavior },
 			{ name: 'Hide tags button', short: 'Hide tags', highlight: highlights.hideTags },
+			{ name: 'Clean view button', short: 'Clean', highlight: highlights.clean },
 		];
 		for (const row of rows) this.renderToolbarItemPicker(containerEl, row.name, row.highlight);
 

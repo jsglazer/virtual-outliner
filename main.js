@@ -1467,7 +1467,8 @@ function defaultToolbarHighlights() {
     sidebar: makeToolbarHighlight(),
     indentBody: makeToolbarHighlight(),
     enterBehavior: makeToolbarHighlight(),
-    hideTags: makeToolbarHighlight()
+    hideTags: makeToolbarHighlight(),
+    clean: makeToolbarHighlight()
   };
 }
 var DEFAULT_LABEL_STYLES = ["1.0", "1", "1", "1", "1", "1"];
@@ -1580,7 +1581,8 @@ function readToolbarHighlights(v) {
     sidebar: readToolbarHighlight(v.sidebar, fallback.sidebar),
     indentBody: readToolbarHighlight(v.indentBody, fallback.indentBody),
     enterBehavior: readToolbarHighlight(v.enterBehavior, fallback.enterBehavior),
-    hideTags: readToolbarHighlight(v.hideTags, fallback.hideTags)
+    hideTags: readToolbarHighlight(v.hideTags, fallback.hideTags),
+    clean: readToolbarHighlight(v.clean, fallback.clean)
   };
 }
 function readPdfExport(v) {
@@ -4774,7 +4776,8 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
       { name: "Outline sidebar button", short: "Sidebar", highlight: highlights.sidebar },
       { name: "Indent body button", short: "Indent body", highlight: highlights.indentBody },
       { name: "Enter on next line button", short: "Enter: next line", highlight: highlights.enterBehavior },
-      { name: "Hide tags button", short: "Hide tags", highlight: highlights.hideTags }
+      { name: "Hide tags button", short: "Hide tags", highlight: highlights.hideTags },
+      { name: "Clean view button", short: "Clean", highlight: highlights.clean }
     ];
     for (const row of rows) this.renderToolbarItemPicker(containerEl, row.name, row.highlight);
     const wrap2 = containerEl.createDiv("vo-grid-wrap");
@@ -5584,6 +5587,17 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         new import_obsidian7.Notice(this.settings.hideTags ? "Tags and their comments hidden" : "Tags and their comments shown");
       }
     });
+    this.addCommand({
+      id: "toggle-clean-view",
+      name: "Toggle clean",
+      checkCallback: (checking) => {
+        const file = this.activeMarkdownFile();
+        if (!file) return false;
+        if (checking) return true;
+        void this.toggleClean(file.path);
+        return true;
+      }
+    });
     const moveCommand = (id, name, direction) => {
       this.addCommand({
         id,
@@ -5715,7 +5729,8 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         highlight: this.settings.toolbarHighlights.enterBehavior,
         active: this.settings.enterBehavior === "line"
       },
-      { highlight: this.settings.toolbarHighlights.hideTags, active: this.settings.hideTags }
+      { highlight: this.settings.toolbarHighlights.hideTags, active: this.settings.hideTags },
+      { highlight: this.settings.toolbarHighlights.clean, active: this.isActiveNoteClean() }
     ]);
     const onWorkspaceChange = () => this.scheduleToolbarRefresh();
     this.registerEvent(this.app.workspace.on("layout-change", onWorkspaceChange));
@@ -5991,6 +6006,22 @@ ${lineHeight}` : ""}`;
     void this.persist();
     this.decorateAllFor(path);
     this.notifyChange();
+    this.scheduleToolbarRefresh();
+  }
+  isCleanView(path) {
+    return this.viewStateFor(path) === "body" && !this.settings.indentBody && this.settings.hideTags;
+  }
+  isActiveNoteClean() {
+    const file = this.activeMarkdownFile();
+    return file !== null && this.isCleanView(file.path);
+  }
+  async toggleClean(path) {
+    const on = !this.isCleanView(path);
+    this.fileStateEntry(path).viewState = on ? "body" : "both";
+    this.settings.indentBody = !on;
+    this.settings.hideTags = on;
+    await this.saveSettings();
+    new import_obsidian7.Notice(on ? "Clean: body only, no indent, tags hidden" : "Clean off: outline and body, indented, tags shown");
   }
   flipCollapse(path, id) {
     const entry = this.fileStateEntry(path);
