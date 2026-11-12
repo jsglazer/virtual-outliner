@@ -3058,16 +3058,37 @@ LINENUMBERS_TEX = "\\n".join([
 # one put the line ~1pt below the previous entry and they overprinted), and a
 # gap-1 entry puts the paragraph space back. \\vskip rather than \\vspace is
 # deliberate: \\vspace appends \\vskip\\z@skip, which would zero \\lastskip.
+#
+# The \\nobreak in \\voentryend keeps an entry with the first line of its BODY.
+# Between two entries it must not hold: the glue that follows a penalty or
+# other glue is never a legal break, so with nothing else on the list every
+# entry-to-entry seam was unbreakable. An "Outline only" export is nothing but
+# entries, so TeX could only break INSIDE a multi-line entry \u2014 a page ending
+# half-empty mid-entry, and pages overrunning the footer where no such entry
+# came along. So when an entry directly follows another (\\lastskip is the
+# cancel), an explicit \\penalty makes that seam breakable before the gap is
+# adjusted: 0 when the new entry is a sibling or shallower, and 10000 (still
+# no break) when it is indented deeper than the last one \u2014 a child, so its
+# parent is never stranded at the foot of a page. A merely discouraging value
+# (5000 was tried) does not work: these pages have no bottom stretch, so every
+# candidate page is equally underfull and TeX takes the LATEST legal break,
+# whatever its penalty \u2014 Final.md still ended page 1 on "1.9 Rivals". \\vo@previndent records each entry's indent; both it
+# and #2 are measured in the body font, before the entry's own font switch.
 ENTRY_TEX = "\\n".join([
+    "\\\\makeatletter",
+    "\\\\newdimen\\\\vo@previndent \\\\vo@previndent=\\\\z@",
     "\\\\newcommand{\\\\voentry}[4]{\\\\par",
     "  \\\\ifdim\\\\lastskip=-\\\\parskip\\\\relax",
+    "    \\\\ifdim#2>\\\\vo@previndent \\\\penalty\\\\@M \\\\else \\\\penalty\\\\z@ \\\\fi",
     "    \\\\ifnum#1=1 \\\\vskip\\\\parskip\\\\relax\\\\fi",
     "  \\\\else",
     "    \\\\ifnum#1=0 \\\\vskip-\\\\parskip\\\\relax\\\\fi",
     "  \\\\fi",
+    "  \\\\global\\\\vo@previndent=#2\\\\relax",
     "  \\\\begingroup\\\\leftskip=#2\\\\relax\\\\noindent#3%",
     "  \\\\if\\\\relax\\\\detokenize{#4}\\\\relax\\\\else#4\\\\enspace\\\\fi}",
     "\\\\newcommand{\\\\voentryend}{\\\\par\\\\endgroup\\\\nobreak\\\\vskip-\\\\parskip\\\\relax}",
+    "\\\\makeatother",
 ])
 
 # Highlights. Plain ==mark== is pandoc's \\hl (lua-ul's \\highLight under
