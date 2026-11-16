@@ -17,6 +17,8 @@ export const SIDEBAR_VIEW_TYPE = 'virtual-outliner-sidebar';
 export interface SidebarHost {
 	activeOutlinePath(): string | null;
 	getParsed(path: string): ParsedOutline | null;
+	// False for a note without `voutline: true` in its frontmatter (Update016).
+	isOutlined(path: string): boolean;
 	levels(path: string): readonly LevelFormat[];
 	isCollapsed(path: string, nodeId: string): boolean;
 	toggleCollapsed(path: string, node: OutlineNode): void;
@@ -124,7 +126,11 @@ export class OutlineSidebarView extends ItemView {
 		if (!path || !parsed || parsed.roots.length === 0) {
 			treeEl.createDiv({
 				cls: 'vo-sidebar-empty',
-				text: path ? 'No outline entries in this note.' : 'Open a note to see its outline.',
+				text: !path
+					? 'Open a note to see its outline.'
+					: !this.host.isOutlined(path)
+						? 'Virtual Outliner is off for this note. Add voutline: true to its frontmatter to turn it on.'
+						: 'No outline entries in this note.',
 			});
 			return;
 		}

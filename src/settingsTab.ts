@@ -54,6 +54,11 @@ export class VirtualOutlinerSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
+		containerEl.createEl('p', {
+			cls: 'setting-item-description',
+			text: 'Virtual Outliner is off in every note unless its frontmatter has voutline: true. Notes without it stay plain Markdown: no outline, outliner keys, sidebar or tag hiding.',
+		});
+
 		this.renderOutlineColors(containerEl);
 
 		new Setting(containerEl)

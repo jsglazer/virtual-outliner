@@ -171,7 +171,11 @@ export function buildEditorExtension(host: EditorHost): Extension {
 // reports the `.canvas` file here, so anything else resolves to null and every
 // editor path (state, decoration, folding) leaves that editor alone.
 export function editorViewPath(view: EditorView): string | null {
-	const file = view.state.field(editorInfoField, false)?.file;
+	return editorStatePath(view.state);
+}
+
+export function editorStatePath(state: EditorState): string | null {
+	const file = state.field(editorInfoField, false)?.file;
 	return file && file.extension === 'md' ? file.path : null;
 }
 

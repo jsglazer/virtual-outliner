@@ -8,9 +8,10 @@
 // active file." The one exception is "Generate filtered copy", which
 // creates a brand-new export file and never touches the source document.
 
-import type { Editor, TFile, WorkspaceLeaf } from 'obsidian';
+import type { Editor, MarkdownPostProcessorContext, TFile, WorkspaceLeaf } from 'obsidian';
 import { MarkdownView, Notice, Platform, Plugin } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
+import { Decoration } from '@codemirror/view';
 
 import type { VirtualOutlinerAPI } from './api';
 import { createApi } from './api';
@@ -20,6 +21,7 @@ import { parseMetaDocument, pruneOrphaned } from './core/metadata';
 import { nodeAtLine, parseOutline } from './core/parser';
 import { moveSubtreeTo, ownerNodeAtLine } from './core/ops';
 import type { DropPosition } from './core/ops';
+import { isOutlineEnabled } from './core/optIn';
 import { computeRenderPlan, foldableDescendants, hasFoldableContent } from './core/render';
 import { generateFilteredCopy } from './core/exportFilter';
 import { hasParagraphFlag, isCommentLine, setComment, setParagraphFlag } from './core/sigil';
@@ -30,8 +32,10 @@ import {
 	buildEditorExtension,
 	buildHiddenContentGuard,
 	buildOutlineDecorations,
+	editorStatePath,
 	editorViewPath,
 	measureEntryTextOffsets,
+	outlineDecoField,
 	sameTextOffsets,
 	setOutlineDecorations,
 } from './editor/livePreview';
@@ -72,6 +76,9 @@ const RESOLVE_DEBOUNCE_MS = 200;
 const CSS_VAR_STYLE_ID = 'virtual-outliner-level-vars';
 // On <body> while tags are hidden; styles.css hides rendered tags under it.
 const HIDE_TAGS_CLASS = 'vo-hide-tags';
+// On each Markdown pane's container while its note has `voutline: true`
+// (Update016), so the tag-hiding CSS reaches only opted-in notes.
+const OUTLINED_CLASS = 'vo-outlined';
 // Caret moves are batched this long before the sidebar re-shades its entry.
 const CURSOR_TRACK_DELAY_MS = 60;
 // Note Toolbar renders its own DOM per leaf/file/mode; a short delay lets that
@@ -103,6 +110,9 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private cursorLines = new Map<string, number>();
 	private cursorListeners = new Set<() => void>();
 	private cursorTimer: number | null = null;
+	// Last known opt-in per note path, so a frontmatter edit that does not
+	// touch `voutline` costs nothing and one that does redraws that note.
+	private outlined = new Map<string, boolean>();
 
 	async onload(): Promise<void> {
 		const raw: unknown = await this.loadData();
@@ -133,6 +143,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			sigilChar: () => this.settings.sigil,
 			enterBehavior: () => this.settings.enterBehavior,
 			resolveNow: (view) => this.resolveEditor(view),
+			enabled: (view) => this.isOutlinedView(view),
 		};
 
 		this.registerEditorExtension([
@@ -140,7 +151,10 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				new Notice('Hidden text is not deleted from this view — switch to outline and body to edit it.');
 			}),
 			buildOutlineKeymap(this.keymapHost),
-			buildTagHideExtension(() => this.settings.hideTags),
+			buildTagHideExtension((state) => {
+				const path = editorStatePath(state);
+				return this.settings.hideTags && path !== null && this.isOutlined(path);
+			}),
 			buildEditorExtension({
 				attachEditor: (view) => this.editors.add(view),
 				detachEditor: (view) => {
@@ -158,18 +172,20 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			}),
 		]);
 
-		this.registerMarkdownPostProcessor(
-			createReadingPostProcessor({
-				sigilChar: () => this.settings.sigil,
-				levels: () => this.settings.levels,
-				viewState: (path) => this.viewStateFor(path),
-				collapsedIds: (path) => this.collapsedIdsFor(path),
-				indentBody: () => this.settings.indentBody,
-				toggleFold: (path, lineIndex) => this.toggleFoldAtLine(path, lineIndex, null),
-			}),
-		);
-
-		this.registerMarkdownPostProcessor((el) => markHideableTags(el));
+		const outlineReading = createReadingPostProcessor({
+			sigilChar: () => this.settings.sigil,
+			levels: () => this.settings.levels,
+			viewState: (path) => this.viewStateFor(path),
+			collapsedIds: (path) => this.collapsedIdsFor(path),
+			indentBody: () => this.settings.indentBody,
+			toggleFold: (path, lineIndex) => this.toggleFoldAtLine(path, lineIndex, null),
+		});
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			if (this.isOutlinedRender(ctx)) outlineReading(el, ctx);
+		});
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			if (this.isOutlinedRender(ctx)) markHideableTags(el);
+		});
 
 		this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new OutlineSidebarView(leaf, this.sidebarHost()));
 		this.addSettingTab(new VirtualOutlinerSettingTab(this.app, this));
@@ -188,7 +204,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				id,
 				name,
 				checkCallback: (checking) => {
-					const file = this.activeMarkdownFile();
+					const file = this.activeOutlinedFile();
 					if (!file) return false;
 					if (checking) return true;
 					this.setViewState(file.path, viewState);
@@ -219,7 +235,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			checkCallback: (checking) => {
 				const view = this.activeEditorView();
 				const path = view ? editorViewPath(view) : null;
-				if (!view || path === null) return false;
+				if (!view || path === null || !this.isOutlined(path)) return false;
 				if (checking) return true;
 				const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
 				this.toggleFoldAtLine(path, line, view);
@@ -232,7 +248,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				id,
 				name,
 				checkCallback: (checking) => {
-					const file = this.activeMarkdownFile();
+					const file = this.activeOutlinedFile();
 					if (!file) return false;
 					if (checking) return true;
 					run(file.path);
@@ -250,7 +266,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				checkCallback: (checking) => {
 					const view = this.activeEditorView();
 					const path = view ? editorViewPath(view) : null;
-					if (!view || path === null) return false;
+					if (!view || path === null || !this.isOutlined(path)) return false;
 					if (checking) return true;
 					const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
 					this.foldInsideAtLine(path, line, view, collapse);
@@ -298,7 +314,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			id: 'toggle-clean-view',
 			name: 'Toggle clean',
 			checkCallback: (checking) => {
-				const file = this.activeMarkdownFile();
+				const file = this.activeOutlinedFile();
 				if (!file) return false;
 				if (checking) return true;
 				void this.toggleClean(file.path);
@@ -312,7 +328,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				name,
 				checkCallback: (checking) => {
 					const view = this.activeEditorView();
-					if (!view) return false;
+					if (!view || !this.isOutlinedView(view)) return false;
 					if (checking) return true;
 					moveBlock(view, this.keymapHost, direction);
 					return true;
@@ -326,7 +342,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			id: 'generate-filtered-copy',
 			name: 'Generate filtered copy',
 			checkCallback: (checking) => {
-				const file = this.activeMarkdownFile();
+				const file = this.activeOutlinedFile();
 				if (!file) return false;
 				if (checking) return true;
 				void this.generateFilteredCopyFor(file);
@@ -362,10 +378,13 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		this.addCommand({
 			id: 'toggle-paragraph-break',
 			name: 'Toggle paragraph break at entry',
-			editorCallback: (editor) => {
+			editorCheckCallback: (checking, editor, ctx) => {
+				if (!ctx.file || !this.isOutlined(ctx.file.path)) return false;
+				if (checking) return true;
 				if (!this.toggleParagraphBreak(editor, editor.getCursor().line)) {
 					new Notice('Put the cursor on an outline entry to set a paragraph break.');
 				}
+				return true;
 			},
 		});
 		// A comment line is never printed, in either PDF version. Like the
@@ -374,14 +393,18 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		this.addCommand({
 			id: 'toggle-comment',
 			name: 'Toggle comment on line',
-			editorCallback: (editor) => {
+			editorCheckCallback: (checking, editor, ctx) => {
+				if (!ctx.file || !this.isOutlined(ctx.file.path)) return false;
+				if (checking) return true;
 				if (!this.toggleComment(editor)) {
 					new Notice('Only body lines can be commented — outline entries never print anyway.');
 				}
+				return true;
 			},
 		});
 		this.registerEvent(
-			this.app.workspace.on('editor-menu', (menu, editor) => {
+			this.app.workspace.on('editor-menu', (menu, editor, info) => {
+				if (!info.file || !this.isOutlined(info.file.path)) return;
 				const lineIndex = editor.getCursor().line;
 				const line = editor.getLine(lineIndex);
 				if (setParagraphFlag(line, this.settings.sigil, true) !== null) {
@@ -408,11 +431,13 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		this.addCommand({
 			id: 'prune-orphaned-metadata',
 			name: 'Prune orphaned outline metadata',
-			editorCallback: (_editor, ctx) => {
+			editorCheckCallback: (checking, _editor, ctx) => {
 				const path = ctx.file?.path;
-				const view = path !== undefined ? this.editorFor(path) : null;
-				if (!view || path === undefined) return;
-				this.pruneOrphanedIn(view, path);
+				if (path === undefined || !this.isOutlined(path)) return false;
+				if (checking) return true;
+				const view = this.editorFor(path);
+				if (view) this.pruneOrphanedIn(view, path);
+				return true;
 			},
 		});
 
@@ -442,8 +467,23 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.workspace.on('file-open', (file) => {
-				if (file && file.extension === 'md') void this.ensureFileState(file.path);
+				if (file && file.extension === 'md' && this.isOutlined(file.path)) void this.ensureFileState(file.path);
+				this.applyOutlinedClasses();
 				this.notifyChange();
+			}),
+		);
+
+		// Adding, removing or changing `voutline` turns the plugin on or off
+		// for that note right away, in every pane showing it.
+		this.registerEvent(this.app.metadataCache.on('changed', (file) => this.refreshOptIn(file.path)));
+		// Covers notes already open at startup, whose frontmatter may be
+		// indexed only after their editors attached.
+		this.registerEvent(
+			this.app.metadataCache.on('resolved', () => {
+				for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+					const path = leaf.view instanceof MarkdownView ? leaf.view.file?.path : undefined;
+					if (path !== undefined) this.refreshOptIn(path);
+				}
 			}),
 		);
 
@@ -479,7 +519,10 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			{ highlight: this.settings.toolbarHighlights.hideTags, active: this.settings.hideTags },
 			{ highlight: this.settings.toolbarHighlights.clean, active: this.isActiveNoteClean() },
 		]);
-		const onWorkspaceChange = (): void => this.scheduleToolbarRefresh();
+		const onWorkspaceChange = (): void => {
+			this.applyOutlinedClasses();
+			this.scheduleToolbarRefresh();
+		};
 		this.registerEvent(this.app.workspace.on('layout-change', onWorkspaceChange));
 		this.registerEvent(
 			this.app.workspace.on('window-open', (win) =>
@@ -492,9 +535,10 @@ export default class VirtualOutlinerPlugin extends Plugin {
 
 		this.app.workspace.onLayoutReady(() => {
 			const file = this.app.workspace.getActiveFile();
-			if (file && file.extension === 'md') void this.ensureFileState(file.path);
+			if (file && file.extension === 'md' && this.isOutlined(file.path)) void this.ensureFileState(file.path);
 			this.applyLevelCssVars();
 			this.applyTagHideClass();
+			this.applyOutlinedClasses();
 			for (const view of this.editors) this.decorate(view);
 			this.rerenderPreviews(null);
 		});
@@ -509,6 +553,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 			doc.getElementById(CSS_VAR_STYLE_ID)?.remove();
 			doc.body.classList.remove(HIDE_TAGS_CLASS);
 		}
+		for (const leaf of this.app.workspace.getLeavesOfType('markdown')) leaf.view.containerEl.removeClass(OUTLINED_CLASS);
 		if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
 		this.toolbarTimer = null;
 		if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
@@ -529,10 +574,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 		if (Platform.isDesktopApp) void this.syncVaultConfig();
 		this.applyLevelCssVars();
 		this.applyTagHideClass();
-		for (const view of this.editors) {
-			syncTagHiding(view, this.settings.hideTags);
-			this.decorate(view);
-		}
+		for (const view of this.editors) this.decorate(view);
 		this.rerenderPreviews(null);
 		this.notifyChange();
 		this.scheduleToolbarRefresh();
@@ -718,6 +760,62 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	// drops them.
 	private applyTagHideClass(): void {
 		for (const doc of this.cssVarTargetDocuments()) doc.body.classList.toggle(HIDE_TAGS_CLASS, this.settings.hideTags);
+	}
+
+	// ── Per-note opt-in (Update016) ──────────────────────────────────────────
+
+	isOutlined(path: string): boolean {
+		const file = this.app.vault.getFileByPath(path);
+		if (!file || file.extension !== 'md') return false;
+		return isOutlineEnabled(this.app.metadataCache.getFileCache(file)?.frontmatter);
+	}
+
+	private isOutlinedView(view: EditorView): boolean {
+		const path = editorViewPath(view);
+		return path !== null && this.isOutlined(path);
+	}
+
+	// Reading view: the note's frontmatter as the renderer saw it, when the
+	// metadata cache has not indexed the note yet (first render at startup).
+	private isOutlinedRender(ctx: MarkdownPostProcessorContext): boolean {
+		if (!ctx.sourcePath.endsWith('.md')) return false;
+		const file = this.app.vault.getFileByPath(ctx.sourcePath);
+		const cached = file ? this.app.metadataCache.getFileCache(file) : null;
+		if (cached) return isOutlineEnabled(cached.frontmatter);
+		return isOutlineEnabled(ctx.frontmatter as Record<string, unknown> | undefined);
+	}
+
+	private activeOutlinedFile(): TFile | null {
+		const file = this.activeMarkdownFile();
+		return file && this.isOutlined(file.path) ? file : null;
+	}
+
+	private applyOutlinedClasses(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+			const view = leaf.view;
+			if (!(view instanceof MarkdownView)) continue;
+			const path = view.file?.path;
+			view.containerEl.toggleClass(OUTLINED_CLASS, path !== undefined && this.isOutlined(path));
+		}
+	}
+
+	// Redraws one note when its opt-in changed since last seen.
+	private refreshOptIn(path: string): void {
+		const now = this.isOutlined(path);
+		// Unseen counts as off: nothing was ever drawn for it.
+		if ((this.outlined.get(path) ?? false) === now) {
+			this.outlined.set(path, now);
+			return;
+		}
+		this.outlined.set(path, now);
+		if (!now) this.states.delete(path);
+		for (const view of this.editors) {
+			if (editorViewPath(view) === path) this.resolveEditor(view);
+		}
+		this.rerenderPreviews(path);
+		this.applyOutlinedClasses();
+		this.notifyChange();
+		this.scheduleToolbarRefresh();
 	}
 
 	private applyLevelCssVars(): void {
@@ -1056,7 +1154,7 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private resolveEditor(view: EditorView): void {
 		const path = editorViewPath(view);
 		if (path === null) return;
-		this.setStateFromDoc(path, view.state.doc.toString());
+		if (this.isOutlined(path)) this.setStateFromDoc(path, view.state.doc.toString());
 		this.decorate(view);
 	}
 
@@ -1128,6 +1226,19 @@ export default class VirtualOutlinerPlugin extends Plugin {
 	private decorate(view: EditorView): void {
 		const path = editorViewPath(view);
 		if (path === null) return;
+		const outlined = this.isOutlined(path);
+		this.outlined.set(path, outlined);
+		syncTagHiding(view, this.settings.hideTags && outlined);
+		if (!outlined) {
+			// A note that is not (or no longer) an outline: drop anything this
+			// editor still draws — e.g. after `voutline` was removed, or the
+			// pane switched to another note.
+			this.textOffsets.delete(view);
+			if (view.state.field(outlineDecoField, false)?.size) {
+				view.dispatch({ effects: setOutlineDecorations.of(Decoration.none) });
+			}
+			return;
+		}
 		const state = this.states.get(path);
 		if (!state) return;
 		const plan = computeRenderPlan(
@@ -1252,7 +1363,8 @@ export default class VirtualOutlinerPlugin extends Plugin {
 				const file = this.app.workspace.getActiveFile();
 				return file && file.extension === 'md' ? file.path : null;
 			},
-			getParsed: (path: string) => this.states.get(path)?.parsed ?? null,
+			getParsed: (path: string) => (this.isOutlined(path) ? (this.states.get(path)?.parsed ?? null) : null),
+			isOutlined: (path: string) => this.isOutlined(path),
 			levels: () => this.settings.levels,
 			isCollapsed: (path: string, id: string) => this.collapsedIdsFor(path).has(id),
 			toggleCollapsed: (path: string, node: OutlineNode) => this.toggleCollapsed(path, node),

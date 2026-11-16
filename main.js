@@ -24,6 +24,7 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian7 = require("obsidian");
+var import_view4 = require("@codemirror/view");
 
 // src/core/label.ts
 var ROMAN_TABLE = [
@@ -1287,27 +1288,6 @@ function moveSubtreeTo(body, entryLine, targetEntryLine, position, sigilChar = D
   };
 }
 
-// src/core/exportFilter.ts
-function generateFilteredCopy(doc, sigilChar, levels, viewState, collapsedIds) {
-  var _a;
-  const { body } = parseMetaDocument(doc);
-  const plan = computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds);
-  const lines = body.split("\n");
-  const entryOutput = /* @__PURE__ */ new Map();
-  for (const node2 of plan.parsed.flat) {
-    if (isLineHidden(plan.hiddenLineRanges, node2.entryLine)) continue;
-    const label = plan.labels.get(node2.entryLine);
-    entryOutput.set(node2.entryLine, label && label !== "" ? `${label} ${node2.text}` : node2.text);
-  }
-  const out = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (isLineHidden(plan.hiddenLineRanges, i)) continue;
-    const entryText = entryOutput.get(i);
-    out.push(entryText !== void 0 ? entryText : (_a = lines[i]) != null ? _a : "");
-  }
-  return out.join("\n");
-}
-
 // src/core/exportOptions.ts
 var FONT_SIZES = ["8", "9", "10", "11", "12", "14", "17", "20"];
 var CITE_STYLES = ["MLA", "APA", "Chicago", "Chicago-notes"];
@@ -1437,6 +1417,36 @@ function checkPreamble(preamble) {
   }
   if (unbalanced || depth !== 0) warnings.unshift("Braces { } are unbalanced.");
   return warnings;
+}
+
+// src/core/optIn.ts
+var OPT_IN_KEY = "voutline";
+function isOutlineEnabled(fm) {
+  const v = frontmatterValue(fm, OPT_IN_KEY);
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") return ["true", "yes", "on"].includes(v.trim().toLowerCase());
+  return false;
+}
+
+// src/core/exportFilter.ts
+function generateFilteredCopy(doc, sigilChar, levels, viewState, collapsedIds) {
+  var _a;
+  const { body } = parseMetaDocument(doc);
+  const plan = computeRenderPlan(body, sigilChar, levels, viewState, collapsedIds);
+  const lines = body.split("\n");
+  const entryOutput = /* @__PURE__ */ new Map();
+  for (const node2 of plan.parsed.flat) {
+    if (isLineHidden(plan.hiddenLineRanges, node2.entryLine)) continue;
+    const label = plan.labels.get(node2.entryLine);
+    entryOutput.set(node2.entryLine, label && label !== "" ? `${label} ${node2.text}` : node2.text);
+  }
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (isLineHidden(plan.hiddenLineRanges, i)) continue;
+    const entryText = entryOutput.get(i);
+    out.push(entryText !== void 0 ? entryText : (_a = lines[i]) != null ? _a : "");
+  }
+  return out.join("\n");
 }
 
 // src/core/settings.ts
@@ -1805,8 +1815,11 @@ function buildEditorExtension(host) {
   return [outlineDecoField, watcher];
 }
 function editorViewPath(view) {
+  return editorStatePath(view.state);
+}
+function editorStatePath(state) {
   var _a;
-  const file = (_a = view.state.field(import_obsidian.editorInfoField, false)) == null ? void 0 : _a.file;
+  const file = (_a = state.field(import_obsidian.editorInfoField, false)) == null ? void 0 : _a.file;
   return file && file.extension === "md" ? file.path : null;
 }
 var HiddenBlockWidget = class extends import_view.WidgetType {
@@ -2155,14 +2168,15 @@ function shiftEnterBinding(host) {
   };
 }
 function buildOutlineKeymap(host) {
+  const gated = (run) => (view) => host.enabled(view) && run(view);
   const bindings = [
-    { key: "Enter", run: enterBinding(host) },
-    { key: "Shift-Enter", run: shiftEnterBinding(host) },
-    { key: "Mod-Enter", run: bodyLineBinding(host) },
-    { key: "Tab", run: structuralBinding(host, demote) },
-    { key: "Shift-Tab", run: structuralBinding(host, promote) },
-    { key: "Alt-ArrowUp", run: moveBinding(host, "up") },
-    { key: "Alt-ArrowDown", run: moveBinding(host, "down") }
+    { key: "Enter", run: gated(enterBinding(host)) },
+    { key: "Shift-Enter", run: gated(shiftEnterBinding(host)) },
+    { key: "Mod-Enter", run: gated(bodyLineBinding(host)) },
+    { key: "Tab", run: gated(structuralBinding(host, demote)) },
+    { key: "Shift-Tab", run: gated(structuralBinding(host, promote)) },
+    { key: "Alt-ArrowUp", run: gated(moveBinding(host, "up")) },
+    { key: "Alt-ArrowDown", run: gated(moveBinding(host, "down")) }
   ];
   return import_state2.Prec.highest(import_view2.keymap.of(bindings));
 }
@@ -2674,7 +2688,7 @@ function scanTagDecorations(doc) {
 var OFF = { hidden: false, deco: import_view3.Decoration.none };
 var hiddenAtCreate = () => false;
 var tagHideField = import_state3.StateField.define({
-  create: (state) => hiddenAtCreate() ? { hidden: true, deco: scanTagDecorations(state.doc) } : OFF,
+  create: (state) => hiddenAtCreate(state) ? { hidden: true, deco: scanTagDecorations(state.doc) } : OFF,
   update(value, tr) {
     let hidden = value.hidden;
     let rescan = false;
@@ -4616,6 +4630,10 @@ var VirtualOutlinerSettingTab = class extends import_obsidian4.PluginSettingTab 
   display() {
     const { containerEl } = this;
     containerEl.empty();
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "Virtual Outliner is off in every note unless its frontmatter has voutline: true. Notes without it stay plain Markdown: no outline, outliner keys, sidebar or tag hiding."
+    });
     this.renderOutlineColors(containerEl);
     new import_obsidian4.Setting(containerEl).setName("Depth sigil").setDesc(
       'The character repeated at line start to mark an outline entry (e.g. "@@ text" is a level-2 entry). Exactly one character.'
@@ -5451,7 +5469,7 @@ var OutlineSidebarView = class extends import_obsidian6.ItemView {
     if (!path || !parsed || parsed.roots.length === 0) {
       treeEl.createDiv({
         cls: "vo-sidebar-empty",
-        text: path ? "No outline entries in this note." : "Open a note to see its outline."
+        text: !path ? "Open a note to see its outline." : !this.host.isOutlined(path) ? "Virtual Outliner is off for this note. Add voutline: true to its frontmatter to turn it on." : "No outline entries in this note."
       });
       return;
     }
@@ -5576,6 +5594,7 @@ function normalizeFileStateEntry(v, fallback) {
 var RESOLVE_DEBOUNCE_MS = 200;
 var CSS_VAR_STYLE_ID = "virtual-outliner-level-vars";
 var HIDE_TAGS_CLASS = "vo-hide-tags";
+var OUTLINED_CLASS2 = "vo-outlined";
 var CURSOR_TRACK_DELAY_MS = 60;
 var TOOLBAR_HIGHLIGHT_DELAY_MS = 50;
 var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
@@ -5602,6 +5621,9 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     this.cursorLines = /* @__PURE__ */ new Map();
     this.cursorListeners = /* @__PURE__ */ new Set();
     this.cursorTimer = null;
+    // Last known opt-in per note path, so a frontmatter edit that does not
+    // touch `voutline` costs nothing and one that does redraws that note.
+    this.outlined = /* @__PURE__ */ new Map();
     // One stable handler for every editor's fold chevrons (a fresh closure per
     // decorate would be harmless but pointless).
     this.onFoldClick = (view, lineIndex) => {
@@ -5633,14 +5655,18 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     this.keymapHost = {
       sigilChar: () => this.settings.sigil,
       enterBehavior: () => this.settings.enterBehavior,
-      resolveNow: (view) => this.resolveEditor(view)
+      resolveNow: (view) => this.resolveEditor(view),
+      enabled: (view) => this.isOutlinedView(view)
     };
     this.registerEditorExtension([
       buildHiddenContentGuard(() => {
         new import_obsidian7.Notice("Hidden text is not deleted from this view \u2014 switch to outline and body to edit it.");
       }),
       buildOutlineKeymap(this.keymapHost),
-      buildTagHideExtension(() => this.settings.hideTags),
+      buildTagHideExtension((state) => {
+        const path = editorStatePath(state);
+        return this.settings.hideTags && path !== null && this.isOutlined(path);
+      }),
       buildEditorExtension({
         attachEditor: (view) => this.editors.add(view),
         detachEditor: (view) => {
@@ -5657,17 +5683,20 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         cursorMoved: (view) => this.onCursorMoved(view)
       })
     ]);
-    this.registerMarkdownPostProcessor(
-      createReadingPostProcessor({
-        sigilChar: () => this.settings.sigil,
-        levels: () => this.settings.levels,
-        viewState: (path) => this.viewStateFor(path),
-        collapsedIds: (path) => this.collapsedIdsFor(path),
-        indentBody: () => this.settings.indentBody,
-        toggleFold: (path, lineIndex) => this.toggleFoldAtLine(path, lineIndex, null)
-      })
-    );
-    this.registerMarkdownPostProcessor((el) => markHideableTags(el));
+    const outlineReading = createReadingPostProcessor({
+      sigilChar: () => this.settings.sigil,
+      levels: () => this.settings.levels,
+      viewState: (path) => this.viewStateFor(path),
+      collapsedIds: (path) => this.collapsedIdsFor(path),
+      indentBody: () => this.settings.indentBody,
+      toggleFold: (path, lineIndex) => this.toggleFoldAtLine(path, lineIndex, null)
+    });
+    this.registerMarkdownPostProcessor((el, ctx) => {
+      if (this.isOutlinedRender(ctx)) outlineReading(el, ctx);
+    });
+    this.registerMarkdownPostProcessor((el, ctx) => {
+      if (this.isOutlinedRender(ctx)) markHideableTags(el);
+    });
     this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new OutlineSidebarView(leaf, this.sidebarHost()));
     this.addSettingTab(new VirtualOutlinerSettingTab(this.app, this));
     this.addRibbonIcon("list-tree", "Toggle outline sidebar", () => void this.toggleSidebar());
@@ -5681,7 +5710,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         id,
         name,
         checkCallback: (checking) => {
-          const file = this.activeMarkdownFile();
+          const file = this.activeOutlinedFile();
           if (!file) return false;
           if (checking) return true;
           this.setViewState(file.path, viewState);
@@ -5707,7 +5736,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       checkCallback: (checking) => {
         const view = this.activeEditorView();
         const path = view ? editorViewPath(view) : null;
-        if (!view || path === null) return false;
+        if (!view || path === null || !this.isOutlined(path)) return false;
         if (checking) return true;
         const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
         this.toggleFoldAtLine(path, line, view);
@@ -5719,7 +5748,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         id,
         name,
         checkCallback: (checking) => {
-          const file = this.activeMarkdownFile();
+          const file = this.activeOutlinedFile();
           if (!file) return false;
           if (checking) return true;
           run(file.path);
@@ -5736,7 +5765,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         checkCallback: (checking) => {
           const view = this.activeEditorView();
           const path = view ? editorViewPath(view) : null;
-          if (!view || path === null) return false;
+          if (!view || path === null || !this.isOutlined(path)) return false;
           if (checking) return true;
           const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
           this.foldInsideAtLine(path, line, view, collapse);
@@ -5770,7 +5799,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       id: "toggle-clean-view",
       name: "Toggle clean",
       checkCallback: (checking) => {
-        const file = this.activeMarkdownFile();
+        const file = this.activeOutlinedFile();
         if (!file) return false;
         if (checking) return true;
         void this.toggleClean(file.path);
@@ -5783,7 +5812,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
         name,
         checkCallback: (checking) => {
           const view = this.activeEditorView();
-          if (!view) return false;
+          if (!view || !this.isOutlinedView(view)) return false;
           if (checking) return true;
           moveBlock(view, this.keymapHost, direction);
           return true;
@@ -5796,7 +5825,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       id: "generate-filtered-copy",
       name: "Generate filtered copy",
       checkCallback: (checking) => {
-        const file = this.activeMarkdownFile();
+        const file = this.activeOutlinedFile();
         if (!file) return false;
         if (checking) return true;
         void this.generateFilteredCopyFor(file);
@@ -5827,23 +5856,30 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     this.addCommand({
       id: "toggle-paragraph-break",
       name: "Toggle paragraph break at entry",
-      editorCallback: (editor) => {
+      editorCheckCallback: (checking, editor, ctx) => {
+        if (!ctx.file || !this.isOutlined(ctx.file.path)) return false;
+        if (checking) return true;
         if (!this.toggleParagraphBreak(editor, editor.getCursor().line)) {
           new import_obsidian7.Notice("Put the cursor on an outline entry to set a paragraph break.");
         }
+        return true;
       }
     });
     this.addCommand({
       id: "toggle-comment",
       name: "Toggle comment on line",
-      editorCallback: (editor) => {
+      editorCheckCallback: (checking, editor, ctx) => {
+        if (!ctx.file || !this.isOutlined(ctx.file.path)) return false;
+        if (checking) return true;
         if (!this.toggleComment(editor)) {
           new import_obsidian7.Notice("Only body lines can be commented \u2014 outline entries never print anyway.");
         }
+        return true;
       }
     });
     this.registerEvent(
-      this.app.workspace.on("editor-menu", (menu, editor) => {
+      this.app.workspace.on("editor-menu", (menu, editor, info) => {
+        if (!info.file || !this.isOutlined(info.file.path)) return;
         const lineIndex = editor.getCursor().line;
         const line = editor.getLine(lineIndex);
         if (setParagraphFlag(line, this.settings.sigil, true) !== null) {
@@ -5863,12 +5899,14 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     this.addCommand({
       id: "prune-orphaned-metadata",
       name: "Prune orphaned outline metadata",
-      editorCallback: (_editor, ctx) => {
+      editorCheckCallback: (checking, _editor, ctx) => {
         var _a;
         const path = (_a = ctx.file) == null ? void 0 : _a.path;
-        const view = path !== void 0 ? this.editorFor(path) : null;
-        if (!view || path === void 0) return;
-        this.pruneOrphanedIn(view, path);
+        if (path === void 0 || !this.isOutlined(path)) return false;
+        if (checking) return true;
+        const view = this.editorFor(path);
+        if (view) this.pruneOrphanedIn(view, path);
+        return true;
       }
     });
     this.registerEvent(
@@ -5897,8 +5935,19 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        if (file && file.extension === "md") void this.ensureFileState(file.path);
+        if (file && file.extension === "md" && this.isOutlined(file.path)) void this.ensureFileState(file.path);
+        this.applyOutlinedClasses();
         this.notifyChange();
+      })
+    );
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => this.refreshOptIn(file.path)));
+    this.registerEvent(
+      this.app.metadataCache.on("resolved", () => {
+        var _a;
+        for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+          const path = leaf.view instanceof import_obsidian7.MarkdownView ? (_a = leaf.view.file) == null ? void 0 : _a.path : void 0;
+          if (path !== void 0) this.refreshOptIn(path);
+        }
       })
     );
     this.toolbarHighlighter = new ToolbarHighlighter(this.app, () => [
@@ -5911,7 +5960,10 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       { highlight: this.settings.toolbarHighlights.hideTags, active: this.settings.hideTags },
       { highlight: this.settings.toolbarHighlights.clean, active: this.isActiveNoteClean() }
     ]);
-    const onWorkspaceChange = () => this.scheduleToolbarRefresh();
+    const onWorkspaceChange = () => {
+      this.applyOutlinedClasses();
+      this.scheduleToolbarRefresh();
+    };
     this.registerEvent(this.app.workspace.on("layout-change", onWorkspaceChange));
     this.registerEvent(
       this.app.workspace.on(
@@ -5924,9 +5976,10 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     this.app.workspace.onLayoutReady(onWorkspaceChange);
     this.app.workspace.onLayoutReady(() => {
       const file = this.app.workspace.getActiveFile();
-      if (file && file.extension === "md") void this.ensureFileState(file.path);
+      if (file && file.extension === "md" && this.isOutlined(file.path)) void this.ensureFileState(file.path);
       this.applyLevelCssVars();
       this.applyTagHideClass();
+      this.applyOutlinedClasses();
       for (const view of this.editors) this.decorate(view);
       this.rerenderPreviews(null);
     });
@@ -5941,6 +5994,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
       (_a = doc.getElementById(CSS_VAR_STYLE_ID)) == null ? void 0 : _a.remove();
       doc.body.classList.remove(HIDE_TAGS_CLASS);
     }
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) leaf.view.containerEl.removeClass(OUTLINED_CLASS2);
     if (this.toolbarTimer !== null) window.clearTimeout(this.toolbarTimer);
     this.toolbarTimer = null;
     if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
@@ -5960,10 +6014,7 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
     if (import_obsidian7.Platform.isDesktopApp) void this.syncVaultConfig();
     this.applyLevelCssVars();
     this.applyTagHideClass();
-    for (const view of this.editors) {
-      syncTagHiding(view, this.settings.hideTags);
-      this.decorate(view);
-    }
+    for (const view of this.editors) this.decorate(view);
     this.rerenderPreviews(null);
     this.notifyChange();
     this.scheduleToolbarRefresh();
@@ -6146,6 +6197,57 @@ var VirtualOutlinerPlugin = class extends import_obsidian7.Plugin {
   // drops them.
   applyTagHideClass() {
     for (const doc of this.cssVarTargetDocuments()) doc.body.classList.toggle(HIDE_TAGS_CLASS, this.settings.hideTags);
+  }
+  // ── Per-note opt-in (Update016) ──────────────────────────────────────────
+  isOutlined(path) {
+    var _a;
+    const file = this.app.vault.getFileByPath(path);
+    if (!file || file.extension !== "md") return false;
+    return isOutlineEnabled((_a = this.app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter);
+  }
+  isOutlinedView(view) {
+    const path = editorViewPath(view);
+    return path !== null && this.isOutlined(path);
+  }
+  // Reading view: the note's frontmatter as the renderer saw it, when the
+  // metadata cache has not indexed the note yet (first render at startup).
+  isOutlinedRender(ctx) {
+    if (!ctx.sourcePath.endsWith(".md")) return false;
+    const file = this.app.vault.getFileByPath(ctx.sourcePath);
+    const cached2 = file ? this.app.metadataCache.getFileCache(file) : null;
+    if (cached2) return isOutlineEnabled(cached2.frontmatter);
+    return isOutlineEnabled(ctx.frontmatter);
+  }
+  activeOutlinedFile() {
+    const file = this.activeMarkdownFile();
+    return file && this.isOutlined(file.path) ? file : null;
+  }
+  applyOutlinedClasses() {
+    var _a;
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (!(view instanceof import_obsidian7.MarkdownView)) continue;
+      const path = (_a = view.file) == null ? void 0 : _a.path;
+      view.containerEl.toggleClass(OUTLINED_CLASS2, path !== void 0 && this.isOutlined(path));
+    }
+  }
+  // Redraws one note when its opt-in changed since last seen.
+  refreshOptIn(path) {
+    var _a;
+    const now = this.isOutlined(path);
+    if (((_a = this.outlined.get(path)) != null ? _a : false) === now) {
+      this.outlined.set(path, now);
+      return;
+    }
+    this.outlined.set(path, now);
+    if (!now) this.states.delete(path);
+    for (const view of this.editors) {
+      if (editorViewPath(view) === path) this.resolveEditor(view);
+    }
+    this.rerenderPreviews(path);
+    this.applyOutlinedClasses();
+    this.notifyChange();
+    this.scheduleToolbarRefresh();
   }
   applyLevelCssVars() {
     const vars = { ...levelCssVars(this.settings.levels), ...nonBreakColorVars(this.settings), ...markerCssVars(this.settings) };
@@ -6437,7 +6539,7 @@ ${lineHeight}` : ""}`;
   resolveEditor(view) {
     const path = editorViewPath(view);
     if (path === null) return;
-    this.setStateFromDoc(path, view.state.doc.toString());
+    if (this.isOutlined(path)) this.setStateFromDoc(path, view.state.doc.toString());
     this.decorate(view);
   }
   // Adds or removes the `p` flag on one entry line, keeping the caret where
@@ -6498,8 +6600,19 @@ ${lineHeight}` : ""}`;
     return null;
   }
   decorate(view) {
+    var _a;
     const path = editorViewPath(view);
     if (path === null) return;
+    const outlined = this.isOutlined(path);
+    this.outlined.set(path, outlined);
+    syncTagHiding(view, this.settings.hideTags && outlined);
+    if (!outlined) {
+      this.textOffsets.delete(view);
+      if ((_a = view.state.field(outlineDecoField, false)) == null ? void 0 : _a.size) {
+        view.dispatch({ effects: setOutlineDecorations.of(import_view4.Decoration.none) });
+      }
+      return;
+    }
     const state = this.states.get(path);
     if (!state) return;
     const plan = computeRenderPlan(
@@ -6598,8 +6711,9 @@ ${lineHeight}` : ""}`;
       },
       getParsed: (path) => {
         var _a, _b;
-        return (_b = (_a = this.states.get(path)) == null ? void 0 : _a.parsed) != null ? _b : null;
+        return this.isOutlined(path) ? (_b = (_a = this.states.get(path)) == null ? void 0 : _a.parsed) != null ? _b : null : null;
       },
+      isOutlined: (path) => this.isOutlined(path),
       levels: () => this.settings.levels,
       isCollapsed: (path, id) => this.collapsedIdsFor(path).has(id),
       toggleCollapsed: (path, node2) => this.toggleCollapsed(path, node2),

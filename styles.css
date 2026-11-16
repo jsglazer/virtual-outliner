@@ -768,9 +768,10 @@
 
 /* Hide tags toggle (Update015): Reading view, and the blocks Live Preview
    renders as widgets (tables, callouts). The editor text itself is hidden by
-   decorations in src/editor/tagHide.ts. */
-body.vo-hide-tags .markdown-preview-view :is(a.tag, .vo-tag-space, .vo-loose-tag),
-body.vo-hide-tags .markdown-source-view .markdown-rendered :is(a.tag, .vo-tag-space, .vo-loose-tag) {
+   decorations in src/editor/tagHide.ts. Only in panes showing a note with
+   `voutline: true` (Update016), marked `.vo-outlined` by main.ts. */
+body.vo-hide-tags .vo-outlined .markdown-preview-view :is(a.tag, .vo-tag-space, .vo-loose-tag),
+body.vo-hide-tags .vo-outlined .markdown-source-view .markdown-rendered :is(a.tag, .vo-tag-space, .vo-loose-tag) {
 	display: none;
 }
 

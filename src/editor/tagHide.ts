@@ -45,11 +45,12 @@ export function scanTagDecorations(doc: Text): DecorationSet {
 const OFF: TagHideValue = { hidden: false, deco: Decoration.none };
 
 // Read when an editor is created, so a note opened while the toggle is on
-// starts hidden; later changes arrive as `setTagsHidden` effects.
-let hiddenAtCreate: () => boolean = () => false;
+// starts hidden; later changes arrive as `setTagsHidden` effects. Takes the
+// state so the plugin can also check that the note has opted in (Update016).
+let hiddenAtCreate: (state: EditorState) => boolean = () => false;
 
 export const tagHideField = StateField.define<TagHideValue>({
-	create: (state) => (hiddenAtCreate() ? { hidden: true, deco: scanTagDecorations(state.doc) } : OFF),
+	create: (state) => (hiddenAtCreate(state) ? { hidden: true, deco: scanTagDecorations(state.doc) } : OFF),
 	update(value, tr) {
 		let hidden = value.hidden;
 		let rescan = false;
@@ -147,7 +148,7 @@ function clusterAfter(doc: Text, pos: number): number | null {
 	return line.from + findClusterBreak(line.text, pos - line.from, true);
 }
 
-export function buildTagHideExtension(isHidden: () => boolean): Extension {
+export function buildTagHideExtension(isHidden: (state: EditorState) => boolean): Extension {
 	hiddenAtCreate = isHidden;
 	const scanner = ViewPlugin.fromClass(
 		class {

@@ -33,6 +33,9 @@ export interface KeymapHost {
 	// sigil characters briefly rendered as literal text instead of the new
 	// line appearing to have been created at all.
 	resolveNow(view: EditorView): void;
+	// False for a note that has not opted in with `voutline: true`
+	// (Update016): every binding then falls through to Obsidian's own keys.
+	enabled(view: EditorView): boolean;
 }
 
 interface ActiveLine {
@@ -198,14 +201,15 @@ function shiftEnterBinding(host: KeymapHost): (view: EditorView) => boolean {
 }
 
 export function buildOutlineKeymap(host: KeymapHost): Extension {
+	const gated = (run: (view: EditorView) => boolean) => (view: EditorView): boolean => host.enabled(view) && run(view);
 	const bindings: KeyBinding[] = [
-		{ key: 'Enter', run: enterBinding(host) },
-		{ key: 'Shift-Enter', run: shiftEnterBinding(host) },
-		{ key: 'Mod-Enter', run: bodyLineBinding(host) },
-		{ key: 'Tab', run: structuralBinding(host, demote) },
-		{ key: 'Shift-Tab', run: structuralBinding(host, promote) },
-		{ key: 'Alt-ArrowUp', run: moveBinding(host, 'up') },
-		{ key: 'Alt-ArrowDown', run: moveBinding(host, 'down') },
+		{ key: 'Enter', run: gated(enterBinding(host)) },
+		{ key: 'Shift-Enter', run: gated(shiftEnterBinding(host)) },
+		{ key: 'Mod-Enter', run: gated(bodyLineBinding(host)) },
+		{ key: 'Tab', run: gated(structuralBinding(host, demote)) },
+		{ key: 'Shift-Tab', run: gated(structuralBinding(host, promote)) },
+		{ key: 'Alt-ArrowUp', run: gated(moveBinding(host, 'up')) },
+		{ key: 'Alt-ArrowDown', run: gated(moveBinding(host, 'down')) },
 	];
 
 	return Prec.highest(keymap.of(bindings));
